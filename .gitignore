@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+colab_results/
+**/.colab_nb_run/
+**/.agy_task/
+agy_tasks/
