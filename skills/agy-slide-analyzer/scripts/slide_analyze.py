@@ -16,7 +16,11 @@ Outputs in --out (default <slides>/../slide_analysis):
   all_slides.json       list of analyses with a `_qa` block each
   report.md             one row per slide: status, type, confidence, verdict/recall, flags
 
-Exit codes: 0 all ok, 2 some slides need attention/failed, 4 preflight failure, 5 bad arguments.
+Resume: re-running skips ok/needs_attention slides, re-analyses `failed` ones and only re-reviews
+`unreviewed` ones. On agy RESOURCE_EXHAUSTED the whole run stops and exits 3; queued slides stay pending.
+
+Exit codes: 0 all ok, 2 some slides need attention/failed, 3 agy quota exhausted, 4 preflight failure,
+5 bad arguments.
 Python 3.9+, stdlib only. Requires the agy-delegate skill (scripts/agy_task.py).
 """
 from __future__ import annotations
@@ -41,7 +45,14 @@ IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 MAX_ATTEMPTS = 2
 DEFAULT_SUBJECT = "해당"
 DEFAULT_CONTEXT = "강의 슬라이드 묶음을 페이지별 이미지로 변환한 것입니다."
+QUOTA_RE = re.compile(r"RESOURCE_EXHAUSTED|quota reached|\(code 429\)", re.I)
+PENDING = {"failed", "unreviewed"}  # statuses a plain re-run picks up again
 _lock = threading.Lock()
+STOP = threading.Event()  # set on quota exhaustion: running slides finish their call, queued ones are skipped
+
+
+class QuotaExhausted(Exception):
+    """agy reported RESOURCE_EXHAUSTED; every further call would fail the same way."""
 
 
 def log(msg):
@@ -80,8 +91,21 @@ def load_json(path: Path):
     return json.loads(text)
 
 
+def quota_message(workdir: Path, cp) -> str | None:
+    """Return agy's quota error line if this run hit RESOURCE_EXHAUSTED (checked in agy_task output and agy stderr)."""
+    texts = [cp.stdout.decode("utf-8", "replace"), cp.stderr.decode("utf-8", "replace")]
+    texts += [f.read_text(encoding="utf-8", errors="replace") for f in workdir.glob(".agy_task/*/stderr.txt")]
+    for t in texts:
+        for line in t.splitlines():
+            if QUOTA_RE.search(line):
+                m = re.search(r"Resets in [^.\"]+", line)
+                return m.group(0) if m else line.strip()[:200]
+    return None
+
+
 def call_agy(agy_task: Path, workdir: Path, prompt: str, out_name: str, stage: list, a):
     """One agy session in a fresh workdir. Returns (parsed_json | None, error | None).
+    Raises QuotaExhausted when agy is out of quota.
     agy's stdout is not trusted for text (console code page on Windows); only the UTF-8 file it writes is read."""
     if workdir.exists():
         shutil.rmtree(workdir)
@@ -101,6 +125,9 @@ def call_agy(agy_task: Path, workdir: Path, prompt: str, out_name: str, stage: l
         return None, "timeout"
     out = workdir / out_name
     if not out.exists():
+        quota = quota_message(workdir, cp)
+        if quota:
+            raise QuotaExhausted(quota)
         return None, f"agy rc={cp.returncode}, {out_name} not written: {cp.stderr.decode('utf-8', 'replace')[-400:]}"
     try:
         return load_json(out), None
@@ -108,11 +135,54 @@ def call_agy(agy_task: Path, workdir: Path, prompt: str, out_name: str, stage: l
         return None, f"invalid JSON in {out_name}: {e}"
 
 
-def process(agy_task, img: Path, page: int, total: int, out: Path, work: Path, a) -> dict:
+def run_review(agy_task, img: Path, data: dict, wd: Path, attempt: int, ctx: dict, a):
+    tmp = wd / f"analysis_{attempt}.json"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    review, rerr = call_agy(agy_task, wd / f"review_{attempt}", (PROMPTS / "reviewer.md").read_text(encoding="utf-8").format(**ctx),
+                            "review.json", [(img, img.name), (tmp, "analysis.json")], a)
+    return {"verdict": "review_failed", "error": rerr} if rerr else review
+
+
+def save(out: Path, img: Path, rec: dict) -> dict:
+    (out / "results" / f"{img.stem}.json").write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+    return rec
+
+
+def process(agy_task, img: Path, page: int, total: int, out: Path, work: Path, a):
+    """Analyse (or, for an `unreviewed` record, only re-review) one slide. Returns the record, or None when
+    skipped because agy ran out of quota (nothing is written, so the slide stays pending)."""
+    if STOP.is_set():
+        return None
     file = img.name
     ctx = dict(page=page, file=file, total=total, subject=a.subject, deck_context=a.context)
+    prev_f = out / "results" / f"{img.stem}.json"
+    prev = json.loads(prev_f.read_text(encoding="utf-8")) if prev_f.exists() and not a.force else None
+    try:
+        if prev and prev.get("status") == "unreviewed" and prev.get("analysis") and not a.skip_review:
+            attempt = len(prev["attempts"])
+            review = run_review(agy_task, img, prev["analysis"], work / img.stem, attempt, ctx, a)
+            prev["attempts"][-1]["review"] = review
+            prev["review"] = review
+            verdict = review.get("verdict")
+            log(f"[{page:03d}] re-review: {verdict}")
+            if verdict in ("pass", "minor_issues"):
+                prev["status"] = "ok"
+                return save(out, img, prev)
+            if verdict == "review_failed":
+                return save(out, img, prev)
+            prev["status"] = "needs_attention"  # major_issues: fall through to a fresh analysis with feedback
+        return analyse(agy_task, img, page, out, work, ctx, a)
+    except QuotaExhausted as e:
+        if not STOP.is_set():
+            STOP.set()
+            log(f"[{page:03d}] agy quota exhausted ({e}); stopping - queued slides are left pending")
+        return None
+
+
+def analyse(agy_task, img: Path, page: int, out: Path, work: Path, ctx: dict, a) -> dict:
+    file = img.name
     analyst_t = (PROMPTS / "analyst.md").read_text(encoding="utf-8")
-    reviewer_t = (PROMPTS / "reviewer.md").read_text(encoding="utf-8")
     rec = {"page": page, "file": file, "status": "failed", "attempts": []}
     feedback = ""
     for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -127,17 +197,19 @@ def process(agy_task, img: Path, page: int, total: int, out: Path, work: Path, a
             continue
         issues = validate_analysis(data, page, file)
         errors = [i for i in issues if i["level"] == "error"]
+        att["validation"] = issues
+        rec["attempts"].append(att)
+        rec.update(analysis=data, validation=issues, review=None)
         review = None
         if not errors and not a.skip_review:
-            tmp = wd.parent / f"analysis_{attempt}.json"
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            review, rerr = call_agy(agy_task, wd.parent / f"review_{attempt}", reviewer_t.format(**ctx),
-                                    "review.json", [(img, file), (tmp, "analysis.json")], a)
-            if rerr:
-                review = {"verdict": "review_failed", "error": rerr}
-        att.update(validation=issues, review=review)
-        rec["attempts"].append(att)
-        rec.update(analysis=data, validation=issues, review=review)
+            try:
+                review = run_review(agy_task, img, data, work / img.stem, attempt, ctx, a)
+            except QuotaExhausted:
+                rec["status"] = "unreviewed"  # keep the analysis; a re-run only reviews it
+                save(out, img, rec)
+                raise
+        att["review"] = review
+        rec["review"] = review
         verdict = (review or {}).get("verdict")
         log(f"[{page:03d}] analyze#{attempt}: {len(errors)} errors, {len(issues) - len(errors)} warns, review={verdict}")
         if not errors and verdict != "major_issues":
@@ -151,8 +223,7 @@ def process(agy_task, img: Path, page: int, total: int, out: Path, work: Path, a
         feedback = ("# 이전 시도에 대한 피드백 (반드시 반영하되, 이미지를 직접 다시 보고 사실인지 확인하세요)\n"
                     + "\n".join(lines) + "\n")
         rec["status"] = "needs_attention"
-    (out / "results" / f"{img.stem}.json").write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
-    return rec
+    return save(out, img, rec)
 
 
 def build_report(slides: list, pages: list, out: Path) -> dict:
@@ -241,7 +312,7 @@ def main(argv=None) -> int:
 
         def pending(pg):
             f = out / "results" / f"{slides[pg - 1].stem}.json"
-            return a.force or not f.exists() or json.loads(f.read_text(encoding="utf-8"))["status"] == "failed"
+            return a.force or not f.exists() or json.loads(f.read_text(encoding="utf-8"))["status"] in PENDING
 
         todo = [pg for pg in pages if pending(pg)]
         log(f"{len(todo)} slides to process (of {len(pages)}), jobs={a.jobs}, out={out}")
@@ -253,8 +324,12 @@ def main(argv=None) -> int:
                 except Exception as e:  # keep the batch going
                     log(f"[{futs[fut]:03d}] crashed: {e!r}")
     counts = build_report(slides, pages, out)
-    print(json.dumps({"out": str(out), "counts": counts, "report": str(out / "report.md"),
-                      "all_slides": str(out / "all_slides.json")}, ensure_ascii=False, indent=2))
+    print(json.dumps({"out": str(out), "counts": counts, "quota_exhausted": STOP.is_set(),
+                      "report": str(out / "report.md"), "all_slides": str(out / "all_slides.json")},
+                     ensure_ascii=False, indent=2))
+    if STOP.is_set():
+        log("agy quota exhausted: re-run the same command after the reset to continue")
+        return 3
     return 0 if set(counts) <= {"ok"} else 2
 
 

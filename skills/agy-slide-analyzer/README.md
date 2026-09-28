@@ -58,4 +58,13 @@ report.md             QA table, one row per slide
 | `--skip-review` | analyst + validator only (half the cost, weaker verification) |
 | `--work DIR` | where agy work directories go |
 
-Exit codes: 0 every slide ok, 2 some slides need attention or failed, 4 agy-delegate missing, 5 bad arguments.
+Re-running the same command resumes: `failed` slides are re-analysed, `unreviewed` slides only get the
+reviewer pass, everything else is skipped (`--force` redoes them).
+
+**Quota:** each slide costs ~2 agy sessions. When agy returns `RESOURCE_EXHAUSTED` (HTTP 429), the run
+stops immediately instead of burning through the queue: in-flight slides finish, queued slides are left
+untouched, a slide whose review was cut off keeps its analysis as `unreviewed`, the log shows agy's
+"Resets in …" time, and the exit code is 3. Re-run after the reset.
+
+Exit codes: 0 every slide ok, 2 some slides need attention or failed, 3 agy quota exhausted (resumable),
+4 agy-delegate missing, 5 bad arguments.

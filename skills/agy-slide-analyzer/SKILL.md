@@ -23,8 +23,13 @@ Commands are relative to this skill's directory. Use `python3` on macOS/Linux, `
    python scripts/slide_analyze.py run --slides <dir> --pages 1-3 --subject 데이터베이스 --context "SSAFY 데이터베이스 강의 슬라이드. SQL DDL/DML, 모델링, 정규화 포함."
    python scripts/slide_analyze.py run --slides <dir> -j 4 --subject ... --context ...
    ```
-   Full runs take ~1 min per slide / jobs; run them in the background. Runs are resumable: finished
-   slides are skipped unless `--force`. `--work` moves agy scratch dirs (default `<out>/.work`).
+   Full runs take ~1 min per slide / jobs; run them in the background. Runs are resumable: `ok` /
+   `needs_attention` slides are skipped unless `--force`; `failed` slides are re-analysed and
+   `unreviewed` slides only get the reviewer pass again. `--work` moves agy scratch dirs (default `<out>/.work`).
+   A full deck costs ~2 agy sessions per slide (more with retries) and can exhaust the agy quota.
+   When agy reports `RESOURCE_EXHAUSTED`, the run stops at once (queued slides are left pending, a slide
+   whose review hit the limit keeps its analysis as `unreviewed`) and exits with code 3; tell the user
+   the reset time from the log and re-run the same command afterwards.
 3. **Read `report.md` first**, then `all_slides.json` (one object per slide with a `_qa` block).
    Do not open the images yourself — if a slide looks wrong, re-run it:
    `run --slides <dir> --pages N --force`.
