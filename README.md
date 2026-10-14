@@ -8,8 +8,8 @@ Personal [Claude Code](https://claude.com/claude-code) skills. Each skill is a s
 |---|---|---|
 | [colab-notebook-runner](skills/colab-notebook-runner/) | Run a local `.ipynb` on a Google Colab GPU/TPU runtime and bring back the executed notebook plus everything it wrote to `$COLAB_OUTPUT_DIR` | official `google-colab-cli` (native on macOS/Linux, via WSL on Windows) |
 | [agy-delegate](skills/agy-delegate/) | Hand a bounded coding task to the Antigravity CLI (`agy`) headlessly and get back the exact list of files it created/modified, plus an optional local verification result | Antigravity CLI 1.2+ |
-| [agy-slide-analyzer](skills/agy-slide-analyzer/) | Transcribe and analyse a folder of lecture slide images slide-by-slide through `agy` (persona + chain-of-thought + few-shot analyst), then verify each result with a deterministic validator and an independent `agy` reviewer; outputs structured JSON plus a QA report | Antigravity CLI 1.2+ via agy-delegate |
-| [agy-pdf-analyzer](skills/agy-pdf-analyzer/) | The same analysis for a whole lecture PDF of any length, without converting it to images: the page count is read from the PDF, `agy` views the PDF a few pages per session and writes one structured JSON per page, each checked by the validator and an independent `agy` reviewer | Antigravity CLI 1.2+ via agy-delegate; `pypdf` |
+| [agy-slide-analyzer](skills/agy-slide-analyzer/) | Transcribe and analyse a folder of lecture slide images slide-by-slide through `agy` (persona + chain-of-thought + few-shot analyst), then verify each result without a second LLM look at the image: a sealed local-OCR reference (Tesseract / Windows OCR + layout stats) is compared with the JSON, omissions are retried with OCR-derived feedback, and only disputed lines are cropped for Claude to read blind; outputs structured JSON plus a QA report with an audited residual-error estimate. Holds the evaluation code shared with agy-pdf-analyzer; see [docs/ocr-evaluation-design.md](docs/ocr-evaluation-design.md) | Antigravity CLI 1.2+ via agy-delegate; Pillow; Tesseract (`kor`) and/or `winsdk` |
+| [agy-pdf-analyzer](skills/agy-pdf-analyzer/) | The same analysis for a whole lecture PDF of any length, without converting it to images for `agy`: the page count is read from the PDF, `agy` views the PDF a few pages per session and writes one structured JSON per page, each verified against the page's text layer (born-digital) or its embedded image through local OCR (scanned), with the same blind Claude review of disputed crops | Antigravity CLI 1.2+ via agy-delegate + agy-slide-analyzer; `pypdf`; Pillow |
 | [kaggle-submit](skills/kaggle-submit/) | End-to-end Kaggle competition submission: first-run `doctor`/`setup` (install CLI, place credentials, verify auth), competition info and rules check, data download, `sample_submission` validation, submit with score polling, local submission log, leaderboard | official `kaggle` CLI (PyPI 2.2.x and git main both supported) |
 | [gdrive-bridge](skills/gdrive-bridge/) | Move data bundles and Colab outputs through Google Drive: push a zip into the Drive for Desktop mount, verify a human-made share link for `gdown` (fresh-VM runner path), generate Colab `drive.mount`/`export` cells with manifest verification, and pull results back with sha256 checks | Google Drive for Desktop mount (`G:\` on Windows, `~/Library/CloudStorage` on macOS); stdlib only |
 
@@ -43,8 +43,11 @@ and run its `preflight` command. Restart Claude Code so the new skills are picke
 skills/
   colab-notebook-runner/   SKILL.md, README.md, scripts/colab_nb_run.py, scripts/setup.sh, examples/smoke_test.ipynb
   agy-delegate/            SKILL.md, README.md, scripts/agy_task.py
-  agy-slide-analyzer/      SKILL.md, README.md, scripts/{slide_analyze,slide_validate}.py, prompts/{analyst,reviewer}.md
+  agy-slide-analyzer/      SKILL.md, README.md, scripts/{slide_analyze,slide_validate,ocr_ref,ocr_score,crops,textnorm}.py,
+                           scripts/tests/{test_ocr_score,fake_agy_task,synth}.py, prompts/{analyst,reviewer}.md
   agy-pdf-analyzer/        SKILL.md, README.md, scripts/{pdf_analyze,pdf_validate}.py, prompts/{analyst,reviewer}.md
+docs/
+  ocr-evaluation-design.md  why and how the analyzers verify agy's transcriptions without a second LLM look
   kaggle-submit/           SKILL.md, README.md, scripts/kaggle_submit.py, references/{kaggle-cli-competitions,troubleshooting}.md
   gdrive-bridge/           SKILL.md, README.md, scripts/gdrive_bridge.py
 ```
