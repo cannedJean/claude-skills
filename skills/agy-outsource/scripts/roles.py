@@ -80,9 +80,12 @@ def find_claude() -> list:
 
 
 def run_claude(prompt: str, *, model: str, cwd: Path, tools: str = "", schema=None, permission_mode: str = "dontAsk",
-               max_turns: int = 4, timeout: int = 900) -> dict:
+               max_turns: int = 4, timeout: int = 900, runner=None) -> dict:
     """One headless, stateless Claude process: --restricted (no code-running tools, file tools confined to cwd, user
-    and project settings ignored), no session persistence, no auto memory. The prompt goes in on stdin."""
+    and project settings ignored), no session persistence, no auto memory. The prompt goes in on stdin.
+    runner(cmd, input_bytes, cwd, env, timeout) -> (rc, stdout bytes, stderr bytes) starts it instead of
+    subprocess.run (outsource.py passes one that kills the whole process tree); a timeout gives rc None and
+    timed_out True."""
     cmd = find_claude() + ["-p", "--restricted", "--model", model, "--output-format", "json",
                            "--no-session-persistence", "--permission-mode", permission_mode,
                            "--max-turns", str(max_turns), "--tools", tools]
@@ -90,11 +93,16 @@ def run_claude(prompt: str, *, model: str, cwd: Path, tools: str = "", schema=No
         cmd += ["--json-schema", json.dumps(schema)]
     env = dict(os.environ, CLAUDE_CODE_DISABLE_AUTO_MEMORY="1", PYTHONIOENCODING="utf-8")
     try:
-        cp = subprocess.run(cmd, input=prompt.encode("utf-8"), cwd=str(cwd), stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, env=env, timeout=timeout)
+        if runner is None:
+            cp = subprocess.run(cmd, input=prompt.encode("utf-8"), cwd=str(cwd), stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, env=env, timeout=timeout)
+            rc, raw_out, raw_err = cp.returncode, cp.stdout, cp.stderr
+        else:
+            rc, raw_out, raw_err = runner(cmd, prompt.encode("utf-8"), cwd, env, timeout)
     except subprocess.TimeoutExpired:
-        return {"rc": None, "error": f"claude timed out after {timeout}s", "models": [], "model": None}
-    out = cp.stdout.decode("utf-8", "replace")
+        return {"rc": None, "error": f"claude timed out after {timeout}s", "timed_out": True, "models": [],
+                "model": None}
+    out = (raw_out or b"").decode("utf-8", "replace")
     res = {}
     try:
         res = json.loads(out[out.index("{"):]) if "{" in out else {}
@@ -104,10 +112,10 @@ def run_claude(prompt: str, *, model: str, cwd: Path, tools: str = "", schema=No
     models = sorted(usage)
     want = [m for m in models if family(m) == family(model)]
     primary = want[0] if want else (max(models, key=lambda m: (usage[m] or {}).get("outputTokens", 0)) if models else None)
-    return {"rc": cp.returncode, "is_error": res.get("is_error"), "subtype": res.get("subtype"),
+    return {"rc": rc, "is_error": res.get("is_error"), "subtype": res.get("subtype"),
             "result": res.get("result"), "structured": res.get("structured_output"), "models": models,
             "model": primary, "cost_usd": res.get("total_cost_usd"), "denials": res.get("permission_denials") or [],
-            "stderr_tail": cp.stderr.decode("utf-8", "replace")[-600:]}
+            "stderr_tail": (raw_err or b"").decode("utf-8", "replace")[-600:]}
 
 
 def check_ran_as(res: dict, role: str, requested: str) -> None:

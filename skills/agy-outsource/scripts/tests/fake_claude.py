@@ -49,8 +49,8 @@ def main(argv) -> int:
             (Path.cwd() / rel).parent.mkdir(parents=True, exist_ok=True)
             (Path.cwd() / rel).write_text(src, encoding="utf-8")
         (Path.cwd() / "DELIVERY.json").write_text(json.dumps({
-            "unit": unit, "files": sorted(fake_agy_task.GOOD[unit]), "symbols": [], "assumptions": ["fake:claude"],
-            "self_check": "canned"}), encoding="utf-8")
+            "unit": unit, "files": sorted(fake_agy_task.GOOD[unit]), "assumptions": ["fake:claude"]}),
+            encoding="utf-8")
     print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": result,
                       "structured_output": structured, "modelUsage": {model_id: {"outputTokens": 10}},
                       "total_cost_usd": 0.0, "permission_denials": []}))

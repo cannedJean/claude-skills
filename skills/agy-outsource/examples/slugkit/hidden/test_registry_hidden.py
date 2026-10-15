@@ -7,12 +7,18 @@ class TestRegistryHidden(unittest.TestCase):
     def test_empty_becomes_item(self):
         r = SlugRegistry()
         self.assertEqual(r.add(""), "item")
-        self.assertEqual(r.add("!!!"), "item-2")
+        self.assertEqual(r.add(""), "item-2")
+        self.assertEqual(r.add("item"), "item-3")
 
     def test_custom_sep(self):
         r = SlugRegistry(sep="_")
-        self.assertEqual(r.add("a b"), "a_b")
-        self.assertEqual(r.add("A B"), "a_b_2")
+        self.assertEqual(r.add("a_b"), "a_b")
+        self.assertEqual(r.add("a_b"), "a_b_2")
+
+    def test_slug_is_taken_as_given(self):
+        r = SlugRegistry()
+        self.assertEqual(r.add("Hello World"), "Hello World")
+        self.assertEqual(r.add("hello world"), "hello world")
 
     def test_suffix_skips_taken(self):
         r = SlugRegistry()
