@@ -2,6 +2,7 @@
   "project": "slugkit",
   "context": "A tiny stdlib-only Python library that turns arbitrary titles into URL slugs and hands out unique slugs. Used by a static-site generator; correctness on Unicode input matters more than speed.",
   "language": "python",
+  "roles": {"lead": "opus", "auditor": "sonnet"},
   "python": "3.9+",
   "conventions": [
     "Python 3.9+ compatible: put `from __future__ import annotations` first in every module.",
@@ -12,17 +13,19 @@
   "forbid_patterns": ["^\\s*print\\("],
   "test_cmd": "auto",
   "max_attempts": 3,
-  "integration_test_cmd": "{python} -c \"from slugkit.registry import SlugRegistry; r = SlugRegistry(); assert r.add('Café Crème') == 'cafe-creme'; assert r.add('cafe creme') == 'cafe-creme-2'\"",
+  "integration_test_cmd": "{python} -c \"from slugkit.registry import SlugRegistry; from slugkit.slug import slugify; r = SlugRegistry(); assert r.add(slugify('Café Crème')) == 'cafe-creme'; assert r.add(slugify('cafe creme')) == 'cafe-creme-2'\"",
+  "project_root": "project",
   "units": [
     {
       "id": "U1-normalize",
       "title": "Text normalisation helpers",
       "goal": "Two pure functions that the slug builder uses to clean text.",
-      "deliverables": ["slugkit/__init__.py", "slugkit/normalize.py"],
+      "deliverables": ["slugkit/normalize.py"],
+      "context_files": ["slugkit/__init__.py"],
       "interface": [
         {"file": "slugkit/normalize.py", "symbol": "strip_accents",
          "signature": "def strip_accents(text: str) -> str",
-         "contract": "Remove combining marks (accents) and return the rest; characters without accents are unchanged."},
+         "contract": "Decompose (NFKD), drop the combining marks (accents), recompose (NFC); compatibility characters such as ligatures come back decomposed."},
         {"file": "slugkit/normalize.py", "symbol": "collapse_whitespace",
          "signature": "def collapse_whitespace(text: str) -> str",
          "contract": "Replace every run of whitespace with one ASCII space and strip both ends."}
@@ -31,8 +34,7 @@
         "strip_accents: apply unicodedata.normalize('NFKD'), drop every character for which unicodedata.combining(ch) != 0, then return unicodedata.normalize('NFC', result).",
         "Because of NFKD, compatibility characters are decomposed (e.g. the ligature 'ﬁ' becomes 'fi'); because of the final NFC, scripts without combining marks (e.g. Hangul) come back unchanged.",
         "collapse_whitespace: whitespace means str.isspace() (includes tabs, newlines, NBSP U+00A0, ideographic space U+3000).",
-        "Both functions return '' for ''.",
-        "slugkit/__init__.py contains only a module docstring: \"slugkit - URL slugs.\""
+        "Both functions return '' for ''."
       ],
       "examples": [
         {"call": "strip_accents('Café crème')", "returns": "'Cafe creme'"},
@@ -59,7 +61,8 @@
         "Every maximal run of characters that are NOT ASCII letters a-z or digits 0-9 becomes one sep (this includes non-Latin letters such as Hangul).",
         "Remove sep from both ends (no leading or trailing separator).",
         "If max_len is given and the slug is longer, cut it to its first max_len characters, then remove trailing characters contained in sep (str.rstrip(sep)).",
-        "If nothing is left, return '' (not an error)."
+        "If nothing is left, return '' (not an error).",
+        "sep and max_len are keyword-only; passing them positionally raises TypeError."
       ],
       "examples": [
         {"call": "slugify('Hello, World!')", "returns": "'hello-world'"},
@@ -74,17 +77,18 @@
     {
       "id": "U3-registry",
       "title": "Unique slug registry",
-      "goal": "A small class that hands out slugs that are unique within one registry.",
+      "goal": "A small class that makes slugs unique within one registry; it does not build slugs (callers pass slugify's output), so it needs no other unit.",
       "deliverables": ["slugkit/registry.py"],
+      "context_files": ["slugkit/__init__.py"],
       "interface": [
         {"file": "slugkit/registry.py", "symbol": "SlugRegistry", "signature": "class SlugRegistry",
          "contract": "Remembers every slug it handed out."},
         {"file": "slugkit/registry.py", "symbol": "SlugRegistry.__init__",
          "signature": "def __init__(self, sep: str = \"-\") -> None",
-         "contract": "Empty registry; sep is used for slugify and for numeric suffixes."},
+         "contract": "Empty registry; sep joins a slug and its numeric suffix."},
         {"file": "slugkit/registry.py", "symbol": "SlugRegistry.add",
-         "signature": "def add(self, text: str) -> str",
-         "contract": "Return a new unique slug for text and remember it."},
+         "signature": "def add(self, slug: str) -> str",
+         "contract": "Let base be slug, or 'item' if slug is ''. Return base if it is free, else the first free one of base+sep+'2', base+sep+'3', ...; remember what is returned."},
         {"file": "slugkit/registry.py", "symbol": "SlugRegistry.__contains__",
          "signature": "def __contains__(self, slug: object) -> bool",
          "contract": "True if the registry handed out exactly this slug."},
@@ -93,16 +97,16 @@
          "contract": "Number of slugs handed out."}
       ],
       "spec": [
-        "add: base = slugkit.slug.slugify(text, sep=self.sep); if base is '' use 'item'.",
+        "add: base = slug; if base is '' use 'item'. The slug is taken as given (no lowercasing or other cleaning).",
         "If base is not taken, take it. Otherwise try base + sep + '2', base + sep + '3', ... and take the first that is not taken.",
         "'Taken' means handed out earlier by this registry (any earlier slug, including suffixed ones).",
         "Registries are independent of each other (no class-level state)."
       ],
       "examples": [
-        {"call": "r = SlugRegistry(); r.add('Hello World'); r.add('hello world')", "returns": "'hello-world-2'"}
+        {"call": "r = SlugRegistry(); r.add('hello-world'); r.add('hello-world')", "returns": "'hello-world-2'"}
       ],
-      "constraints": ["Use slugkit.slug.slugify."],
-      "depends_on": ["U2-slugify"],
+      "constraints": ["Standard library only; do not import other slugkit modules."],
+      "depends_on": [],
       "tests": ["tests/test_registry.py"],
       "hidden_tests": ["hidden/test_registry_hidden.py"]
     }

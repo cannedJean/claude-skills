@@ -37,6 +37,11 @@ A separate, sealed set of hidden acceptance tests checks the same behaviour rule
 Implement the rules in general; never special-case test inputs, and do not edit the tests.
 $run_rule
 
+## Your directory right now — this list is complete
+$listing
+Everything you need is in this work order and in these files. There is nothing else to look for (no git
+repository, no config, no other units): do not look for files that are not listed.
+
 ## Delivery format — checked by a script
 1. Write the deliverables at exactly the relative paths listed above. Do not create any other file (no README,
    notes, extra tests, demo or scratch files) and do not modify or delete any read-only file.
@@ -47,10 +52,11 @@ $run_rule
 {
   "unit": "$unit_id",
   "files": [$files_json],
-  "symbols": ["<every public symbol you defined, e.g. module.function>"],
-  "assumptions": ["<each assumption you made where the rules were silent; [] if none>"],
-  "self_check": "<one or two sentences: how you checked the code against the rules, examples and tests>"
+  "assumptions": ["<each assumption you made where the rules were silent; [] if none>"]
 }
 ```
 5. Do not ask questions. Work only inside $workdir.
+6. Writing `DELIVERY.json` ends your work. Do not re-open the files you wrote to check them: the checker parses
+   them, compares the interface, runs the visible and hidden tests, and sends back anything that fails. Then reply
+   with the single word DONE.
 $feedback

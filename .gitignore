@@ -8,3 +8,6 @@ colab_results/
 agy_tasks/
 kaggle_submissions.jsonl
 **/.agy_outsource/
+# what `run` / `audit` write next to the shipped example (run it on a copy; see skills/agy-outsource/README.md)
+skills/agy-outsource/examples/slugkit/hidden.sealed
+skills/agy-outsource/examples/slugkit/audit.json
