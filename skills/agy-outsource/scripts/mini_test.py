@@ -5,7 +5,8 @@
 
 Runs, per file, every unittest.TestCase and every top-level `test_*` function that takes no arguments
 (plain `assert` style). The current directory is put first on sys.path so tests import the code under test
-the same way pytest's rootdir import does. Exit 0 when everything passed, 1 on any failure or error.
+the same way pytest's rootdir import does. Exit 0 when everything passed, 1 on any failure, error or skip
+(acceptance tests must all run).
 """
 from __future__ import annotations
 
@@ -31,7 +32,7 @@ def main(paths) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     sys.path.insert(0, os.getcwd())
-    passed = failed = 0
+    passed = failed = skipped = 0
     for path in paths:
         try:
             mod = load(path)
@@ -42,9 +43,10 @@ def main(paths) -> int:
         suite = unittest.defaultTestLoader.loadTestsFromModule(mod)
         if suite.countTestCases():
             res = unittest.TextTestRunner(stream=sys.stdout, verbosity=1).run(suite)
-            n_bad = len(res.failures) + len(res.errors)
+            n_bad = len(res.failures) + len(res.errors) + len(res.unexpectedSuccesses)
             failed += n_bad
-            passed += res.testsRun - n_bad
+            skipped += len(res.skipped)
+            passed += res.testsRun - n_bad - len(res.skipped)
         for name, fn in sorted(vars(mod).items()):
             if not (name.startswith("test_") and inspect.isfunction(fn) and fn.__module__ == mod.__name__):
                 continue
@@ -58,8 +60,8 @@ def main(paths) -> int:
             except Exception:
                 failed += 1
                 print(f"FAILED {path}::{name}\n{traceback.format_exc()}")
-    print(f"mini_test: {passed} passed, {failed} failed")
-    return 0 if failed == 0 and passed > 0 else 1
+    print(f"mini_test: {passed} passed, {failed} failed, {skipped} skipped")
+    return 0 if failed == 0 and skipped == 0 and passed > 0 else 1
 
 
 if __name__ == "__main__":

@@ -10,15 +10,17 @@ imports work the same way in the work dir, the tests and the project).
 |---|---|---|
 | `project` | yes | short project name, shown to agy |
 | `context` | recommended | one paragraph: what the project is, who uses it, what matters |
+| `roles` | yes | `{"lead": "<the lead's model>", "auditor": "sonnet"}`. The lead declares its own model; `audit`, `triage` and `--contractor claude:<model>` refuse a model of the same family (and never use agy as auditor) |
 | `language` | no | `python` (default; full gates) or anything else (manifest/scope/files/name-presence/forbid/tests only; needs `test_cmd`) |
 | `python` / `runtime` | no | runtime line in the work order (`"3.9+"` → "Python 3.9+"; `runtime` overrides the whole line) |
 | `conventions` | no | list of rules every unit must follow (shown under Constraints) |
 | `imports` | no | `{"stdlib": true, "allow": ["numpy"]}` — Python imports must be stdlib, project modules or `allow`; omit for no check |
 | `forbid_patterns` | no | regexes no deliverable line may match (e.g. `"^\\s*print\\("`, `"TODO"`) |
+| `tamper_allow` | no | names the `tamper` gate lets through, e.g. `["sys.argv", "sys.exit"]` for a CLI unit, `"inspect"`, or `"text"` (strings naming test files). Every other test-introspection import, early exit, `eval`/`exec` and test-file string rejects the delivery |
 | `test_cmd` | no | `"auto"` (default: pytest if installed, else `scripts/mini_test.py`) or a shell command with `{python}` and `{tests}` placeholders, e.g. `"npm test -- {tests}"` |
 | `test_timeout` | no | seconds per test run (default 120) |
 | `max_attempts` | no | agy attempts per unit (default 3) |
-| `hidden_feedback` | no | what agy sees when hidden tests fail: `tail` (output tail, default), `summary` (failing test names + assertion lines), `none` |
+| `hidden_feedback` | no | what agy sees when hidden tests fail: `summary` (failing test names + assertion lines, default), `tail` (output tail: also quotes the hidden test source lines), `none` |
 | `integration_test_cmd` | no | shell command run in the assembled tree after all units are accepted (`{python}` placeholder) |
 | `project_root` | no | base for `context_files` (default: the plan folder) |
 | `units` | yes | list of units |
@@ -38,7 +40,7 @@ imports work the same way in the work dir, the tests and the project).
 | `context_files` | no | existing project files agy needs to read (copied read-only) |
 | `tests` | one of | visible test files (copied read-only into the work dir) |
 | `hidden_tests` | one of | sealed test files (only ever copied into the verify dir, deleted after the run) |
-| `test_cmd`, `test_timeout`, `max_attempts`, `effort`, `imports`, `forbid_patterns`, `hidden_feedback` | no | per-unit overrides (`effort`: low / medium / high, forwarded to agy) |
+| `test_cmd`, `test_timeout`, `max_attempts`, `effort`, `imports`, `forbid_patterns`, `tamper_allow`, `hidden_feedback` | no | per-unit overrides (`effort`: low / medium / high, forwarded to agy) |
 
 ### Interface items
 
@@ -72,5 +74,7 @@ imports work the same way in the work dir, the tests and the project).
 - [ ] Visible tests cover the typical path of every public symbol; hidden tests cover edges, errors and rules the
       visible tests skip.
 - [ ] `check --red` passes: all tests fail on stubs, no undeclared imports.
+- [ ] `audit` passes: an auditor on another model traced every assertion to a written item (C/R/E/K). Each spec
+      rule, example, contract and constraint is an item the auditor can cite, so write rules as separate entries.
 - [ ] Error behaviour is specified (which exception, when), as is the empty-input case.
 - [ ] Nothing in the work order depends on files agy will not have.

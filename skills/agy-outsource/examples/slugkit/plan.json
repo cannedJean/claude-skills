@@ -2,6 +2,7 @@
   "project": "slugkit",
   "context": "A tiny stdlib-only Python library that turns arbitrary titles into URL slugs and hands out unique slugs. Used by a static-site generator; correctness on Unicode input matters more than speed.",
   "language": "python",
+  "roles": {"lead": "opus", "auditor": "sonnet"},
   "python": "3.9+",
   "conventions": [
     "Python 3.9+ compatible: put `from __future__ import annotations` first in every module.",

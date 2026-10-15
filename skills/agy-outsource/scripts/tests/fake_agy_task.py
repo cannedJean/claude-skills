@@ -14,6 +14,12 @@ behaviour, either one value for every unit or per unit: "U2-slugify=buggy,U3-reg
   print      leaves a print() call (forbid gate); fixed on retry
   always     buggy on every attempt (-> needs_attention)
   quota      prints agy's RESOURCE_EXHAUSTED line and writes nothing
+  outside    correct code, but reports two tool calls the work-dir confinement denied
+  exit0      correct code that also ends the test process with exit code 0 on import (tamper gate); fixed on retry
+  peekhidden reads the hidden tests at run time through a path built from strings (tamper gate); fixed on retry
+  specedit   escapes its sandbox and rewrites the visible test at its source, FAKE_AGY_SPEC_DIR (integrity gate)
+
+Like agy_task.py it reports "confinement" (enabled unless --no-confine is passed).
 """
 import json
 import os
@@ -106,6 +112,14 @@ def main(argv) -> int:
             files["slugkit/normalize.py"] = files["slugkit/normalize.py"].replace('" ".join(text.split())', '" ".join(s.split())')
         if unit == "U3-registry":
             files["slugkit/registry.py"] = files["slugkit/registry.py"].replace("slugify(text,", "slugify(title,")
+    if sc == "exit0" and not retry:
+        files = {k: v + ("\nimport os\nos._exit(0)\n" if k != "slugkit/__init__.py" else "") for k, v in files.items()}
+    if sc == "peekhidden" and not retry:
+        f = next(iter(k for k in files if k != "slugkit/__init__.py"))
+        files[f] += '\nfrom pathlib import Path\n_SEEN = list((Path(__file__).parent.parent / "hidden").glob("*.py"))\n'
+    if sc == "specedit" and os.environ.get("FAKE_AGY_SPEC_DIR"):
+        for t in Path(os.environ["FAKE_AGY_SPEC_DIR"]).glob("tests/test_*.py"):
+            t.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
     if sc == "print" and not retry:
         f = next(iter(k for k in files if k != "slugkit/__init__.py"))
         files[f] += '\nprint("debug")\n'
@@ -121,7 +135,12 @@ def main(argv) -> int:
         (wd / "DELIVERY.json").write_text(json.dumps({
             "unit": unit, "files": sorted(GOOD[unit]), "symbols": [], "assumptions": [f"fake:{sc}"],
             "self_check": "canned"}), encoding="utf-8")
-    print(json.dumps({"status": "ok", "agent_status": "SUCCESS", "conversation_id": "fake", "fake": sc, "retry": retry}))
+    confined = "--no-confine" not in args
+    denied = [{"tool": "view_file", "decision": "deny", "reason": "'../../hidden/x' is outside the work dir"}] * 2 \
+        if sc == "outside" and confined else []
+    confinement = {"enabled": confined, "denied_count": len(denied), "denied": denied} if confined else {"enabled": False}
+    print(json.dumps({"status": "ok", "agent_status": "SUCCESS", "conversation_id": "fake", "fake": sc, "retry": retry,
+                      "confinement": confinement}))
     return 0
 
 

@@ -6,6 +6,7 @@ examples/slugkit with tests/fake_agy_task.py standing in for agy-delegate.
 import copy
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,15 @@ sys.path.insert(0, str(SCRIPTS))
 
 import gates  # noqa: E402
 import outsource  # noqa: E402
+
+# every subprocess below inherits these: a stand-in for `claude -p` and a private place for contractor job dirs
+JOBS = Path(tempfile.mkdtemp(prefix="agy-jobs-"))
+os.environ["OUTSOURCE_CLAUDE"] = str(HERE / "fake_claude.py")
+os.environ["AGY_OUTSOURCE_JOBS"] = str(JOBS)
+
+
+def tearDownModule():
+    shutil.rmtree(JOBS, ignore_errors=True)
 
 UNIT = {"id": "U1", "deliverables": ["pkg/mod.py"],
         "interface": [{"file": "pkg/mod.py", "symbol": "f", "signature": "def f(a, *, b=1) -> int"},
@@ -143,15 +153,68 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(outsource.scrub(text, [d]), 'File "hidden/test_a.py", line 3')
 
 
-class EndToEnd(unittest.TestCase):
-    def run_plan(self, scenario, *extra):
+    def test_work_order_states_the_confinement(self):
+        p = outsource.load_plan(PLAN)
+        self.assertIn("any tool call on a path outside it is denied", outsource.render_work_order(p, p["units"][0], Path("W")))
+        self.assertNotIn("is denied", outsource.render_work_order(p, p["units"][0], Path("W"), confined=False))
+
+
+class E2EBase(unittest.TestCase):
+    def setUp(self):
+        # a copy of the example: `run` seals the hidden tests in place, the shipped example must stay readable
+        spec = Path(tempfile.mkdtemp()) / "slugkit"
+        self.addCleanup(shutil.rmtree, spec.parent, True)
+        shutil.copytree(PLAN.parent, spec, ignore=shutil.ignore_patterns(".agy_outsource", "audit.json"))
+        self.plan = spec / "plan.json"
+        rc, res = self.cli("audit")  # an independent model must pass the tests before any run
+        self.assertEqual(rc, 0, res)
+
+    def cli(self, *args, **env):
+        cp = subprocess.run([sys.executable, str(SCRIPTS / "outsource.py"), args[0], str(self.plan), *args[1:]],
+                            capture_output=True, text=True, encoding="utf-8", env=dict(os.environ, **env))
+        return cp.returncode, json.loads(cp.stdout)
+
+    def run_plan(self, scenario, *extra, **more_env):
         out = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, out, True)
-        env = dict(os.environ, AGY_TASK=str(HERE / "fake_agy_task.py"), FAKE_AGY_SCENARIO=scenario, PYTHONIOENCODING="utf-8")
-        cp = subprocess.run([sys.executable, str(SCRIPTS / "outsource.py"), "run", str(PLAN), "--out", str(out), *extra],
+        env = dict(os.environ, AGY_TASK=str(HERE / "fake_agy_task.py"), FAKE_AGY_SCENARIO=scenario, PYTHONIOENCODING="utf-8",
+                   **more_env)
+        cp = subprocess.run([sys.executable, str(SCRIPTS / "outsource.py"), "run", str(self.plan), "--out", str(out), *extra],
                             capture_output=True, text=True, encoding="utf-8", env=env)
         res = json.loads(cp.stdout)
         return cp.returncode, res, out
+
+    def unit_flags(self, out, uid):
+        return json.loads((out / "state.json").read_text(encoding="utf-8"))["units"][uid].get("flags", [])
+
+
+class EndToEnd(E2EBase):
+
+    def test_confinement_is_reported(self):
+        rc, res, out = self.run_plan("U2-slugify=outside")
+        self.assertEqual(rc, 0, res)
+        self.assertIn("outside_access_denied", self.unit_flags(out, "U2-slugify"))
+        self.assertEqual(self.unit_flags(out, "U1-normalize"), [])
+        self.assertIn("every such call was denied", (out / "report.md").read_text(encoding="utf-8"))
+        rc, res, out = self.run_plan("perfect", "--no-confine")
+        self.assertEqual(rc, 0, res)
+        self.assertIn("unconfined", self.unit_flags(out, "U1-normalize"))
+
+    def test_allow_all_needs_no_confine(self):
+        rc, res, _ = self.run_plan("perfect", "--allow-all")
+        self.assertEqual((rc, res["status"]), (5, "bad-args"))
+        rc, res, _ = self.run_plan("perfect", "--allow-all", "--no-confine")
+        self.assertEqual(rc, 0, res)
+
+    @unittest.skipUnless(os.name == "nt", "sealing uses Windows DPAPI")
+    def test_run_seals_hidden_tests(self):
+        rc, res, out = self.run_plan("perfect")
+        self.assertEqual(rc, 0, res)
+        spec = self.plan.parent
+        self.assertFalse(any(spec.rglob("test_*_hidden.py")), "plaintext hidden tests left in the spec folder")
+        self.assertTrue((spec / outsource.SEALED).is_file())
+        self.assertFalse(any(out.rglob("test_*_hidden.py")), "plaintext hidden tests left in the run dir")
+        self.assertTrue((PLAN.parent / "hidden").is_dir(), "the shipped example was sealed")
 
     def test_perfect(self):
         rc, res, out = self.run_plan("perfect")
@@ -178,7 +241,7 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("Needs the lead", (out / "report.md").read_text(encoding="utf-8"))
         # re-run with a fixed "agy": U1 is not redone, U2 and U3 are
         env = dict(os.environ, AGY_TASK=str(HERE / "fake_agy_task.py"), FAKE_AGY_SCENARIO="perfect", PYTHONIOENCODING="utf-8")
-        cp = subprocess.run([sys.executable, str(SCRIPTS / "outsource.py"), "run", str(PLAN), "--out", str(out)],
+        cp = subprocess.run([sys.executable, str(SCRIPTS / "outsource.py"), "run", str(self.plan), "--out", str(out)],
                             capture_output=True, text=True, encoding="utf-8", env=env)
         res2 = json.loads(cp.stdout)
         self.assertEqual(cp.returncode, 0, res2)
@@ -196,13 +259,138 @@ class EndToEnd(unittest.TestCase):
         self.addCleanup(shutil.rmtree, dest, True)
         (dest / "slugkit").mkdir()
         (dest / "slugkit" / "slug.py").write_text("old\n", encoding="utf-8")
-        base = [sys.executable, str(SCRIPTS / "outsource.py"), "integrate", str(PLAN), "--out", str(out), "--dest", str(dest)]
+        base = [sys.executable, str(SCRIPTS / "outsource.py"), "integrate", str(self.plan), "--out", str(out), "--dest", str(dest)]
         cp = subprocess.run(base, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(json.loads(cp.stdout)["status"], "conflict")
         cp = subprocess.run(base + ["--overwrite", "--with-tests"], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(cp.returncode, 0, cp.stdout)
         self.assertIn("def slugify", (dest / "slugkit" / "slug.py").read_text(encoding="utf-8"))
         self.assertTrue((dest / "hidden" / "test_slug_hidden.py").is_file())
+
+
+class TamperAndResultLine(unittest.TestCase):
+    def tamper(self, src, allow=()):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, True)
+        (d / "m.py").write_text(src, encoding="utf-8")
+        return gates.check_tamper(d, {"deliverables": ["m.py"]}, allow)
+
+    def test_tamper_gate(self):
+        for src in ("import os\nos._exit(0)\n", "from os import _exit\n", "import inspect\n", "from unittest import mock\n",
+                    "import sys\nA = sys.argv\n", "X = eval('1')\n", "B = __builtins__\n", "import subprocess\n",
+                    "from pathlib import Path\nP = Path(__file__).parent / 'hidden'\n", "Q = '../tests/x'\n",
+                    "R = f'test_{1}.py'\n"):
+            self.assertFalse(self.tamper(src)["ok"], src)
+        clean = '"""Doc: see tests/test_x.py."""\nimport re\nfrom re import compile\nP = compile("a")\nW = "test"\n'
+        self.assertTrue(self.tamper(clean)["ok"])
+        self.assertTrue(self.tamper("import sys\nA = sys.argv\n", ["sys.argv"])["ok"])
+
+    def test_work_order_states_the_tamper_rule(self):
+        p = outsource.load_plan(PLAN)
+        self.assertIn("must not look at or interfere with the tests", outsource.render_work_order(p, p["units"][0], Path("W")))
+
+    def test_result_line(self):
+        rlp = outsource.result_line_problems
+        self.assertTrue(rlp(""))  # exit code 0 but the runner never reported
+        self.assertEqual(rlp("..\nmini_test: 3 passed, 0 failed, 0 skipped\n"), [])
+        self.assertTrue(rlp("mini_test: 3 passed, 0 failed, 1 skipped\n"))
+        self.assertTrue(rlp("mini_test: 0 passed, 0 failed, 0 skipped\n"))
+        self.assertEqual(rlp("5 passed in 0.10s\n"), [])
+        self.assertTrue(rlp("4 passed, 1 skipped in 0.10s\n"))
+        self.assertTrue(rlp("4 passed, 1 failed in 0.10s\n"))
+
+
+class Sandbox(E2EBase):
+    def test_cheating_deliveries_are_rejected(self):
+        for sc in ("exit0", "peekhidden"):
+            rc, res, out = self.run_plan(f"U2-slugify={sc}")
+            self.assertEqual(rc, 0, (sc, res))
+            first = json.loads((out / "units" / "U2-slugify" / "attempt_1.json").read_text(encoding="utf-8"))
+            self.assertIn("tamper", first["failed_gates"], sc)
+
+    def test_work_dir_is_a_private_job_dir(self):
+        rc, res, out = self.run_plan("perfect")
+        self.assertEqual(rc, 0, res)
+        prompt = (out / "units" / "U2-slugify" / "attempt_1.prompt.md").read_text(encoding="utf-8")
+        work = re.search(r"Work only inside (\S+?)\.?$", prompt, re.M).group(1)
+        self.assertTrue(outsource.is_within(Path(work), JOBS), work)
+        self.assertFalse(outsource.is_within(Path(work), self.plan.parent))
+        self.assertEqual(list(JOBS.iterdir()), [], "job dirs are deleted after the run")
+
+    def test_job_root_inside_a_git_repo_is_refused(self):
+        repo = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, repo, True)
+        (repo / ".git").mkdir()
+        rc, res, _ = self.run_plan("perfect", AGY_OUTSOURCE_JOBS=str(repo / "jobs"))
+        self.assertEqual((rc, res["status"]), (5, "bad-plan"))
+        self.assertIn("git repository", res["errors"][0])
+
+    def test_stale_plaintext_is_swept(self):
+        out = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, out, True)
+        stale = out / "units" / "U1-normalize" / "verify" / "hidden" / "test_normalize_hidden.py"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("leftover", encoding="utf-8")
+        env = dict(os.environ, AGY_TASK=str(HERE / "fake_agy_task.py"), FAKE_AGY_SCENARIO="perfect")
+        subprocess.run([sys.executable, str(SCRIPTS / "outsource.py"), "run", str(self.plan), "--out", str(out)],
+                       capture_output=True, env=env)
+        self.assertFalse(stale.exists())
+        self.assertFalse(any(out.rglob("test_*_hidden.py")))
+
+    def test_escaped_contractor_is_caught_by_the_integrity_gate(self):
+        rc, res, out = self.run_plan("U2-slugify=specedit", FAKE_AGY_SPEC_DIR=str(self.plan.parent))
+        self.assertEqual(rc, 2, res)
+        self.assertEqual(res["units"]["U2-slugify"]["status"], "needs_attention")
+        self.assertIn("integrity", res["units"]["U2-slugify"]["note"])
+        self.assertEqual(res["units"]["U2-slugify"]["attempts"], 1, "no retry on a moved baseline")
+
+
+class RoleSeparation(E2EBase):
+    def test_run_refuses_unaudited_or_changed_tests(self):
+        (self.plan.parent / "audit.json").unlink()
+        rc, res, _ = self.run_plan("perfect")
+        self.assertEqual((rc, res["status"]), (5, "not-audited"))
+        rc, res = self.cli("audit")
+        self.assertEqual(rc, 0, res)
+        visible = self.plan.parent / "tests" / "test_slug.py"  # changing a test after the audit voids it
+        visible.write_text(visible.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8")
+        rc, res, _ = self.run_plan("perfect")
+        self.assertEqual((rc, res["status"]), (5, "not-audited"))
+        self.assertIn("changed since the audit", " ".join(res["errors"]))
+
+    def test_failed_or_incomplete_audit_blocks_the_run(self):
+        for sc in ("untraced", "skip"):
+            rc, res = self.cli("audit", "--force", FAKE_CLAUDE_SCENARIO=sc)
+            self.assertEqual((rc, res["status"]), (2, "fail"), sc)
+            rc, res, _ = self.run_plan("perfect")
+            self.assertEqual((rc, res["status"]), (5, "not-audited"), sc)
+
+    def test_same_model_roles_are_refused(self):
+        rc, res = self.cli("audit", "--force", "--auditor", "opus")  # the lead is opus
+        self.assertEqual((rc, res["status"]), (5, "bad-roles"))
+        rc, res = self.cli("audit", "--force", "--auditor", "agy")
+        self.assertEqual((rc, res["status"]), (5, "bad-roles"))
+        rc, res, _ = self.run_plan("perfect", "--contractor", "claude:opus")
+        self.assertEqual((rc, res["status"]), (5, "bad-roles"))
+        rc, res = self.cli("audit", "--force", FAKE_CLAUDE_SCENARIO="wrongmodel")  # asked for sonnet, ran on opus
+        self.assertEqual((rc, res["status"]), (5, "bad-roles"))
+
+    def test_claude_contractor(self):
+        rc, res, out = self.run_plan("perfect", "--contractor", "claude:haiku")
+        self.assertEqual(rc, 0, res)
+        st = json.loads((out / "state.json").read_text(encoding="utf-8"))["units"]["U2-slugify"]
+        self.assertEqual(st["contractor_model"], "claude-haiku-5-5")
+        self.assertIn("claude-haiku-5-5", (out / "report.md").read_text(encoding="utf-8"))
+
+    def test_triage_by_a_third_model(self):
+        rc, res, out = self.run_plan("U2-slugify=always", "--max-attempts", "1")
+        self.assertEqual(rc, 2, res)
+        rc, res = self.cli("triage", "U2-slugify", "--out", str(out), "--auditor", "opus")
+        self.assertEqual((rc, res["status"]), (5, "bad-roles"))
+        rc, res = self.cli("triage", "U2-slugify", "--out", str(out))
+        self.assertEqual(rc, 0, res)
+        self.assertEqual(res["failures"][0]["verdict"], "code_bug")
+        self.assertTrue((out / "units" / "U2-slugify" / "triage.json").is_file())
 
 
 if __name__ == "__main__":

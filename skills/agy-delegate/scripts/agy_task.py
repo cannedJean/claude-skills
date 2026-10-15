@@ -11,10 +11,15 @@ How it works
     `--mode accept-edits` (file edits auto-approved) and `--add-dir <workdir>` so the
     agent treats the work directory as its workspace. Without --add-dir an untrusted
     directory makes agy write into its own scratch folder instead.
+  * Confinement (default for run/resume): for the duration of the run, <workdir>/.agents/hooks.json
+    installs confine_hook.py as an agy PreToolUse hook. Every tool call whose path arguments
+    resolve outside the work directory is hard-denied, and so is every shell command (a program
+    agy starts could read any file). Decisions are logged to .agy_task/<stamp>/confine.jsonl and
+    summarised under "confinement" in the result. --no-confine turns it off.
   * Shell commands are NOT auto-approved by default (headless soft-denies them).
     Pre-approve specific ones in ~/.gemini/antigravity-cli/settings.json
     (permissions.allow, e.g. "command(regex:python -m pytest.*)"), or pass
-    --allow-all, which maps to agy's --dangerously-skip-permissions.
+    --allow-all, which maps to agy's --dangerously-skip-permissions (needs --no-confine).
   * The work directory is snapshotted before and after; the diff (created / modified /
     deleted files) is the deliverable, written to <workdir>/.agy_task/<stamp>/result.json
     and printed as JSON on stdout.
@@ -25,11 +30,13 @@ Exit codes: 0 done, 2 agent finished with a non-SUCCESS status, 3 agy/runtime er
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -37,6 +44,7 @@ import time
 from pathlib import Path
 
 IS_WINDOWS = sys.platform == "win32"
+CONFINE_HOOK = Path(__file__).resolve().parent / "confine_hook.py"
 SKIP_DIRS = {".git", ".agy_task", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".pytest_cache"}
 SKIP_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
 INSTALL_HINT = (
@@ -128,6 +136,63 @@ def diff_snapshots(before: dict, after: dict) -> dict:
             "sizes": {k: after[k][0] for k in created + modified}}
 
 
+def cmd_path(p) -> str:
+    """A path as one word of a hook command line, which agy runs through cmd /c (Windows) or sh -c."""
+    s = str(p)
+    if not IS_WINDOWS:
+        return shlex.quote(s)
+    if " " in s:  # cmd /c mangles a line that starts with a quote: prefer the 8.3 short name
+        import ctypes
+        buf = ctypes.create_unicode_buffer(32768)
+        if ctypes.windll.kernel32.GetShortPathNameW(s, buf, len(buf)) and " " not in buf.value:
+            return buf.value
+        return f'"{s}"'
+    return s
+
+
+class Confinement:
+    """Install confine_hook.py as <workdir>/.agents/hooks.json for one agy run; put back what was there after."""
+
+    def __init__(self, workdir: Path, log_file: Path):
+        self.workdir, self.log_file = workdir, log_file
+        self.dir = workdir / ".agents"
+        self.file = self.dir / "hooks.json"
+        self.made_dir, self.backup = False, None
+
+    def env(self) -> dict:
+        return {"AGY_CONFINE_ROOT": str(self.workdir), "AGY_CONFINE_LOG": str(self.log_file)}
+
+    def __enter__(self):
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
+        self.made_dir = not self.dir.exists()
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.backup = self.file.read_bytes() if self.file.exists() else None
+        hook = {"type": "command", "command": f"{cmd_path(sys.executable)} {cmd_path(CONFINE_HOOK)}", "timeout": 30}
+        spec = {"agy-task-confine": {"PreToolUse": [{"matcher": "*", "hooks": [hook]}]}}
+        self.file.write_text(json.dumps(spec, indent=2), encoding="utf-8")
+        return self
+
+    def __exit__(self, *exc):
+        if self.backup is None:
+            self.file.unlink(missing_ok=True)
+        else:
+            self.file.write_bytes(self.backup)
+        if self.made_dir:
+            with contextlib.suppress(OSError):
+                self.dir.rmdir()
+        return False
+
+    def report(self) -> dict:
+        entries = []
+        if self.log_file.exists():
+            for line in self.log_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                with contextlib.suppress(json.JSONDecodeError):
+                    entries.append(json.loads(line))
+        denied = [e for e in entries if e.get("decision") != "ask"]
+        return {"enabled": True, "root": str(self.workdir), "log": str(self.log_file),
+                "tool_calls": len(entries), "denied_count": len(denied), "denied": denied[:30]}
+
+
 def parse_agy_error(stderr_text: str):
     for line in stderr_text.splitlines():
         line = line.strip()
@@ -157,10 +222,16 @@ def agy_cmd(agy: str, prompt: str, workdir: Path, a, extra=None, stream: bool = 
     return cmd + list(extra or [])
 
 
-def run_agy(agy: str, prompt: str, workdir: Path, a, extra=None, stream: bool = True):
-    """Run agy headless in workdir; returns (rc, result_dict_or_None, stderr_text, events)."""
+def run_agy(agy: str, prompt: str, workdir: Path, a, extra=None, stream: bool = True, confine=None):
+    """Run agy headless in workdir (confined to it when confine is a Confinement);
+    returns (rc, result_dict_or_None, stderr_text, events)."""
+    with confine or contextlib.nullcontext():
+        return _run_agy(agy, prompt, workdir, a, extra, stream, confine.env() if confine else {})
+
+
+def _run_agy(agy: str, prompt: str, workdir: Path, a, extra, stream: bool, confine_env: dict):
     cmd = agy_cmd(agy, prompt, workdir, a, extra, stream)
-    env = dict(os.environ, PYTHONIOENCODING="utf-8", NO_COLOR="1")
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", NO_COLOR="1", **confine_env)
     proc = subprocess.Popen(cmd, cwd=str(workdir), stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     events, result = [], None
     text_buf = ""
@@ -234,6 +305,12 @@ def preflight(a) -> dict:
     return r
 
 
+def check_confine_args(a) -> None:
+    if a.confine and a.allow_all:
+        die("--allow-all lets agy run programs, and a program can read any file: the work-directory confinement "
+            "cannot hold. Pass --no-confine together with --allow-all to accept that.", 5)
+
+
 def cmd_run(a) -> int:
     try:
         agy = find_agy(a.agy_bin)
@@ -244,6 +321,7 @@ def cmd_run(a) -> int:
         task = Path(a.task_file).read_text(encoding="utf-8")
     if not task or not task.strip():
         die("provide --task TEXT or --task-file FILE", 5)
+    check_confine_args(a)
 
     stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     workdir = Path(a.workdir).resolve() if a.workdir else (Path.cwd() / "agy_tasks" / stamp)
@@ -272,13 +350,17 @@ def cmd_run(a) -> int:
 
     cmd_rule = ("- You MAY run shell commands (tests, builds) inside the directory."
                 if a.allow_all else
+                "- Every tool call that touches a path outside this directory is blocked, and shell commands are "
+                "disabled. Read and write only files inside it; if you would verify by running something, say "
+                "what to run in `notes`."
+                if a.confine else
                 "- Shell commands are not approved in this session unless pre-allowed; prefer writing code "
                 "and tests over running them. If you must verify, say what command to run in `notes`.")
     prompt = PROMPT_FRAME.format(workdir=workdir, task=task.strip(), inputs=inputs, cmd_rule=cmd_rule)
     schema_file = meta_dir / "schema.json"
     extra = [] if a.no_schema else ["--json-schema", str(schema_file)]
     if a.dry_run:
-        plan = {"status": "dry-run", "workdir": str(workdir), "would_stage": staged,
+        plan = {"status": "dry-run", "workdir": str(workdir), "would_stage": staged, "confined": a.confine,
                 "command": agy_cmd(agy, "<prompt>", workdir, a, extra, stream=True), "prompt": prompt}
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
@@ -288,9 +370,11 @@ def cmd_run(a) -> int:
     schema_file.write_text(json.dumps(RESULT_SCHEMA), encoding="utf-8")
 
     before = snapshot(workdir)
-    log(f"workdir={workdir} files_before={len(before)} model={a.model or 'default'} allow_all={a.allow_all}")
+    confine = Confinement(workdir, meta_dir / "confine.jsonl") if a.confine else None
+    log(f"workdir={workdir} files_before={len(before)} model={a.model or 'default'} allow_all={a.allow_all} "
+        f"confined={a.confine}")
     t0 = time.time()
-    rc, res, err, events = run_agy(agy, prompt, workdir, a, extra=extra, stream=True)
+    rc, res, err, events = run_agy(agy, prompt, workdir, a, extra=extra, stream=True, confine=confine)
     elapsed = round(time.time() - t0, 1)
     after = snapshot(workdir)
     changes = diff_snapshots(before, after)
@@ -317,7 +401,10 @@ def cmd_run(a) -> int:
         "elapsed_sec": elapsed,
         "meta_dir": str(meta_dir),
         "agy_error": parse_agy_error(err) or (res or {}).get("error"),
+        "confinement": confine.report() if confine else {"enabled": False},
     }
+    if confine and summary["confinement"]["denied_count"]:
+        log(f"confinement denied {summary['confinement']['denied_count']} tool call(s); see {confine.log_file}")
 
     # optional local verification command (runs through the platform shell: /bin/sh or cmd.exe)
     if a.verify:
@@ -357,14 +444,21 @@ def cmd_resume(a) -> int:
         agy = find_agy(a.agy_bin)
     except FileNotFoundError as e:
         die(str(e), 4)
+    check_confine_args(a)
     workdir = Path(a.workdir).resolve() if a.workdir else Path.cwd()
+    if a.confine and (workdir == Path.home() or workdir.parent == workdir):
+        die(f"refusing to confine agy to {workdir} (too broad)", 5)
     before = snapshot(workdir)
-    rc, res, err, _ = run_agy(agy, a.task, workdir, a, extra=["--conversation", a.conversation_id], stream=True)
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    confine = Confinement(workdir, workdir / ".agy_task" / f"resume-{stamp}" / "confine.jsonl") if a.confine else None
+    rc, res, err, _ = run_agy(agy, a.task, workdir, a, extra=["--conversation", a.conversation_id], stream=True,
+                              confine=confine)
     changes = diff_snapshots(before, snapshot(workdir))
     out = {"status": "ok" if rc == 0 and (res or {}).get("status") == "SUCCESS" else "error",
            "agent_status": (res or {}).get("status"), "conversation_id": (res or {}).get("conversation_id"),
            "changes": changes, "response": ((res or {}).get("response") or "")[:4000],
-           "agy_error": parse_agy_error(err) or (res or {}).get("error")}
+           "agy_error": parse_agy_error(err) or (res or {}).get("error"),
+           "confinement": confine.report() if confine else {"enabled": False}}
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0 if out["status"] == "ok" else 2
 
@@ -390,7 +484,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--verify", help="shell command to run in the work directory afterwards, e.g. 'python -m pytest -q'")
     r.add_argument("--verify-timeout", type=int, default=600)
     r.add_argument("--collect", help="copy created/modified files into this directory")
-    r.add_argument("--allow-all", action="store_true", help="let the agent run any shell command (agy --dangerously-skip-permissions). Off by default.")
+    r.add_argument("--allow-all", action="store_true", help="let the agent run any shell command (agy --dangerously-skip-permissions). Off by default; needs --no-confine.")
+    r.add_argument("--no-confine", dest="confine", action="store_false",
+                   help="do not confine agy's tool calls to the work directory (confined by default)")
     r.add_argument("--sandbox", action="store_true", help="agy --sandbox (terminal restrictions; macOS/Linux)")
     r.add_argument("--no-schema", action="store_true", help="do not request structured output")
     r.add_argument("--dry-run", action="store_true", help="print the agy command and the framed prompt; do not run")
@@ -403,6 +499,7 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--agent")
     rs.add_argument("--timeout", default="30m")
     rs.add_argument("--allow-all", action="store_true")
+    rs.add_argument("--no-confine", dest="confine", action="store_false")
     rs.add_argument("--sandbox", action="store_true")
     return p
 

@@ -10,6 +10,8 @@ A delivery is the state of a unit's work directory after agy finished. Each gate
   interface   declared symbols exist with the declared kind and parameter list (Python: AST; else: name present)
   imports     Python imports stay inside the allowed set (stdlib / project modules / plan allow-list)
   forbid      no deliverable matches a forbidden regex
+  tamper      Python deliverables cannot see or steer the tests they run next to (no test-framework or frame
+              introspection imports, no early exit, no eval/exec, no string naming a test file)
   tests       (run by outsource.py) visible tests, then sealed hidden tests
 
 Also: Python stub generation for the "red" check (tests must fail before the code exists).
@@ -321,12 +323,113 @@ def check_forbid(work: Path, unit: dict, patterns: list) -> dict:
     return gate("forbid", problems)
 
 
+# --------------------------------------------------------------------------- tamper
+# The code under test runs in the same process as the tests, so it could read the calling test (frames, inspect,
+# traceback), patch the runner (unittest, pytest, builtins), end the run early with a passing exit code, or hide
+# any of that behind eval/exec. None of that implements a behaviour rule; a unit that really needs one of these
+# names lists it in the plan's or the unit's "tamper_allow".
+TAMPER_MODULES = {"unittest", "pytest", "_pytest", "doctest", "inspect", "traceback", "linecache", "gc", "ctypes",
+                  "builtins", "atexit", "faulthandler", "importlib", "subprocess", "sitecustomize", "usercustomize"}
+TAMPER_ATTRS = {"sys._getframe", "sys.settrace", "sys.setprofile", "sys.modules", "sys.argv", "sys.exit",
+                "sys.excepthook", "os._exit", "os.abort", "os.kill", "os.system", "os.popen"}
+TAMPER_ATTR_PREFIXES = ("os.exec", "os.spawn", "os.posix_spawn")
+TAMPER_CALLS = {"eval", "exec", "compile", "__import__", "exit", "quit", "globals", "breakpoint"}
+# matched against every string literal (Python) or line (other files): names of test files, test folders and
+# the runner's environment, including the pieces a path is usually built from (Path(...) / "hidden")
+TAMPER_TEXT = re.compile(r"PYTEST_CURRENT_TEST|DELIVERY\.json|conftest|_hidden|^test_|^(hidden|tests)$"
+                         r"|(^|[\\/])(hidden|tests?)[\\/]|[\\/](hidden|tests?)$", re.I | re.M)
+
+
+def tamper_rule(allow=()) -> str:
+    """The tamper gate as one sentence for the work order (the contractor is told every rule it is checked on)."""
+    allow = set(allow)
+    mods = sorted(TAMPER_MODULES - allow)
+    attrs = sorted(a for a in TAMPER_ATTRS if a not in allow) + [p + "*" for p in TAMPER_ATTR_PREFIXES if p not in allow]
+    calls = sorted(TAMPER_CALLS - allow)
+    return ("The code must not look at or interfere with the tests that run it: do not import "
+            + ", ".join(mods) + "; do not use " + ", ".join(attrs) + "; do not call " + ", ".join(f"{c}()" for c in calls)
+            + "; and no string may name a test file or test folder.")
+
+
+def check_tamper(work: Path, unit: dict, allow=()) -> dict:
+    allow = set(allow)
+    problems = []
+    for f in unit["deliverables"]:
+        p = Path(work) / f
+        if not p.is_file():
+            continue
+        text = p.read_text(encoding="utf-8", errors="replace")
+        if p.suffix != ".py":
+            if "text" not in allow:
+                problems += [f"{f}:{ln}: names a test file or folder ({m.group(0)!r})"
+                             for ln, line in enumerate(text.splitlines(), 1) for m in [TAMPER_TEXT.search(line)] if m]
+            continue
+        try:
+            tree = ast.parse(text)
+        except (SyntaxError, UnicodeDecodeError):
+            continue  # reported by the syntax gate
+        if "text" not in allow:
+            docs = {id(b[0].value) for b in [tree.body] + [n.body for n in ast.walk(tree) if isinstance(
+                n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))] if b and isinstance(b[0], ast.Expr)}
+            for n in ast.walk(tree):
+                if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs:
+                    m = TAMPER_TEXT.search(n.value)
+                    if m:
+                        problems.append(f"{f}:{n.lineno}: a string names a test file or folder ({n.value[:60]!r})")
+        alias = {}  # local name -> module it stands for
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    alias[(a.asname or a.name).split(".")[0]] = a.name.split(".")[0] if not a.asname else a.name
+            elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
+                for a in n.names:
+                    alias[a.asname or a.name] = f"{n.module}.{a.name}"
+        for n in ast.walk(tree):
+            used = []
+            if isinstance(n, ast.Import):
+                used = [a.name for a in n.names]
+            elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
+                used = [n.module] + [f"{n.module}.{a.name}" for a in n.names]
+            elif isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id in alias:
+                used = [f"{alias[n.value.id]}.{n.attr}"]
+            elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id not in alias:
+                used = [n.func.id] if n.func.id in TAMPER_CALLS else []
+            elif isinstance(n, ast.Name) and n.id == "__builtins__":
+                used = ["__builtins__"]
+            for u in used:
+                hit = _tamper_hit(u, allow)
+                if hit:
+                    problems.append(f"{f}:{n.lineno}: uses {hit}")
+    line = lambda s: (s.split(":")[0], int(s.split(":")[1]))  # noqa: E731
+    return gate("tamper", sorted(set(problems), key=line))
+
+
+def _tamper_hit(name: str, allow: set):
+    top = name.split(".")[0]
+    if top in TAMPER_MODULES and top not in allow and name not in allow:
+        return top
+    if name in TAMPER_ATTRS and name not in allow:
+        return name
+    if name.startswith(TAMPER_ATTR_PREFIXES) and not any(name.startswith(p) and p in allow for p in TAMPER_ATTR_PREFIXES):
+        return name
+    if name in TAMPER_CALLS | {"__builtins__"} and name not in allow:
+        return name + ("()" if name in TAMPER_CALLS else "")
+    return None
+
+
 def static_gates(work: Path, unit: dict, changes: dict, frozen: dict, plan: dict) -> list:
     forbid = list(plan.get("forbid_patterns", [])) + list(unit.get("forbid_patterns", []))
     policy = unit.get("imports", plan.get("imports"))
-    return [check_manifest(work, unit), check_scope(changes, unit, frozen), check_files(work, unit),
-            check_syntax(work, unit), check_interface(work, unit), check_imports(work, unit, policy),
-            check_forbid(work, unit, forbid)]
+    res = [check_manifest(work, unit), check_scope(changes, unit, frozen), check_files(work, unit),
+           check_syntax(work, unit), check_interface(work, unit), check_imports(work, unit, policy),
+           check_forbid(work, unit, forbid)]
+    if plan.get("language", "python") == "python":
+        res.append(check_tamper(work, unit, tamper_allow(plan, unit)))
+    return res
+
+
+def tamper_allow(plan: dict, unit: dict) -> list:
+    return list(plan.get("tamper_allow", [])) + list(unit.get("tamper_allow", []))
 
 
 # --------------------------------------------------------------------------- stubs (red check)
