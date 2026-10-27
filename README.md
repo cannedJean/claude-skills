@@ -11,6 +11,7 @@ Personal [Claude Code](https://claude.com/claude-code) skills. Each skill is a s
 | [agy-outsource](skills/agy-outsource/) | Lead/contractor coding with `agy`: Claude splits a task into unit-testable units (deliverables, exact interface, behaviour rules, dependencies) and writes visible + sealed hidden tests; agy implements one unit per session in a strict delivery format (only the listed files + `DELIVERY.json`); deterministic gates (integrity, scope, manifest, AST interface, imports, forbidden patterns, test tampering, visible/hidden tests) accept or send feedback, units run in dependency order and are integration-tested before `integrate` copies them into the project. agy works in a job dir outside every repository; a different Claude model audits the tests before any code and referees failures, so test author, coder and judge are never one model; the contractor side is kept fast (effort ladder, inlined inputs, no report frame) without loosening a gate; see [references/isolation.md](skills/agy-outsource/references/isolation.md) | Antigravity CLI 1.2+ via agy-delegate; stdlib only |
 | [agy-slide-analyzer](skills/agy-slide-analyzer/) | Transcribe and analyse a folder of lecture slide images slide-by-slide through `agy` (persona + chain-of-thought + few-shot analyst), then verify each result without a second LLM look at the image: a sealed local-OCR reference (Tesseract / Windows OCR + layout stats) is compared with the JSON, omissions are retried with OCR-derived feedback, and only disputed lines are cropped for Claude to read blind; outputs structured JSON plus a QA report with an audited residual-error estimate. Holds the evaluation code shared with agy-pdf-analyzer; see [docs/ocr-evaluation-design.md](docs/ocr-evaluation-design.md) | Antigravity CLI 1.2+ via agy-delegate; Pillow; Tesseract (`kor`) and/or `winsdk` |
 | [agy-pdf-analyzer](skills/agy-pdf-analyzer/) | The same analysis for a whole lecture PDF of any length, without converting it to images for `agy`: the page count is read from the PDF, `agy` views the PDF a few pages per session and writes one structured JSON per page, each verified against the page's text layer (born-digital) or its embedded image through local OCR (scanned), with the same blind Claude review of disputed crops | Antigravity CLI 1.2+ via agy-delegate + agy-slide-analyzer; `pypdf`; Pillow |
+| [lecture-knowledge-pack](skills/lecture-knowledge-pack/) | Turn a whole course's slide analyses (agy-slide-analyzer / agy-pdf-analyzer output, one folder per lecture) into a layered knowledge package for a tutoring agent: verified text first, slide images and region crops as linked evidence. Re-checks what character coverage cannot (code/SQL operators, table cells, arrow direction, formulas, `[?]`, digits on single-OCR-engine slides) with blind Claude subagent reads of whole-block crops and a 2-of-3 vote that never deletes analysis text; builds decks (sections, Bloom objectives, concepts with KO/EN aliases, prerequisites, exam points), an append-only concept registry for stable learner-state keys, per-slide cards with trust labels and a `TUTOR_GUIDE`; publishes only when a deterministic gate (coverage, verbatim preservation, links, ids, read limits, provenance, freshness) passes. Tested on a real 123-slide deck: see [references/trust.md](skills/lecture-knowledge-pack/references/trust.md) | agy-slide-analyzer (shared code); Pillow, numpy recommended |
 | [kaggle-submit](skills/kaggle-submit/) | End-to-end Kaggle competition submission: first-run `doctor`/`setup` (install CLI, place credentials, verify auth), competition info and rules check, data download, `sample_submission` validation, submit with score polling, local submission log, leaderboard | official `kaggle` CLI (PyPI 2.2.x and git main both supported) |
 | [gdrive-bridge](skills/gdrive-bridge/) | Move data bundles and Colab outputs through Google Drive: push a zip into the Drive for Desktop mount, verify a human-made share link for `gdown` (fresh-VM runner path), generate Colab `drive.mount`/`export` cells with manifest verification, and pull results back with sha256 checks | Google Drive for Desktop mount (`G:\` on Windows, `~/Library/CloudStorage` on macOS); stdlib only |
 
@@ -25,6 +26,7 @@ cp -r claude-skills/skills/agy-delegate ~/.claude/skills/
 cp -r claude-skills/skills/agy-outsource ~/.claude/skills/
 cp -r claude-skills/skills/agy-slide-analyzer ~/.claude/skills/
 cp -r claude-skills/skills/agy-pdf-analyzer ~/.claude/skills/
+cp -r claude-skills/skills/lecture-knowledge-pack ~/.claude/skills/
 cp -r claude-skills/skills/kaggle-submit ~/.claude/skills/
 cp -r claude-skills/skills/gdrive-bridge ~/.claude/skills/
 ```
@@ -36,7 +38,7 @@ git clone https://github.com/cannedJean/claude-skills.git
 Copy-Item -Recurse claude-skills\skills\* "$env:USERPROFILE\.claude\skills\"
 ```
 
-Then follow each skill's `README.md` for the one-time backend setup (Colab CLI + gcloud auth, `agy` sign-in, Kaggle API credentials, or Google Drive for Desktop)
+Then follow each skill's `README.md` for the one-time backend setup (Colab CLI + gcloud auth, `agy` sign-in, Kaggle API credentials, Google Drive for Desktop, or an OCR engine for the analyzers)
 and run its `preflight` command. Restart Claude Code so the new skills are picked up.
 
 ## Layout
@@ -51,6 +53,9 @@ skills/
   agy-slide-analyzer/      SKILL.md, README.md, scripts/{slide_analyze,slide_validate,ocr_ref,ocr_score,crops,textnorm}.py,
                            scripts/tests/{test_ocr_score,fake_agy_task,synth}.py, prompts/{analyst,reviewer}.md
   agy-pdf-analyzer/        SKILL.md, README.md, scripts/{pdf_analyze,pdf_validate}.py, prompts/{analyst,reviewer}.md
+  lecture-knowledge-pack/  SKILL.md, README.md, scripts/{knowledge_pack,kp_common,kp_ingest,kp_regions,kp_compare,kp_verify,
+                           kp_integrate,kp_render,kp_gate,kp_safety,kp_stages}.py, scripts/tests/ (unittest, fakes, synthetic slides),
+                           prompts/{struct_read,integrate_lecture,merge_concepts}.md, references/{trust,schemas,tutor_guide,eval}.md
   kaggle-submit/           SKILL.md, README.md, scripts/kaggle_submit.py, references/{kaggle-cli-competitions,troubleshooting}.md
   gdrive-bridge/           SKILL.md, README.md, scripts/gdrive_bridge.py
 docs/
