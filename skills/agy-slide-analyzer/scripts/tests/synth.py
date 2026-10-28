@@ -1,5 +1,10 @@
 """synth.py - render synthetic lecture slides whose text is known exactly (used by the tests and as a
-smoke input). Korean needs a system font: Malgun Gothic on Windows, falls back to any TTF found."""
+smoke input). Korean needs a system font: Malgun Gothic on Windows, falls back to any TTF found.
+
+    make_deck(folder) -> [title-only, main (text + SQL + ruled table + shapes), diagram]   slide_001-003
+    make_template_deck(folder, n, size) -> n slides sharing a footer line (deck template)
+    slide_code_panel(path)  a near-black code panel on a light slide
+"""
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -71,10 +76,45 @@ def slide_diagram(path: Path):
     return path
 
 
+def slide_code_panel(path: Path):
+    """A light slide with a near-black code panel (light monospace text) and one sentence."""
+    img = Image.new("RGB", (1280, 720), "white")
+    d = ImageDraw.Draw(img)
+    d.text((60, 40), "반복문 예제", font=font(BOLD_CANDIDATES, 44), fill="black")
+    d.rectangle((60, 150, 900, 420), fill=(30, 30, 30))
+    mono = font(MONO_CANDIDATES, 26)
+    for i, line in enumerate(("for (let i = 0; i < 3; i++) {", "  total += i % 2", "}")):
+        d.text((90, 180 + i * 50), line, font=mono, fill=(230, 230, 230))
+    d.text((60, 480), "i가 3보다 작은 동안 반복한다.", font=font(FONT_CANDIDATES, 30), fill="black")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path)
+    return path
+
+
+def slide_with_footer(path: Path, k: int, size=(1280, 720)):
+    """Slide k of a templated deck: its own title and sentence, plus a footer line every slide shares."""
+    W, H = size
+    img = Image.new("RGB", size, "white")
+    d = ImageDraw.Draw(img)
+    s = W / 1280
+    d.text((int(60 * s), int(40 * s)), f"{k}장. 예제 슬라이드", font=font(BOLD_CANDIDATES, max(8, int(44 * s))), fill="black")
+    d.text((int(60 * s), int(160 * s)), f"본문 문장 번호는 {k * 11}입니다.", font=font(FONT_CANDIDATES, max(8, int(30 * s))), fill="black")
+    d.text((int(60 * s), H - int(50 * s)), "SAMPLE ACADEMY FOR TESTS", font=font(FONT_CANDIDATES, max(8, int(20 * s))), fill="gray")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path)
+    return path
+
+
 def make_deck(folder: Path) -> list:
     folder.mkdir(parents=True, exist_ok=True)
     return [slide_title_only(folder / "slide_001.png"), slide_main(folder / "slide_002.png"),
             slide_diagram(folder / "slide_003.png")]
+
+
+def make_template_deck(folder: Path, n: int = 6, size=(1280, 720)) -> list:
+    """n slides sharing a footer at the same place (the deck-template case); small `size` for fast tests."""
+    folder.mkdir(parents=True, exist_ok=True)
+    return [slide_with_footer(folder / f"slide_{k:03d}.png", k, size) for k in range(1, n + 1)]
 
 
 if __name__ == "__main__":

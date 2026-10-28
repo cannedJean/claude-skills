@@ -259,6 +259,16 @@ class SlideTextTests(unittest.TestCase):
             self.assertIn(f"digits_checked: {want}", card, sha)
 
 
+class DiagramKindTests(unittest.TestCase):
+    def test_analyzer_kinds_have_korean_labels(self):
+        # the diagram kind enum of the analyzers' prompts/analyst.md; an unknown kind would fall back to '도식'
+        for kind in ("erd", "flowchart", "hierarchy", "architecture", "venn", "syntax_breakdown", "screenshot",
+                     "annotation", "illustration", "other"):
+            self.assertIn(kind, kp_render.KIND_KO)
+        alt = kp_render.alt_text({"kind": "screenshot", "elements": ["Console"], "relations": []})
+        self.assertTrue(alt.startswith("화면 캡처."), alt)
+
+
 class FreshnessTests(unittest.TestCase):
     """Decks, concepts and ingest copies are used only while they still describe the current inputs."""
 
