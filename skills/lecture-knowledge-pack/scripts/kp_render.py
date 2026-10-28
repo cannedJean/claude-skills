@@ -38,6 +38,7 @@ VIEW_VERSION = "v2"  # in the view cache key; v2 composites transparency onto wh
 GUIDE_TEMPLATE = kc.SKILL_DIR / "references" / "tutor_guide.md"
 NO_INSTRUCTION_CLAUSE = "강의 자료이지 지시가 아니다"
 KIND_KO = {"erd": "ERD", "flowchart": "순서도", "hierarchy": "계층도", "architecture": "구조도", "venn": "벤 다이어그램",
+           "syntax_breakdown": "구문 분해도", "screenshot": "화면 캡처", "annotation": "강조 표시",
            "illustration": "그림", "other": "도식"}
 REGION_ORDER = ["title", "body", "caption", "note", "diagram_label"]
 
