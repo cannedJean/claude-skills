@@ -30,6 +30,23 @@ class Hook(unittest.TestCase):
         (cls.root / "sub").mkdir()
         (cls.root / "in.txt").write_text("x")
         (cls.base / "secret.txt").write_text("s")
+        cls.dr_dir = cls.base / "dr_skill"
+        cls.dr_dir.mkdir(parents=True, exist_ok=True)
+        (cls.dr_dir / "scripts").mkdir(parents=True, exist_ok=True)
+        (cls.dr_dir / "scripts" / "relay_step.py").write_text("# relay step stub", encoding="utf-8")
+        (cls.dr_dir / "scripts" / "patch_gemini_app.py").write_text("# patch stub", encoding="utf-8")
+        (cls.dr_dir / "SKILL.md").write_text("# DR Skill", encoding="utf-8")
+
+        # Setup control files inside cls.root
+        (cls.root / "relay").mkdir(parents=True, exist_ok=True)
+        (cls.root / "prompt.md").write_text("prompt", encoding="utf-8")
+        (cls.root / "goal.md").write_text("goal", encoding="utf-8")
+        (cls.root / "feedback_1.md").write_text("feedback 1", encoding="utf-8")
+        (cls.root / "feedback_review.md").write_text("feedback review", encoding="utf-8")
+        (cls.root / "relay" / "request.json").write_text("{}", encoding="utf-8")
+        (cls.root / "relay" / "result.json").write_text("{}", encoding="utf-8")
+        (cls.root / "relay" / "started.json").write_text("{}", encoding="utf-8")
+
         cls.junction = False
         if WIN:
             cp = subprocess.run(["cmd", "/c", "mklink", "/J", str(cls.root / "jn"), str(cls.base)], capture_output=True)
@@ -44,16 +61,36 @@ class Hook(unittest.TestCase):
             os.rmdir(cls.root / "jn") if WIN else os.unlink(cls.root / "jn")
         shutil.rmtree(cls.base, True)
 
-    def decide(self, name, args, env_root=True, stdin=None, inlined=None):
+    def decide(self, name, args, env_root=True, stdin=None, inlined=None, mode=None, dr_dir=None):
         env = {k: v for k, v in os.environ.items() if not k.startswith("AGY_CONFINE_")}
         if env_root:
             env["AGY_CONFINE_ROOT"] = str(self.root)
         if inlined is not None:
             env["AGY_CONFINE_INLINED"] = json.dumps(inlined)
+        if mode is not None:
+            env["AGY_CONFINE_MODE"] = str(mode)
+        if dr_dir is not None:
+            env["AGY_CONFINE_DR_DIR"] = str(dr_dir)
         data = stdin if stdin is not None else json.dumps({"toolCall": {"name": name, "args": args}}).encode()
         cp = subprocess.run([sys.executable, str(HOOK)], input=data, capture_output=True,
                             cwd=str(self.root / ".agents"), env=env)
         return json.loads(cp.stdout)["decision"]
+
+    def decide_audit(self, name, args, mode="deep-research", dr_dir=None):
+        log = self.base / "test_audit.jsonl"
+        log.unlink(missing_ok=True)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("AGY_CONFINE_")}
+        env["AGY_CONFINE_ROOT"] = str(self.root)
+        env["AGY_CONFINE_LOG"] = str(log)
+        if mode:
+            env["AGY_CONFINE_MODE"] = str(mode)
+        env["AGY_CONFINE_DR_DIR"] = str(dr_dir if dr_dir is not None else self.dr_dir)
+        data = json.dumps({"toolCall": {"name": name, "args": args}}).encode()
+        cp = subprocess.run([sys.executable, str(HOOK)], input=data, capture_output=True,
+                            cwd=str(self.root / ".agents"), env=env)
+        decision = json.loads(cp.stdout)["decision"]
+        entry = json.loads(log.read_text(encoding="utf-8").splitlines()[-1]) if log.exists() else {}
+        return decision, entry.get("rule"), entry.get("reason", "")
 
     def test_viewing_an_inlined_file_is_denied(self):
         R = str(self.root)
@@ -202,6 +239,236 @@ class Hook(unittest.TestCase):
                            input=json.dumps({"toolCall": {"name": "view_file", "args": args}}).encode())
         entries = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()]
         self.assertEqual([(e["decision"], e.get("rule")) for e in entries], [("deny", "path")] * 2)
+
+    def test_deep_research_reads_allowed_in_workdir_and_dr_dir(self):
+        # Reading inside workdir
+        self.assertEqual(self.decide("view_file", {"AbsolutePath": "in.txt"}, mode="deep-research", dr_dir=self.dr_dir), "ask")
+        self.assertEqual(self.decide("view_file", {"AbsolutePath": str(self.root / "in.txt")}, mode="deep-research", dr_dir=self.dr_dir), "ask")
+        self.assertEqual(self.decide("list_dir", {"DirectoryPath": str(self.root)}, mode="deep-research", dr_dir=self.dr_dir), "ask")
+        # Reading inside dr_dir
+        self.assertEqual(self.decide("view_file", {"AbsolutePath": str(self.dr_dir / "SKILL.md")}, mode="deep-research", dr_dir=self.dr_dir), "ask")
+        self.assertEqual(self.decide("view_file", {"AbsolutePath": str(self.dr_dir / "scripts" / "relay_step.py")}, mode="deep-research", dr_dir=self.dr_dir), "ask")
+        self.assertEqual(self.decide("list_dir", {"DirectoryPath": str(self.dr_dir)}, mode="deep-research", dr_dir=self.dr_dir), "ask")
+        self.assertEqual(self.decide("grep_search", {"SearchPath": str(self.dr_dir), "Query": "DR"}, mode="deep-research", dr_dir=self.dr_dir), "ask")
+        self.assertEqual(self.decide("find_by_name", {"SearchDirectory": str(self.dr_dir), "Pattern": "*.py"}, mode="deep-research", dr_dir=self.dr_dir), "ask")
+
+    def test_deep_research_reads_outside_workdir_and_dr_dir_denied(self):
+        dec, rule, _ = self.decide_audit("view_file", {"AbsolutePath": str(self.base / "secret.txt")})
+        self.assertEqual((dec, rule), ("deny", "path"))
+        dec, rule, _ = self.decide_audit("view_file", {"AbsolutePath": "../secret.txt"})
+        self.assertEqual((dec, rule), ("deny", "path"))
+        dec, rule, _ = self.decide_audit("list_dir", {"DirectoryPath": str(self.base)})
+        self.assertEqual((dec, rule), ("deny", "path"))
+        dec, rule, _ = self.decide_audit("grep_search", {"SearchPath": str(self.base), "Query": "s"})
+        self.assertEqual((dec, rule), ("deny", "path"))
+        Bf = str(self.base).replace(BS, "/")
+        dec, rule, _ = self.decide_audit("read_url_content", {"Url": "file://" + ("/" if WIN else "") + Bf + "/secret.txt"})
+        self.assertEqual((dec, rule), ("deny", "path"))
+
+    def test_deep_research_writes_outside_workdir_denied(self):
+        dec, rule, _ = self.decide_audit("write_to_file", {"TargetFile": str(self.base / "esc.txt"), "CodeContent": "x"})
+        self.assertEqual((dec, rule), ("deny", "path"))
+        dec, rule, _ = self.decide_audit("replace_file_content", {"TargetFile": str(self.base / "secret.txt"), "TargetContent": "s", "ReplacementContent": "r"})
+        self.assertEqual((dec, rule), ("deny", "path"))
+        dec, rule, _ = self.decide_audit("write_to_file", {"TargetFile": "../esc.txt", "CodeContent": "x"})
+        self.assertEqual((dec, rule), ("deny", "path"))
+
+    def test_deep_research_writes_to_dr_dir_denied(self):
+        dec, rule, _ = self.decide_audit("write_to_file", {"TargetFile": str(self.dr_dir / "scripts" / "evil.py"), "CodeContent": "x"})
+        self.assertEqual((dec, rule), ("deny", "path"))
+        dec, rule, _ = self.decide_audit("replace_file_content", {"TargetFile": str(self.dr_dir / "scripts" / "relay_step.py"), "TargetContent": "#", "ReplacementContent": "##"})
+        self.assertEqual((dec, rule), ("deny", "path"))
+
+    def test_deep_research_protected_control_files_denied_for_writes(self):
+        protected_files = [
+            "relay/request.json",
+            "prompt.md",
+            "goal.md",
+            "feedback_1.md",
+            "feedback_review.md",
+            "relay/result.json",
+            "relay/started.json",
+            ".agents/hooks.json",
+            ".agy_task/log.jsonl",
+        ]
+        for pf in protected_files:
+            with self.subTest(pf=pf):
+                dec, rule, _ = self.decide_audit("write_to_file", {"TargetFile": pf, "CodeContent": "{}"})
+                self.assertEqual((dec, rule), ("deny", "protected"), f"write {pf}")
+                dec, rule, _ = self.decide_audit("write_to_file", {"TargetFile": str(self.root / pf), "CodeContent": "{}"})
+                self.assertEqual((dec, rule), ("deny", "protected"), f"write abs {pf}")
+                dec, rule, _ = self.decide_audit("replace_file_content", {"TargetFile": str(self.root / pf), "TargetContent": "a", "ReplacementContent": "b"})
+                self.assertEqual((dec, rule), ("deny", "protected"), f"replace abs {pf}")
+
+    def test_deep_research_reading_protected_control_files_allowed(self):
+        for pf in ["relay/request.json", "prompt.md", "goal.md", "feedback_1.md", "relay/result.json", "relay/started.json"]:
+            with self.subTest(pf=pf):
+                self.assertEqual(self.decide("view_file", {"AbsolutePath": str(self.root / pf)}, mode="deep-research", dr_dir=self.dr_dir), "ask")
+                self.assertEqual(self.decide("view_file", {"AbsolutePath": pf}, mode="deep-research", dr_dir=self.dr_dir), "ask")
+
+    def test_deep_research_clean_relay_step_commands_allowed(self):
+        R = str(self.root)
+        DR = str(self.dr_dir / "scripts" / "relay_step.py")
+        commands = [
+            f'python relay_step.py --job "{R}"',
+            f'python relay_step.py --job="{R}"',
+            f'python.exe relay_step.py --job "{R}"',
+            f'python3 relay_step.py --job "{R}"',
+            f'py relay_step.py --job "{R}"',
+            f'python "{DR}" --job "{R}"',
+            f'python relay_step.py --job "{R}" --worker',
+            f'python -u relay_step.py --job "{R}"',
+            f'{sys.executable} relay_step.py --job "{R}"',
+        ]
+        for cmd in commands:
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.decide("run_command", {"CommandLine": cmd}, mode="deep-research", dr_dir=self.dr_dir), "ask")
+
+    def test_deep_research_clean_patch_gemini_app_commands_allowed(self):
+        DR_PATCH = str(self.dr_dir / "scripts" / "patch_gemini_app.py")
+        commands = [
+            "python patch_gemini_app.py",
+            f'python "{DR_PATCH}"',
+            "python patch_gemini_app.py --show",
+            "python patch_gemini_app.py --restore",
+            "python.exe patch_gemini_app.py",
+            "py patch_gemini_app.py",
+        ]
+        for cmd in commands:
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.decide("run_command", {"CommandLine": cmd}, mode="deep-research", dr_dir=self.dr_dir), "ask")
+
+    def test_deep_research_shell_chaining_denied(self):
+        R = str(self.root)
+        chaining_cmds = [
+            f'python relay_step.py --job "{R}" && calc.exe',
+            f'python relay_step.py --job "{R}" & whoami',
+            f'python relay_step.py --job "{R}"; dir',
+            f'python relay_step.py --job "{R}" | grep ok',
+            f'python relay_step.py --job "{R}" || echo fail',
+            f'python relay_step.py `whoami` --job "{R}"',
+            f'python relay_step.py $(whoami) --job "{R}"',
+            f'python relay_step.py --job "{R}"\ncalc.exe',
+            f'python relay_step.py --job "{R}"\r\nwhoami',
+        ]
+        for cmd in chaining_cmds:
+            with self.subTest(cmd=cmd):
+                dec, rule, _ = self.decide_audit("run_command", {"CommandLine": cmd})
+                self.assertEqual((dec, rule), ("deny", "shell"), cmd)
+
+    def test_deep_research_redirection_denied(self):
+        R = str(self.root)
+        redir_cmds = [
+            f'python relay_step.py --job "{R}" > out.txt',
+            f'python relay_step.py --job "{R}" >> out.txt',
+            f'python relay_step.py --job "{R}" < in.txt',
+            f'python relay_step.py --job "{R}" 2>&1',
+        ]
+        for cmd in redir_cmds:
+            with self.subTest(cmd=cmd):
+                dec, rule, _ = self.decide_audit("run_command", {"CommandLine": cmd})
+                self.assertEqual((dec, rule), ("deny", "shell"), cmd)
+
+    def test_deep_research_unauthorized_commands_and_scripts_denied(self):
+        R = str(self.root)
+        B = str(self.base)
+        unauth_cmds = [
+            "python evil.py",
+            f'python other_script.py --job "{R}"',
+            f'python relay_step.py --job "{B}"',
+            "python relay_step.py",
+            f'python "{B}/relay_step.py" --job "{R}"',
+            "dir",
+            "ls -la",
+            "echo hi",
+            "powershell -c Get-Process",
+            "node index.js",
+            "python -c 'import os; os.system(\"calc\")'",
+            "python -m http.server",
+        ]
+        for cmd in unauth_cmds:
+            with self.subTest(cmd=cmd):
+                dec, rule, _ = self.decide_audit("run_command", {"CommandLine": cmd})
+                self.assertEqual((dec, rule), ("deny", "shell"), cmd)
+
+    def test_deep_research_python_flag_injection_denied(self):
+        R = str(self.root)
+        DR_PATCH = str(self.dr_dir / "scripts" / "patch_gemini_app.py")
+        adversarial_cmds = [
+            f'python -cprint(1) relay_step.py --job "{R}"',
+            f'python -c"import os; os.system(\'calc\')" relay_step.py --job "{R}"',
+            f'python -c"print(1)" relay_step.py --job "{R}"',
+            f'python -c\'print(1)\' relay_step.py --job "{R}"',
+            f'python -c=print(1) relay_step.py --job "{R}"',
+            f'python -mhttp.server relay_step.py --job "{R}"',
+            f'python -m"http.server" relay_step.py --job "{R}"',
+            f'python -m=http.server relay_step.py --job "{R}"',
+            f'python - relay_step.py --job "{R}"',
+            f'python.exe - relay_step.py --job "{R}"',
+            f'python -c"calc" "{DR_PATCH}"',
+            f'python -cprint(1) patch_gemini_app.py',
+            f'python -mhttp.server patch_gemini_app.py',
+            f'python - patch_gemini_app.py',
+            f'python -Wignore relay_step.py --job "{R}"',
+            f'python -i relay_step.py --job "{R}"',
+            f'python -ucprint(1) relay_step.py --job "{R}"',
+        ]
+        for cmd in adversarial_cmds:
+            with self.subTest(cmd=cmd):
+                dec, rule, _ = self.decide_audit("run_command", {"CommandLine": cmd})
+                self.assertEqual((dec, rule), ("deny", "shell"), cmd)
+
+    def test_deep_research_permitted_python_flags_allowed(self):
+        R = str(self.root)
+        allowed_cmds = [
+            f'python -u relay_step.py --job "{R}"',
+            f'python -B relay_step.py --job "{R}"',
+            f'python -u -B relay_step.py --job "{R}"',
+        ]
+        for cmd in allowed_cmds:
+            with self.subTest(cmd=cmd):
+                dec, _, _ = self.decide_audit("run_command", {"CommandLine": cmd})
+                self.assertEqual(dec, "ask", cmd)
+
+    def test_deep_research_ntfs_alternate_data_stream_denied(self):
+        protected_files = [
+            "prompt.md",
+            "goal.md",
+            "relay/request.json",
+            "relay/result.json",
+            "relay/started.json",
+            "feedback_1.md",
+        ]
+        for pf in protected_files:
+            stream_variants = [
+                f"{pf}::$DATA",
+                f"{pf}:stream",
+                f"{pf}:stream:$DATA",
+                f"{self.root}/{pf}::$DATA",
+                f"{self.root}\\{pf}::$DATA",
+                f"{self.root}/{pf}:stream",
+            ]
+            for variant in stream_variants:
+                with self.subTest(variant=variant):
+                    dec, rule, _ = self.decide_audit("write_to_file", {"TargetFile": variant, "CodeContent": "TAMPERED"})
+                    self.assertEqual(dec, "deny", f"write {variant}")
+                    dec_r, rule_r, _ = self.decide_audit("replace_file_content", {
+                        "TargetFile": variant, "TargetContent": "a", "ReplacementContent": "b"
+                    })
+                    self.assertEqual(dec_r, "deny", f"replace {variant}")
+
+        dec_out, rule_out, _ = self.decide_audit("view_file", {"AbsolutePath": "../secret.txt::$DATA"})
+        self.assertEqual(dec_out, "deny")
+
+    def test_deep_research_browser_mcp_and_terminal_tools_denied(self):
+        for tool in ["browser_open_url", "browser_click", "mcp_fs_read", "custom_mcp_call"]:
+            with self.subTest(tool=tool):
+                dec, rule, _ = self.decide_audit(tool, {})
+                self.assertEqual((dec, rule), ("deny", "tool"), tool)
+        for tool in ["send_command_input", "read_terminal", "command_status"]:
+            with self.subTest(tool=tool):
+                dec, rule, _ = self.decide_audit(tool, {})
+                self.assertEqual((dec, rule), ("deny", "shell"), tool)
 
 
 class Installer(unittest.TestCase):
@@ -388,6 +655,129 @@ class Installer(unittest.TestCase):
         self.assertTrue(p.parse_args(["run", "-t", "x"]).confine)
         self.assertTrue(p.parse_args(["resume", "cid", "-t", "x"]).confine)
 
+    def test_deep_research_dry_run_flags_and_schema(self):
+        cp = subprocess.run([sys.executable, str(SCRIPTS / "agy_task.py"), "run", "--deep-research",
+                             "-w", str(self.work), "-t", "test task", "--dry-run"],
+                            capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        data = json.loads(cp.stdout)
+        self.assertEqual(data["status"], "dry-run")
+        self.assertTrue(data["confined"])
+        self.assertIn("--dangerously-skip-permissions", data["command"])
+        self.assertIn("--add-dir", data["command"])
+        self.assertIn("You are acting strictly as the relay operator for Gemini Deep Research.", data["prompt"])
+        schema = data.get("schema", {})
+        props = schema.get("properties", {})
+        for expected_prop in ["status", "step", "code", "url", "plan_count", "report_chars", "sources_count", "summary", "notes"]:
+            self.assertIn(expected_prop, props)
+        self.assertEqual(schema.get("required"), ["status", "step", "summary"])
+        self.assertTrue(data.get("deep_research"))
+
+    def test_deep_research_confinement_env_variables(self):
+        c = agy_task.Confinement(self.work, self.work / "log.jsonl", mode="deep-research", dr_dir=Path("/opt/dr_skill"))
+        env = c.env()
+        self.assertEqual(env["AGY_CONFINE_MODE"], "deep-research")
+        self.assertEqual(env["AGY_CONFINE_DR_DIR"], str(Path("/opt/dr_skill").resolve()))
+        self.assertEqual(env["AGY_CONFINE_ROOT"], str(self.work))
+        self.assertEqual(env["AGY_CONFINE_LOG"], str(self.work / "log.jsonl"))
+
+    def test_deep_research_dr_skill_dir_cli_option(self):
+        custom_dr = self.work / "custom_dr"
+        cp = subprocess.run([sys.executable, str(SCRIPTS / "agy_task.py"), "run", "--deep-research",
+                             "--dr-skill-dir", str(custom_dr), "-w", str(self.work), "-t", "test task", "--dry-run"],
+                            capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        data = json.loads(cp.stdout)
+        self.assertEqual(data.get("dr_skill_dir"), str(custom_dr.resolve()))
+
+    def test_deep_research_result_merging_result_json(self):
+        relay_dir = self.work / "relay"
+        relay_dir.mkdir(parents=True, exist_ok=True)
+        res_data = {"relay_version": 1, "step": "plan", "status": "plan_ready",
+                    "url": "https://gemini.google.com/app/1", "plan_count": 3, "summary": "3-stage plan ready"}
+        (relay_dir / "result.json").write_text(json.dumps(res_data), encoding="utf-8")
+
+        p = agy_task.build_parser()
+        a = p.parse_args(["run", "-w", str(self.work), "-t", "test", "--deep-research", "--no-schema"])
+        old_run = agy_task.run_agy
+        old_find = agy_task.find_agy
+        try:
+            agy_task.find_agy = lambda x: sys.executable
+            agy_task.run_agy = lambda *args, **kwargs: (0, {"status": "SUCCESS"}, "", [])
+            rc = agy_task.cmd_run(a)
+            self.assertEqual(rc, 0)
+            stamp_dirs = list((self.work / ".agy_task").glob("*/result.json"))
+            self.assertTrue(bool(stamp_dirs))
+            saved = json.loads(stamp_dirs[0].read_text(encoding="utf-8"))
+            self.assertEqual(saved.get("deep_research"), res_data)
+        finally:
+            agy_task.run_agy = old_run
+            agy_task.find_agy = old_find
+
+    def test_deep_research_result_merging_started_json(self):
+        relay_dir = self.work / "relay"
+        relay_dir.mkdir(parents=True, exist_ok=True)
+        (relay_dir / "result.json").unlink(missing_ok=True)
+        started_data = {"status": "started", "pid": 9999, "launcher": "run_deep_research.py", "seq": 1}
+        (relay_dir / "started.json").write_text(json.dumps(started_data), encoding="utf-8")
+
+        p = agy_task.build_parser()
+        a = p.parse_args(["run", "-w", str(self.work), "-t", "test", "--deep-research", "--no-schema"])
+        old_run = agy_task.run_agy
+        old_find = agy_task.find_agy
+        try:
+            agy_task.find_agy = lambda x: sys.executable
+            agy_task.run_agy = lambda *args, **kwargs: (0, {"status": "SUCCESS"}, "", [])
+            rc = agy_task.cmd_run(a)
+            self.assertEqual(rc, 0)
+            stamp_dirs = list((self.work / ".agy_task").glob("*/result.json"))
+            self.assertTrue(bool(stamp_dirs))
+            saved = json.loads(stamp_dirs[-1].read_text(encoding="utf-8"))
+            self.assertEqual(saved.get("deep_research"), started_data)
+        finally:
+            agy_task.run_agy = old_run
+            agy_task.find_agy = old_find
+
+    def test_deep_research_check_confine_args(self):
+        p = agy_task.build_parser()
+        a = p.parse_args(["run", "-t", "x", "--deep-research"])
+        agy_task.check_confine_args(a)
+        self.assertTrue(a.confine)
+        self.assertTrue(a.deep_research)
+
+        a_bad = p.parse_args(["run", "-t", "x", "--deep-research", "--no-confine"])
+        with self.assertRaises(SystemExit) as cm:
+            agy_task.check_confine_args(a_bad)
+        self.assertEqual(cm.exception.code, 5)
+
+    def test_deep_research_disallows_allow_all(self):
+        p = agy_task.build_parser()
+        # Direct CLI argument check on run subcommand
+        a_dr_allow = p.parse_args(["run", "-t", "x", "--deep-research", "--allow-all"])
+        with self.assertRaises(SystemExit) as cm:
+            agy_task.check_confine_args(a_dr_allow)
+        self.assertEqual(cm.exception.code, 5)
+
+        # Combination of all three flags
+        a_dr_no_confine_allow = p.parse_args(["run", "-t", "x", "--deep-research", "--allow-all", "--no-confine"])
+        with self.assertRaises(SystemExit) as cm:
+            agy_task.check_confine_args(a_dr_no_confine_allow)
+        self.assertEqual(cm.exception.code, 5)
+
+        # Direct CLI argument check on resume subcommand
+        a_resume = p.parse_args(["resume", "cid123", "-t", "x", "--deep-research", "--allow-all"])
+        with self.assertRaises(SystemExit) as cm:
+            agy_task.check_confine_args(a_resume)
+        self.assertEqual(cm.exception.code, 5)
+
+        # Subprocess execution in dry-run mode
+        cp = subprocess.run([sys.executable, str(SCRIPTS / "agy_task.py"), "run", "--deep-research", "--allow-all",
+                             "-w", str(self.work), "-t", "test task", "--dry-run"],
+                            capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(cp.returncode, 5, f"Expected returncode 5, got {cp.returncode}: {cp.stdout} {cp.stderr}")
+        self.assertIn("cannot be combined with --deep-research", cp.stderr or cp.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
+

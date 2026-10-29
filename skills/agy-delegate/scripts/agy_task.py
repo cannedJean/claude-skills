@@ -59,6 +59,8 @@ INSTALL_HINT = (
     if IS_WINDOWS else
     "macOS/Linux: curl -fsSL https://antigravity.google/cli/install.sh | bash"
 )
+DEFAULT_DR_SKILL_DIR = Path.home() / ".gemini" / "config" / "skills" / "local-gemini-deep-research"
+
 RESULT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -68,6 +70,50 @@ RESULT_SCHEMA = {
     },
     "required": ["summary", "files"],
 }
+
+DEEP_RESEARCH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {
+            "type": "string",
+            "description": "Status of the relay step (e.g. plan_ready, plan_revised, started, completed, probed, error)",
+        },
+        "step": {
+            "type": "string",
+            "description": "Step executed (plan, edit, approve, collect, auto, probe)",
+        },
+        "code": {
+            "type": "string",
+            "description": "Result or error code from the relay script",
+        },
+        "url": {
+            "type": "string",
+            "description": "Gemini chat/session URL",
+        },
+        "plan_count": {
+            "type": "integer",
+            "description": "Number of research plan sections/steps",
+        },
+        "report_chars": {
+            "type": "integer",
+            "description": "Character count of the generated report",
+        },
+        "sources_count": {
+            "type": "integer",
+            "description": "Number of web sources cited in the report",
+        },
+        "summary": {
+            "type": "string",
+            "description": "Short summary of the research step outcome",
+        },
+        "notes": {
+            "type": "string",
+            "description": "Operational notes, warnings, or troubleshooting hints",
+        },
+    },
+    "required": ["status", "step", "summary"],
+}
+
 PROMPT_FRAME = """You are completing a delegated coding task non-interactively.
 
 Rules:
@@ -77,6 +123,27 @@ Rules:
 {cmd_rule}
 - When finished, report: a short summary, the list of files you created or modified
   (relative paths), and notes.
+
+Task:
+{task}
+{inputs}"""
+
+DEEP_RESEARCH_FRAME = """You are acting strictly as the relay operator for Gemini Deep Research.
+
+Rules:
+- Work ONLY inside this directory: {workdir}
+- You must run ONLY the relay operator script using run_command:
+    python "{dr_dir}/scripts/relay_step.py" --job "{workdir}"
+  (or python relay_step.py --job "{workdir}" if relay_step.py is inside the work directory).
+  If the Gemini app CDP port is not ready, you may run:
+    python "{dr_dir}/scripts/patch_gemini_app.py"
+  Do NOT run any other shell commands. Shell chaining and redirection metacharacters are strictly blocked.
+- Do NOT edit or overwrite caller control files:
+  relay/request.json, prompt.md, goal.md, feedback_*.md, relay/result.json, relay/started.json.
+- Do NOT craft custom prompts or alter research plans yourself.
+- When the relay step finishes, read relay/result.json (or relay/started.json in detached mode).
+- Report the structured outcome matching the required schema (status, step, code, url, plan_count, report_chars, sources_count, summary, notes).
+  Do NOT retype or paraphrase the full plan or report text in the response.
 
 Task:
 {task}
@@ -199,8 +266,16 @@ class Confinement:
     there before. That includes our own entry and launcher left by a run that was killed: the agy session of that
     run may still be alive, and it must stay hooked."""
 
-    def __init__(self, workdir: Path, log_file: Path, inlined=()):
+    def __init__(self, workdir: Path, log_file: Path, inlined=(), mode: str = "default", dr_dir: Path | str | None = None):
         self.workdir, self.log_file, self.inlined = workdir, log_file, list(inlined)
+        self.mode = mode
+        if dr_dir:
+            self.dr_dir = Path(dr_dir).resolve()
+        elif mode == "deep-research":
+            env_dr = os.environ.get("AGY_CONFINE_DR_DIR")
+            self.dr_dir = Path(env_dr).resolve() if env_dr else DEFAULT_DR_SKILL_DIR.resolve()
+        else:
+            self.dr_dir = None
         self.dir = workdir / ".agents"
         self.file = self.dir / "hooks.json"
         self.launcher = self.dir / LAUNCHER
@@ -210,6 +285,10 @@ class Confinement:
         env = {"AGY_CONFINE_ROOT": str(self.workdir), "AGY_CONFINE_LOG": str(self.log_file)}
         if self.inlined:  # files whose text the prompt holds: the hook denies opening them
             env["AGY_CONFINE_INLINED"] = json.dumps(self.inlined)
+        if self.mode == "deep-research":
+            env["AGY_CONFINE_MODE"] = "deep-research"
+            if self.dr_dir:
+                env["AGY_CONFINE_DR_DIR"] = str(self.dr_dir)
         return env
 
     def __enter__(self):
@@ -253,7 +332,7 @@ class Confinement:
         steps = {(e.get("step_update") or {}).get("step_index") for e in events
                  if (e.get("step_update") or {}).get("step_type") == "tool"}
         effective = len(entries) >= len(steps) and (bool(entries) or not changed)
-        return {"enabled": effective, "installed": True, "root": str(self.workdir), "log": str(self.log_file),
+        return {"enabled": effective, "installed": True, "mode": self.mode, "root": str(self.workdir), "log": str(self.log_file),
                 "agent_tool_steps": len(steps), "tool_calls": len(entries), "denied_count": len(denied),
                 "denied": denied[:30], "inlined_denied_count": len(inlined)}
 
@@ -280,7 +359,7 @@ def agy_cmd(agy: str, prompt: str, workdir: Path, a, extra=None, stream: bool = 
                       ("--print-timeout", getattr(a, "timeout", None)), ("--agent", getattr(a, "agent", None))):
         if val:
             cmd += [flag, val]
-    if getattr(a, "allow_all", False):
+    if getattr(a, "allow_all", False) or getattr(a, "deep_research", False):
         cmd.append("--dangerously-skip-permissions")
     if getattr(a, "sandbox", False):
         cmd.append("--sandbox")
@@ -386,7 +465,14 @@ def preflight(a) -> dict:
 
 
 def check_confine_args(a) -> None:
-    if a.confine and a.allow_all:
+    if getattr(a, "deep_research", False):
+        if not a.confine:
+            die("--deep-research requires confinement; cannot be used with --no-confine", 5)
+        if getattr(a, "allow_all", False):
+            die("--allow-all cannot be combined with --deep-research", 5)
+        # Note: --deep-research is compatible with confinement and automatically passes
+        # --dangerously-skip-permissions to agy because confine_hook restricts shell execution.
+    elif a.confine and getattr(a, "allow_all", False):
         die("--allow-all lets agy run programs, and a program can read any file: the work-directory confinement "
             "cannot hold. Pass --no-confine together with --allow-all to accept that.", 5)
     for rel in getattr(a, "inlined", None) or ():
@@ -434,33 +520,49 @@ def cmd_run(a) -> int:
             shutil.copy2(p, target)
     inputs = ("\nInput files already placed in the directory: " + ", ".join(staged)) if staged else ""
 
-    cmd_rule = ("- You MAY run shell commands (tests, builds) inside the directory."
-                if a.allow_all else
-                "- Every tool call that touches a path outside this directory is blocked, and shell commands are "
-                "disabled. Read and write only files inside it; if you would verify by running something, say "
-                "what to run in `notes`."
-                if a.confine else
-                "- Shell commands are not approved in this session unless pre-allowed; prefer writing code "
-                "and tests over running them. If you must verify, say what command to run in `notes`.")
-    prompt = (task.strip() + "\n" + inputs if a.bare else
-              PROMPT_FRAME.format(workdir=workdir, task=task.strip(), inputs=inputs, cmd_rule=cmd_rule))
+    is_dr = getattr(a, "deep_research", False)
+    dr_dir = Path(getattr(a, "dr_skill_dir", None) or os.environ.get("AGY_CONFINE_DR_DIR") or DEFAULT_DR_SKILL_DIR).resolve()
+    chosen_schema = DEEP_RESEARCH_SCHEMA if is_dr else RESULT_SCHEMA
+
+    if is_dr and not a.bare:
+        dr_dir_str = str(dr_dir).replace("\\", "/")
+        workdir_str = str(workdir).replace("\\", "/")
+        prompt = DEEP_RESEARCH_FRAME.format(workdir=workdir_str, dr_dir=dr_dir_str, task=task.strip(), inputs=inputs)
+    elif a.bare:
+        prompt = task.strip() + "\n" + inputs
+    else:
+        cmd_rule = ("- You MAY run shell commands (tests, builds) inside the directory."
+                    if a.allow_all else
+                    "- Every tool call that touches a path outside this directory is blocked, and shell commands are "
+                    "disabled. Read and write only files inside it; if you would verify by running something, say "
+                    "what to run in `notes`."
+                    if a.confine else
+                    "- Shell commands are not approved in this session unless pre-allowed; prefer writing code "
+                    "and tests over running them. If you must verify, say what command to run in `notes`.")
+        prompt = PROMPT_FRAME.format(workdir=workdir, task=task.strip(), inputs=inputs, cmd_rule=cmd_rule)
+
     schema_file = meta_dir / "schema.json"
     extra = [] if a.no_schema else ["--json-schema", str(schema_file)]
     if a.dry_run:
         plan = {"status": "dry-run", "workdir": str(workdir), "would_stage": staged, "confined": a.confine,
                 "inlined": a.inlined or [], "bare": a.bare,
-                "command": agy_cmd(agy, "<prompt>", workdir, a, extra, stream=True), "prompt": prompt}
+                "command": agy_cmd(agy, "<prompt>", workdir, a, extra, stream=True), "prompt": prompt,
+                "schema": chosen_schema}
+        if is_dr:
+            plan["deep_research"] = True
+            plan["dr_skill_dir"] = str(dr_dir)
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
     workdir.mkdir(parents=True, exist_ok=True)
     meta_dir.mkdir(parents=True, exist_ok=True)
     (meta_dir / "prompt.md").write_text(prompt, encoding="utf-8")
-    schema_file.write_text(json.dumps(RESULT_SCHEMA), encoding="utf-8")
+    schema_file.write_text(json.dumps(chosen_schema, ensure_ascii=False, indent=2), encoding="utf-8")
 
     before = snapshot(workdir, hook_files=a.confine)
-    confine = Confinement(workdir, meta_dir / "confine.jsonl", a.inlined or ()) if a.confine else None
+    confine_mode = "deep-research" if is_dr else "default"
+    confine = Confinement(workdir, meta_dir / "confine.jsonl", a.inlined or (), mode=confine_mode, dr_dir=dr_dir) if a.confine else None
     log(f"workdir={workdir} files_before={len(before)} model={a.model or 'default'} allow_all={a.allow_all} "
-        f"confined={a.confine}")
+        f"confined={a.confine} deep_research={is_dr}")
     t0 = time.time()
     rc, res, err, events = run_agy(agy, prompt, workdir, a, extra=extra, stream=True, confine=confine)
     elapsed = round(time.time() - t0, 1)
@@ -492,6 +594,21 @@ def cmd_run(a) -> int:
         "confinement": confine.report(events, any(changes[k] for k in ("created", "modified", "deleted")))
         if confine else {"enabled": False},
     }
+    if is_dr:
+        dr_info = None
+        result_file = workdir / "relay" / "result.json"
+        started_file = workdir / "relay" / "started.json"
+        if result_file.is_file():
+            try:
+                dr_info = json.loads(result_file.read_text(encoding="utf-8"))
+            except Exception as e:
+                log(f"WARNING: failed to read {result_file}: {e}")
+        elif started_file.is_file():
+            try:
+                dr_info = json.loads(started_file.read_text(encoding="utf-8"))
+            except Exception as e:
+                log(f"WARNING: failed to read {started_file}: {e}")
+        summary["deep_research"] = dr_info
     if confine and not summary["confinement"]["enabled"]:
         log("WARNING: agy made tool calls but the confinement hook never ran; this run was NOT confined")
     if confine and summary["confinement"]["denied_count"]:
@@ -544,7 +661,10 @@ def cmd_resume(a) -> int:
         die(f"refusing to confine agy to {workdir} (too broad)", 5)
     before = snapshot(workdir, hook_files=a.confine)
     stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    confine = Confinement(workdir, workdir / ".agy_task" / f"resume-{stamp}" / "confine.jsonl") if a.confine else None
+    is_dr = getattr(a, "deep_research", False)
+    dr_dir = Path(getattr(a, "dr_skill_dir", None) or os.environ.get("AGY_CONFINE_DR_DIR") or DEFAULT_DR_SKILL_DIR).resolve()
+    confine_mode = "deep-research" if is_dr else "default"
+    confine = Confinement(workdir, workdir / ".agy_task" / f"resume-{stamp}" / "confine.jsonl", mode=confine_mode, dr_dir=dr_dir) if a.confine else None
     rc, res, err, events = run_agy(agy, a.task, workdir, a, extra=["--conversation", a.conversation_id], stream=True,
                               confine=confine)
     changes = diff_snapshots(before, snapshot(workdir, hook_files=a.confine))
@@ -554,6 +674,17 @@ def cmd_resume(a) -> int:
            "agy_error": parse_agy_error(err) or (res or {}).get("error"),
            "confinement": confine.report(events, any(changes[k] for k in ("created", "modified", "deleted")))
            if confine else {"enabled": False}}
+    if is_dr:
+        dr_info = None
+        result_file = workdir / "relay" / "result.json"
+        started_file = workdir / "relay" / "started.json"
+        if result_file.is_file():
+            with contextlib.suppress(Exception):
+                dr_info = json.loads(result_file.read_text(encoding="utf-8"))
+        elif started_file.is_file():
+            with contextlib.suppress(Exception):
+                dr_info = json.loads(started_file.read_text(encoding="utf-8"))
+        out["deep_research"] = dr_info
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0 if out["status"] == "ok" else 2
 
@@ -582,6 +713,10 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--allow-all", action="store_true", help="let the agent run any shell command (agy --dangerously-skip-permissions). Off by default; needs --no-confine.")
     r.add_argument("--no-confine", dest="confine", action="store_false",
                    help="do not confine agy's tool calls to the work directory (confined by default)")
+    r.add_argument("--deep-research", action="store_true",
+                   help="run in deep-research mode (pass --dangerously-skip-permissions to agy while keeping confinement active)")
+    r.add_argument("--dr-skill-dir", default=os.environ.get("AGY_CONFINE_DR_DIR"),
+                   help="path to local-gemini-deep-research skill directory (default: ~/.gemini/config/skills/local-gemini-deep-research)")
     r.add_argument("--inlined", action="append", metavar="REL",
                    help="work-dir file whose full text the task already holds; the confinement hook denies opening "
                         "it (repeatable)")
@@ -601,6 +736,10 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--timeout", default="30m")
     rs.add_argument("--allow-all", action="store_true")
     rs.add_argument("--no-confine", dest="confine", action="store_false")
+    rs.add_argument("--deep-research", action="store_true",
+                    help="run in deep-research mode (pass --dangerously-skip-permissions to agy while keeping confinement active)")
+    rs.add_argument("--dr-skill-dir", default=os.environ.get("AGY_CONFINE_DR_DIR"),
+                    help="path to local-gemini-deep-research skill directory (default: ~/.gemini/config/skills/local-gemini-deep-research)")
     rs.add_argument("--sandbox", action="store_true")
     return p
 

@@ -38,11 +38,15 @@ python scripts/agy_task.py run -w ./work/fix -i ./src/parser.py -t "Refactor par
 python scripts/agy_task.py resume <conversation_id> -w ./work/fix -t "Also add a docstring to build_ast"
 ```
 
+```bash
+python scripts/agy_task.py run --deep-research -w ./work/dr-job -t "Execute research step"
+```
+
 Output: JSON on stdout with `status`, `changes` (created/modified/deleted with sizes),
-`structured` (summary, files, notes), `verify` (rc, output tail), `conversation_id`, `usage`,
-`confinement` (`enabled`, `installed`, `root`, `log`, `agent_tool_steps`, `tool_calls`, `denied_count`,
-`denied`, `inlined_denied_count`). `enabled: false` with `installed: true` means the agent made tool calls
-the hook never saw: that run was NOT confined (stderr also prints a WARNING).
+`structured` (summary, files, notes), `deep_research` (under --deep-research), `verify` (rc, output tail),
+`conversation_id`, `usage`, `confinement` (`enabled`, `installed`, `mode`, `root`, `log`, `agent_tool_steps`,
+`tool_calls`, `denied_count`, `denied`, `inlined_denied_count`). `enabled: false` with `installed: true` means
+the agent made tool calls the hook never saw: that run was NOT confined (stderr also prints a WARNING).
 Per-run artifacts are kept under `<workdir>/.agy_task/<stamp>/`.
 
 ## Options
@@ -57,6 +61,8 @@ Per-run artifacts are kept under `<workdir>/.agy_task/<stamp>/`.
 | `--effort`, `--agent`, `--timeout` | forwarded to agy (`agy agents`) |
 | `--no-confine` | do not confine the agent's tool calls to the work directory (confined by default) |
 | `--allow-all` | let the agent run any shell command (`--dangerously-skip-permissions`); off by default, needs `--no-confine` |
+| `--deep-research` | run in deep-research confinement profile: enables `--dangerously-skip-permissions` for headless relay execution while strictly confining shell commands to `relay_step.py --job <workdir>` and `patch_gemini_app.py`, protecting caller control files, and merging `relay/result.json` into summary |
+| `--dr-skill-dir PATH` | directory containing local-gemini-deep-research scripts (default: `~/.gemini/config/skills/local-gemini-deep-research` or `AGY_CONFINE_DR_DIR`) |
 | `--inlined REL` | work-dir-relative file whose full text the task already holds; view tools on it are denied and the agent is pointed back to the prompt, saving a model call per opened file; listing, searching and editing it stay allowed. Such denials are counted in `inlined_denied_count`, apart from `denied_count`: a token-saving refusal, not an attempt to get out (repeatable; `run` only; no effect with `--no-confine`) |
 | `--bare` | send the task text as is, without the rules/report frame; only for tasks that already state the work-dir rules and the delivery format (agy-outsource work orders do). `--dry-run` shows the unframed prompt |
 | `--sandbox` | agy terminal sandbox (macOS/Linux) |
@@ -103,6 +109,15 @@ dir did not change while the hook logged nothing. The hook's own files are left 
 `hooks.json` the agent wrote in a `--no-confine` run (agy would run it on every later session there).
 Because a program the agent runs could read any file, `--allow-all` is refused unless `--no-confine` is
 also given.
+
+### Deep-Research Confinement Profile (--deep-research)
+
+In `--deep-research` mode, `agy-delegate` configures a hardened confinement profile designed for orchestrating local Gemini Deep Research relay steps without human interaction:
+- **Headless Operator Execution**: Headless `agy` requires `--dangerously-skip-permissions` to invoke Python scripts without interactive terminal prompts. Unlike normal `--allow-all`, `--deep-research` requires confinement to be active (`--no-confine` is rejected with exit code 5) and injects `AGY_CONFINE_MODE="deep-research"`.
+- **Command Whitelist & Shell Restriction**: `confine_hook.py` inspects every `run_command` invocation. Commands containing shell chaining or redirection metacharacters (`&`, `|`, `;`, `` ` ``, `$()`, `>`, `<`, newlines) are blocked (`rule: "shell"`). The command line is tokenized to verify that the executable is Python (Token 0), python options `-c` and `-m` are blocked, and the script basename is strictly either `relay_step.py` (with `--job <workdir>` canonically matching the current work directory) or `patch_gemini_app.py`. Any other command or script is denied (`rule: "shell"`).
+- **Two-Way Filesystem Boundaries**: Read tools (`view_file`, `list_dir`, `grep_search`, `find_by_name`, etc.) are permitted inside `<workdir>` and `AGY_CONFINE_DR_DIR` (allowing `agy` to read relay scripts and documentation). Reading anywhere outside both directories is denied (`rule: "path"`). Write tools are permitted only inside `<workdir>`; `AGY_CONFINE_DR_DIR` is strictly read-only.
+- **Caller Control File Protection**: Caller orchestration files inside `<workdir>` (`relay/request.json`, `prompt.md`, `goal.md`, `feedback_*.md`, `relay/result.json`, `relay/started.json`) cannot be overwritten or edited by `agy` file tools (`rule: "protected"`). Reads on these files remain permitted.
+- **Tool Exclusions**: Browser tools (`browser_*`), MCP tools, and interactive terminal tools (`send_command_input`, `read_terminal`, `command_status`) are blocked (`rule: "tool"` or `rule: "shell"`).
 
 Tests: `python -m unittest discover -s scripts/tests` (from this folder).
 

@@ -1,6 +1,6 @@
 ---
 name: agy-delegate
-description: Delegate a small, self-contained coding task to the Antigravity CLI (`agy`, Google's terminal coding agent) in headless mode and collect the files it produced. Use when the user says things like "이건 agy한테 시켜", "Antigravity로 만들어와", "delegate this to agy", or wants a bounded coding chore (write a script/module/tests/boilerplate/refactor of a few files) done by a second agent and the outputs brought back. Not for tasks that need interactive approval, credentials, or multi-repo changes.
+description: Delegate a small, self-contained coding task to the Antigravity CLI (`agy`, Google's terminal coding agent) in headless mode and collect the files it produced, or run the confined `--deep-research` execution profile for headless Gemini Deep Research relay tasks. Use when the user says things like "이건 agy한테 시켜", "Antigravity로 만들어와", "delegate this to agy", or wants a bounded coding chore done by a second agent and the outputs brought back. Not for tasks that need interactive approval, credentials, or multi-repo changes.
 ---
 
 # agy-delegate
@@ -39,15 +39,21 @@ Commands below are relative to this skill's directory (`scripts/agy_task.py`).
    - `--allow-all` lets the agent run shell commands (agy's `--dangerously-skip-permissions`). A program it
      runs can read any file, so it needs `--no-confine` too (otherwise exit 5); use both only in a throwaway
      directory and only when the task genuinely needs to run things.
+   - `--deep-research` runs under the deep-research confinement profile: automatically passes `--dangerously-skip-permissions`
+     to `agy` while keeping confinement active (`AGY_CONFINE_MODE="deep-research"`), sets `DEEP_RESEARCH_FRAME` and
+     `DEEP_RESEARCH_SCHEMA`, and merges `<workdir>/relay/result.json` or `started.json` under `summary["deep_research"]`.
+     Cannot be combined with `--no-confine`.
+   - `--dr-skill-dir PATH` specifies the `local-gemini-deep-research` skill directory (default:
+     `~/.gemini/config/skills/local-gemini-deep-research` or `AGY_CONFINE_DR_DIR`).
    - `--inlined` and `--bare` are for callers such as agy-outsource: see README.
 
 4. **Read the JSON on stdout** and report to the user: `status`, `changes.created/modified/deleted`,
-   `structured.summary` / `structured.notes`, `verify.rc` and tail. Then review the produced code
-   yourself before handing it over; agy's output is a draft, not a merge.
+   `structured.summary` / `structured.notes`, `deep_research` (in deep-research mode), `verify.rc` and tail.
+   Then review the produced code yourself before handing it over; agy's output is a draft, not a merge.
    Exit codes: 0 ok, 2 agent status not SUCCESS or verify failed, 3 agy error (also agy could not start,
    e.g. a prompt over the Windows command-line limit of 32,767 characters: use a shorter task), 4 preflight,
-   5 bad arguments (`--allow-all` without `--no-confine`, an `--inlined` path that is not work-dir-relative,
-   `resume` confined to `~` or a drive root).
+   5 bad arguments (`--allow-all` without `--no-confine`, `--deep-research` with `--no-confine`, an `--inlined`
+   path that is not work-dir-relative, `resume` confined to `~` or a drive root).
 
 5. **Iterate** with the same conversation when a fix is small:
    ```
@@ -70,6 +76,15 @@ Commands below are relative to this skill's directory (`scripts/agy_task.py`).
   `.agents/` or `.agy_task/`. `confinement.enabled: false` means the hook did not see every tool call: the run
   was **not** confined; say so. Report a non-zero `confinement.denied_count` (check `denied[].rule` / `reason`).
   Details: README.md "Permissions model".
+- Under `--deep-research` confinement profile:
+  - **Read tools**: permitted inside `<workdir>` and `AGY_CONFINE_DR_DIR`. Reading outside both is denied (`rule: "path"`).
+  - **Write tools**: permitted only inside `<workdir>`. Writing to `AGY_CONFINE_DR_DIR` is strictly denied (`rule: "path"`).
+    Caller control files inside `<workdir>` (`relay/request.json`, `prompt.md`, `goal.md`, `feedback_*.md`,
+    `relay/result.json`, `relay/started.json`) are read-only to file tools (`rule: "protected"`).
+  - **Shell tools**: `run_command` is permitted only for clean Python execution of `relay_step.py --job <workdir>`
+    or `patch_gemini_app.py`. Shell chaining and redirection (`&&`, `;`, `|`, `>`, `<`, newlines, `` ` ``, `$()`)
+    and all other commands/scripts are blocked (`rule: "shell"`).
+  - **Browser & MCP tools**: unconditionally denied (`rule: "tool"`).
 
 ## Why these flags
 
@@ -88,4 +103,10 @@ file list; `stream-json` gives live progress on stderr.
   stderr.txt      agy stderr (if any)
   result.json     the JSON printed on stdout
   confine.jsonl   one line per tool call: tool, decision (ask/deny), rule, reason, paths
+
+<workdir>/relay/  (under --deep-research)
+  request.json    caller step request
+  started.json    detached worker process record
+  result.json     step result data
+  progress.jsonl  streamed execution progress log
 ```
