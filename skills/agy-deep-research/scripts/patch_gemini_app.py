@@ -1,3 +1,4 @@
+import argparse
 import glob
 import hashlib
 import json
@@ -37,6 +38,16 @@ def stop_gemini_processes():
     time.sleep(1.5)
 
 
+def is_asar_patched(asar_path, port=CDP_PORT):
+    try:
+        with open(asar_path, "rb") as f:
+            data = f.read()
+        marker = f'appendSwitch("remote-debugging-port","{port}")'.encode("utf-8")
+        return marker in data
+    except Exception:
+        return False
+
+
 def patch_asar(asar_path, port=CDP_PORT):
     with open(asar_path, "rb") as f:
         data = bytearray(f.read())
@@ -52,8 +63,8 @@ def patch_asar(asar_path, port=CDP_PORT):
     sz = int(node["size"])
     main_bytes = bytes(data[off : off + sz])
 
-    patch_marker = f'appendSwitch("remote-debugging-port","{port}");m.app.commandLine.appendSwitch("disable-renderer-backgrounding")'.encode("utf-8")
-    if patch_marker in main_bytes:
+    port_marker = f'appendSwitch("remote-debugging-port","{port}")'.encode("utf-8")
+    if port_marker in main_bytes:
         return False  # Already patched
 
     # Restore from backup first if an older patch was applied
@@ -65,23 +76,24 @@ def patch_asar(asar_path, port=CDP_PORT):
         main_bytes = bytes(data[off : off + sz])
 
     pattern = re.compile(
-        rb'var (\w+)=(\w+)\(m\.app\.isPackaged&&(\w+)!=="dev",process\.argv,process\.execArgv\);'
-        rb'\1\?\(u\.error\("security",(\w+),`\(switch: --\$\{\1\}\)`\),st\(\),m\.app\.exit\(1\)\):(\w+)\(\);'
+        rb'var (\w+)=(\w+)\((\w+)\.app\.isPackaged&&(\w+)!=="dev",process\.argv,process\.execArgv\);'
+        rb'\1\?\(u\.error\("security",(\w+),`\(switch: --\$\{\1\}\)`\),(\w+)\(\),\3\.app\.exit\(1\)\):(\w+)\(\);'
     )
     match = pattern.search(main_bytes)
     if not match:
         raise RuntimeError("Target pattern not found in main.js; app version structure may have changed.")
     target = match.group(0)
-    cont = match.group(5).decode("ascii")
+    app_var = match.group(3).decode("ascii")
+    cont = match.group(7).decode("ascii")
 
     replacement_core = (
-        f'm.app.commandLine.appendSwitch("remote-debugging-port","{port}");'
-        f'm.app.commandLine.appendSwitch("disable-renderer-backgrounding");{cont}();'
+        f'{app_var}.app.commandLine.appendSwitch("remote-debugging-port","{port}");'
+        f'{app_var}.app.commandLine.appendSwitch("disable-renderer-backgrounding");{cont}();'
     ).encode("utf-8")
 
     pad_len = len(target) - len(replacement_core)
     if pad_len < 4:
-        replacement_core = f'm.app.commandLine.appendSwitch("remote-debugging-port","{port}");{cont}();'.encode("utf-8")
+        replacement_core = f'{app_var}.app.commandLine.appendSwitch("remote-debugging-port","{port}");{cont}();'.encode("utf-8")
         pad_len = len(target) - len(replacement_core)
 
     replacement = replacement_core + b"/*" + (b" " * (pad_len - 4)) + b"*/"
@@ -110,15 +122,123 @@ def patch_asar(asar_path, port=CDP_PORT):
     return True
 
 
+def dry_run_patch(asar_path, port=CDP_PORT):
+    app_dir = os.path.dirname(os.path.dirname(os.path.abspath(asar_path)))
+    if not os.path.exists(asar_path):
+        return {
+            "status": "error",
+            "app_dir": app_dir,
+            "asar_path": asar_path,
+            "error": "asar file not found",
+            "patched": False,
+            "cdp_url": f"http://127.0.0.1:{port}",
+            "cdp_alive": is_cdp_alive(port=port),
+        }
+
+    with open(asar_path, "rb") as f:
+        data = f.read()
+
+    data_offset = struct.unpack("<I", data[4:8])[0] + 8
+    header_size = struct.unpack("<I", data[12:16])[0]
+    header_bytes = data[16 : 16 + header_size]
+    header_str = header_bytes.decode("utf-8", errors="ignore").rstrip("\x00")
+    header = json.loads(header_str)
+
+    node = header["files"]["src"]["files"]["main.js"]
+    off = int(node["offset"]) + data_offset
+    sz = int(node["size"])
+    main_bytes = data[off : off + sz]
+
+    port_marker = f'appendSwitch("remote-debugging-port","{port}")'.encode("utf-8")
+    already_patched = port_marker in main_bytes
+
+    if already_patched:
+        return {
+            "status": "dry_run",
+            "app_dir": app_dir,
+            "asar_path": asar_path,
+            "patched": True,
+            "can_patch": True,
+            "cdp_url": f"http://127.0.0.1:{port}",
+            "cdp_alive": is_cdp_alive(port=port),
+            "note": "ASAR is already patched with specified CDP port.",
+        }
+
+    check_bytes = main_bytes
+    backup_path = asar_path + ".bak"
+    if os.path.exists(backup_path) and b'appendSwitch("remote-debugging-port"' in check_bytes:
+        try:
+            with open(backup_path, "rb") as bf:
+                bdata = bf.read()
+            check_bytes = bdata[off : off + sz]
+        except Exception:
+            pass
+
+    pattern = re.compile(
+        rb'var (\w+)=(\w+)\((\w+)\.app\.isPackaged&&(\w+)!=="dev",process\.argv,process\.execArgv\);'
+        rb'\1\?\(u\.error\("security",(\w+),`\(switch: --\$\{\1\}\)`\),(\w+)\(\),\3\.app\.exit\(1\)\):(\w+)\(\);'
+    )
+    match = pattern.search(check_bytes)
+    if not match:
+        return {
+            "status": "dry_run_pattern_mismatch",
+            "app_dir": app_dir,
+            "asar_path": asar_path,
+            "patched": False,
+            "can_patch": False,
+            "cdp_url": f"http://127.0.0.1:{port}",
+            "cdp_alive": is_cdp_alive(port=port),
+            "error": "Target pattern not found in main.js; app version structure may have changed.",
+        }
+
+    target = match.group(0)
+    app_var = match.group(3).decode("ascii")
+    cont = match.group(7).decode("ascii")
+
+    replacement_core = (
+        f'{app_var}.app.commandLine.appendSwitch("remote-debugging-port","{port}");'
+        f'{app_var}.app.commandLine.appendSwitch("disable-renderer-backgrounding");{cont}();'
+    ).encode("utf-8")
+
+    pad_len = len(target) - len(replacement_core)
+    if pad_len < 4:
+        replacement_core = f'{app_var}.app.commandLine.appendSwitch("remote-debugging-port","{port}");{cont}();'.encode("utf-8")
+        pad_len = len(target) - len(replacement_core)
+
+    replacement = replacement_core + b"/*" + (b" " * (pad_len - 4)) + b"*/"
+
+    return {
+        "status": "dry_run",
+        "app_dir": app_dir,
+        "asar_path": asar_path,
+        "patched": is_asar_patched(asar_path, port=port),
+        "can_patch": True,
+        "cdp_url": f"http://127.0.0.1:{port}",
+        "cdp_alive": is_cdp_alive(port=port),
+        "target_snippet": target.decode("latin1", errors="replace"),
+        "replacement_snippet": replacement.decode("latin1", errors="replace"),
+    }
+
+
 def restore_asar():
     app_dir = find_latest_app_dir()
     asar_path = os.path.join(app_dir, "resources", "app.asar")
     backup_path = asar_path + ".bak"
     if not os.path.exists(backup_path):
-        return {"status": "no_backup_found", "asar_path": asar_path}
+        return {
+            "status": "no_backup_found",
+            "app_dir": app_dir,
+            "asar_path": asar_path,
+            "patched": is_asar_patched(asar_path),
+        }
     stop_gemini_processes()
     shutil.copy2(backup_path, asar_path)
-    return {"status": "restored", "asar_path": asar_path}
+    return {
+        "status": "restored",
+        "app_dir": app_dir,
+        "asar_path": asar_path,
+        "patched": False,
+    }
 
 
 def spawn_detached_wmi(exe_path, app_dir, hide=True):
@@ -134,20 +254,20 @@ def spawn_detached_wmi(exe_path, app_dir, hide=True):
     )
 
 
-def is_asar_patched(asar_path, port=CDP_PORT):
-    with open(asar_path, "rb") as f:
-        data = f.read()
-    marker = f'appendSwitch("remote-debugging-port","{port}");m.app.commandLine.appendSwitch("disable-renderer-backgrounding")'.encode("utf-8")
-    return marker in data
-
-
 def ensure_gemini_running_with_cdp(port=CDP_PORT, hide=True):
     app_dir = find_latest_app_dir()
     asar_path = os.path.join(app_dir, "resources", "app.asar")
     exe_path = os.path.join(app_dir, "Gemini.exe")
 
     if is_cdp_alive(port) and is_asar_patched(asar_path, port=port):
-        return {"status": "already_running", "cdp_url": f"http://127.0.0.1:{port}", "app_dir": app_dir}
+        return {
+            "status": "already_running",
+            "app_dir": app_dir,
+            "asar_path": asar_path,
+            "patched": True,
+            "cdp_url": f"http://127.0.0.1:{port}",
+            "cdp_alive": True,
+        }
 
     stop_gemini_processes()
     patched = patch_asar(asar_path, port=port)
@@ -157,19 +277,119 @@ def ensure_gemini_running_with_cdp(port=CDP_PORT, hide=True):
         if is_cdp_alive(port):
             return {
                 "status": "started",
+                "app_dir": app_dir,
+                "asar_path": asar_path,
                 "patched": patched,
                 "cdp_url": f"http://127.0.0.1:{port}",
-                "app_dir": app_dir,
+                "cdp_alive": True,
             }
         time.sleep(0.5)
 
     raise RuntimeError(f"Gemini started from {exe_path}, but CDP port {port} did not become ready in time.")
 
 
-if __name__ == "__main__":
-    if "--restore" in sys.argv:
-        print(json.dumps(restore_asar(), indent=2))
-    else:
-        hide_flag = "--show" not in sys.argv
-        info = ensure_gemini_running_with_cdp(port=CDP_PORT, hide=hide_flag)
+def main():
+    parser = argparse.ArgumentParser(
+        description="Patch Google Gemini desktop Electron app to enable Chrome DevTools Protocol (CDP) remote debugging."
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=CDP_PORT,
+        help="CDP remote debugging port (default: 9223 or GEMINI_CDP_PORT)",
+    )
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        default=False,
+        help="Launch Gemini desktop app visibly (default: hidden)",
+    )
+    parser.add_argument(
+        "--restore",
+        action="store_true",
+        default=False,
+        help="Restore original unmodified app.asar from app.asar.bak",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        default=False,
+        help="Inspect installation, patch status, and CDP liveness without launching or modifying disk",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Simulate patch operation and return JSON diff/status without writing disk",
+    )
+    args = parser.parse_args()
+
+    port = args.port
+    hide_flag = not args.show
+
+    if args.check:
+        try:
+            app_dir = find_latest_app_dir()
+            asar_path = os.path.join(app_dir, "resources", "app.asar")
+            patched = is_asar_patched(asar_path, port=port)
+            alive = is_cdp_alive(port=port)
+            status = "ready" if (alive and patched) else ("running_unpatched" if alive else ("patched" if patched else "unpatched"))
+            res = {
+                "status": status,
+                "app_dir": app_dir,
+                "asar_path": asar_path,
+                "patched": patched,
+                "cdp_url": f"http://127.0.0.1:{port}",
+                "cdp_alive": alive,
+            }
+            print(json.dumps(res, indent=2))
+            sys.exit(0)
+        except Exception as e:
+            res = {
+                "status": "error",
+                "error": str(e),
+                "cdp_url": f"http://127.0.0.1:{port}",
+                "cdp_alive": is_cdp_alive(port=port),
+            }
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+
+    if args.dry_run:
+        try:
+            app_dir = find_latest_app_dir()
+            asar_path = os.path.join(app_dir, "resources", "app.asar")
+            res = dry_run_patch(asar_path, port=port)
+            print(json.dumps(res, indent=2))
+            sys.exit(0)
+        except Exception as e:
+            res = {
+                "status": "error",
+                "error": str(e),
+                "cdp_url": f"http://127.0.0.1:{port}",
+                "cdp_alive": is_cdp_alive(port=port),
+            }
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+
+    if args.restore:
+        res = restore_asar()
+        print(json.dumps(res, indent=2))
+        sys.exit(0)
+
+    try:
+        info = ensure_gemini_running_with_cdp(port=port, hide=hide_flag)
         print(json.dumps(info, indent=2))
+        sys.exit(0)
+    except Exception as e:
+        res = {
+            "status": "error",
+            "error": str(e),
+            "cdp_url": f"http://127.0.0.1:{port}",
+            "cdp_alive": is_cdp_alive(port=port),
+        }
+        print(json.dumps(res, indent=2))
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

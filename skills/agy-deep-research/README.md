@@ -1,42 +1,84 @@
 # agy-deep-research
 
-Claude Code skill that orchestrates Google Gemini Deep Research through the Antigravity CLI (`agy`) and the locally installed Windows Gemini desktop app (`Gemini.exe`) without API keys.
+Production-grade Claude Code skill that orchestrates Google Gemini Deep Research headlessly through the Antigravity CLI (`agy`) and the locally installed Windows Gemini desktop app (`Gemini.exe`) without API keys.
 
-It combines:
-1. **`skills/agy-delegate --deep-research`**: A confined headless `agy` execution profile (`AGY_CONFINE_MODE="deep-research"`) that restricts file reads/writes and shell commands via a `PreToolUse` hook (`confine_hook.py`).
-2. **`scripts/deep_research.py`**: A stdlib-only orchestrator implementing the Claude-owned plan review loop (`init` → `plan` → `edit`* → `approve --reason`), detached execution (`--no-wait`, `status`, `collect`), unattended `--auto` mode, live `progress.jsonl` tailing, and deterministic quality/provenance gates.
-3. **Bundled Relay & Playwright Drivers**: Self-contained copies of `relay_step.py`, `run_deep_research.py`, `patch_gemini_app.py`, and `references/SKILL.md` with `preflight` and `setup` commands to keep `~/.gemini/config/skills/local-gemini-deep-research/` in sync.
+## Architecture
+
+The system is structured into four decoupled layers:
+
+1. **Lead Orchestrator (`scripts/deep_research.py`)**:
+   - Python stdlib-only coordinator.
+   - Implements the Claude-owned research plan review loop (`init` → `plan` → `edit`* → `approve --reason`).
+   - Supports asynchronous detached execution (`--no-wait`, `status`, `collect`) and unattended `--auto` mode.
+   - Enforces 5 deterministic quality, provenance, and isolation gates.
+
+2. **Operator Relay Layer (`scripts/relay_step.py` & `skills/agy-delegate`)**:
+   - Translates `<job>/relay/request.json` into single-step driver invocations.
+   - Spawns background workers (`mode: "detach"`) and streams live thoughts to `relay/progress.jsonl`.
+   - Strictly confined by `confine_hook.py` (`PreToolUse` hook with `AGY_CONFINE_MODE="deep-research"`).
+
+3. **CDP Automation Layer (`scripts/run_deep_research.py`)**:
+   - Interacts over Chrome DevTools Protocol (CDP port 9223) with the running Gemini Electron renderer using Playwright.
+   - Bypasses background window throttling via `Page.setWebLifecycleState` (`active`) and `Emulation.setFocusEmulationEnabled`.
+   - Intercepts and cancels the automatic countdown fuse (`[data-test-id="cancel-fuse-button"]`) to enforce plan review.
+   - Emits structured hook events and converts completed DOM reports to GitHub-Flavored Markdown with source links.
+
+4. **Desktop Electron Launcher & Patcher (`scripts/patch_gemini_app.py`)**:
+   - Dynamically patches packaged Electron security checks in `%LOCALAPPDATA%\Google\Gemini\app-*\resources\app.asar`.
+   - Resilient against minifier variable renaming across versions (e.g. `m.app` in `1.16.x`, `h.app` in `1.17.x+`) via generalized regex `(\w+)\.app\.isPackaged`.
+   - Preserves exact byte length and recalculates ASAR header SHA-256 integrity hash.
+   - Launches `Gemini.exe --hide` in the background via WMI (`Win32_Process.Create`) to prevent window focus stealing.
 
 ## Requirements
 
-- **Python**: 3.9+ (`deep_research.py` is stdlib-only; `run_deep_research.py` and `relay_step.py` use `playwright` for CDP connection).
+- **Python**: 3.9+ (`deep_research.py` is stdlib-only; `run_deep_research.py` and `relay_step.py` use `playwright`).
 - **Antigravity CLI (`agy`)**: 1.2+ signed in (`agy_task.py preflight`).
 - **Google Gemini Desktop App (`Gemini.exe`)**: Installed under `%LOCALAPPDATA%\Google\Gemini\app-*` on Windows and signed in to a Google account with Gemini Deep Research access.
-- **Playwright**: `pip install playwright` (connects over CDP `http://127.0.0.1:9223` to the running `Gemini.exe` Electron process; no browser download needed).
+- **Playwright**: `pip install playwright` (connects over CDP `http://127.0.0.1:9223` to the running `Gemini.exe` Electron process; no separate browser download needed).
 
-## One-Time Setup & Preflight
+## Setup & Preflight
 
 ```bash
 # 1. Synchronize bundled scripts and SKILL.md into ~/.gemini/config/skills/local-gemini-deep-research
 python skills/agy-deep-research/scripts/deep_research.py setup
 
-# 2. Check agy, Playwright, Gemini app installation/CDP port, and SHA-256 sync status
+# 2. Check agy, Playwright, Gemini desktop app installation, CDP port 9223, and sync status
 python skills/agy-deep-research/scripts/deep_research.py preflight
 ```
 
-## Subcommands & CLI Reference
+## CLI Reference & Subcommands
+
+### Orchestrator Subcommands (`deep_research.py`)
 
 | Subcommand | Key Flags | Description |
 |---|---|---|
 | `preflight` | `[--target-dir DIR]` | Verify `agy`, `playwright`, `Gemini.exe` / CDP port `9223`, and SHA-256 sync status of bundled scripts. |
-| `setup` | `[--target-dir DIR]` | Copy/update `relay_step.py`, `run_deep_research.py`, `patch_gemini_app.py`, and `SKILL.md` into the target skill directory. |
+| `setup` | `[--target-dir DIR]` | Copy/update `relay_step.py`, `run_deep_research.py`, `patch_gemini_app.py`, and `SKILL.md` into target skill. |
 | `init` | `--prompt TEXT\|--prompt-file FILE` `--goal TEXT\|--goal-file FILE` `[--job ID_OR_PATH]` `[--out PATH]` | Create an isolated job directory outside any `.git` repo and write `prompt.md` + `goal.md`. |
-| `plan` | `--job ID_OR_PATH` `[--deadline 420]` `[--show]` | Execute the `plan` relay step via `agy_task.py run --deep-research` and save `plan_v1.md`. |
-| `edit` | `--job ID_OR_PATH` `--feedback TEXT\|--feedback-file FILE` `[--deadline 420]` | Send plan modification instructions (`edit` relay step) and save `plan_vN.md`. |
-| `approve` | `--job ID_OR_PATH` `--reason TEXT` (`>=20` chars) `[--out PATH]` `[--no-wait]` `[--timeout 1200]` | Enforce Plan Approval Gate, start detached research (`mode="detach"`), stream `relay/progress.jsonl` to `stderr`, enforce Report Quality Gate, and write `<out>.md` + `<out>.md.meta.json`. |
-| `auto` | `--prompt ...` `--goal ...` `[--reason TEXT]` `[--out PATH]` `[--no-wait]` `[--timeout 1200]` | Unattended end-to-end execution (`init` + `auto` detached relay step + live progress streaming + Report Quality Gate). |
+| `plan` | `--job ID_OR_PATH` `[--deadline SEC]` `[--show]` | Execute `plan` relay step via `agy_task.py run --deep-research` and save `plan_v1.md`. |
+| `edit` | `--job ID_OR_PATH` `--feedback TEXT\|--feedback-file FILE` `[--deadline SEC]` | Send plan refinement feedback (`edit` relay step) and save `plan_vN.md`. |
+| `approve` | `--job ID_OR_PATH` `--reason TEXT` (`>=20` chars) `[--out PATH]` `[--no-wait]` `[--timeout SEC]` | Enforce Plan Approval Gate, start detached research (`mode="detach"`), stream `progress.jsonl` to `stderr`, enforce Report Quality Gate, and write `<out>.md` + `<out>.md.meta.json`. |
+| `auto` | `--prompt ...` `--goal ...` `[--reason TEXT]` `[--out PATH]` `[--no-wait]` `[--timeout SEC]` | Unattended end-to-end execution (`init` + `auto` detached relay step + live streaming + Quality Gate). |
 | `status` | `--job ID_OR_PATH` | Inspect job status, detached worker `pid_alive(pid)` state, and latest `progress.jsonl` entry. |
-| `collect` | `--job ID_OR_PATH` `[--out PATH]` `[--no-wait]` `[--timeout 1200]` | Re-attach to a running detached worker or collect a finished report from the Gemini conversation, then run the Report Quality Gate. |
+| `collect` | `--job ID_OR_PATH` `[--out PATH]` `[--no-wait]` `[--timeout SEC]` | Re-attach to a running worker or collect finished report from conversation, then run Report Quality Gate. |
+
+### Supporting Scripts
+
+- **`patch_gemini_app.py`**:
+  ```bash
+  python scripts/patch_gemini_app.py --help
+  python scripts/patch_gemini_app.py [--port 9223] [--check] [--dry-run] [--show] [--restore]
+  ```
+- **`relay_step.py`**:
+  ```bash
+  python scripts/relay_step.py --help
+  python scripts/relay_step.py --job <job_dir> [--dry-run]
+  ```
+- **`run_deep_research.py`**:
+  ```bash
+  python scripts/run_deep_research.py --help
+  python scripts/run_deep_research.py --step {auto,plan,edit,approve} --prompt <text> [--output <path>] [--dry-run]
+  ```
 
 ## Job Directory Layout & Relay Protocol (`relay_version: 2`)
 
@@ -58,6 +100,24 @@ Jobs are created under `%LOCALAPPDATA%\agy-deep-research\jobs\<job_id>` on Windo
     result.json         # Step completion payload written by relay_step.py
 ```
 
+## Deterministic Quality & Security Gates
+
+| Gate / Invariant | Enforced At | Check Details | Exit Code | Failure Code |
+|---|---|---|---|---|
+| **Job Isolation Gate** | All commands (`init` through `collect`) | Path must NOT be inside any `.git` repository tree | `5` | `GIT_REPO_ESCAPE`, `INVALID_JOB_DIR` |
+| **Pre-Plan Gate** | `plan`, `edit`, `approve` | Both `prompt.md` and `goal.md` must exist and be non-empty | `2` | `PRE_PLAN_GATE_PROMPT_MISSING`, `PRE_PLAN_GATE_GOAL_MISSING` |
+| **Plan Approval Gate** | `approve` | Status must be `plan_ready` or `plan_revised`; `--reason` length must be `>= 20` characters | `2` / `5` | `APPROVAL_GATE_INVALID_STATE` (`2`), `APPROVAL_GATE_REASON_TOO_SHORT` (`5`) |
+| **Worker Liveness Check** | `approve`, `auto`, `collect` | Streaming loop monitors `pid_alive(pid)` while waiting for `relay/result.json` | `3` | `WORKER_DIED` |
+| **Report Quality Gate** | `approve`, `auto`, `collect` | Extracted report must have `>= 400` characters and contain valid `#` section headings | `2` | `REPORT_QUALITY_GATE_FAILED`, `REPORT_STRUCTURE_INVALID` |
+
+### Standard Exit Codes
+
+- `0`: Success (action completed, all gates passed).
+- `2`: Gate rejection or research failure (`PLAN_TIMEOUT`, `SAFETY_BLOCKED`, `PLAN_CHANGED`, `COLLECT_WOULD_START`, `REPORT_QUALITY_GATE_FAILED`).
+- `3`: Runtime, driver, or environment error (`PLAYWRIGHT_MISSING`, `CDP_NOT_READY`, `ASAR_PATTERN_MISMATCH`, `WORKER_DIED`).
+- `4`: Preflight or diagnostic failure (`PREFLIGHT_FAILED`, `SYNC_OUT_OF_DATE`).
+- `5`: Bad parameters, validation failure, or security isolation violation (`GIT_REPO_ESCAPE`, `EMPTY_PROMPT`, `APPROVAL_GATE_REASON_TOO_SHORT`).
+
 ## Permissions & Confinement Model (`--deep-research`)
 
 When `deep_research.py` invokes `agy_task.py run --deep-research -w <job_dir>`, `agy` runs with a `PreToolUse` hook (`confine_hook.py` with `AGY_CONFINE_MODE="deep-research"`):
@@ -69,7 +129,7 @@ When `deep_research.py` invokes `agy_task.py run --deep-research -w <job_dir>`, 
 
 ## Running Tests
 
-All unit tests run completely offline in seconds using deterministic fakes (`fake_agy_dr.py`):
+All unit tests run completely offline using deterministic simulator fakes (`fake_agy_dr.py`):
 
 ```bash
 # Test agy-deep-research orchestrator, gates, streaming, and error recovery (11 tests)

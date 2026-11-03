@@ -26,7 +26,7 @@ request.json fields
                   that keeps running after this process exits; result.json appears when the research is done)
   show            true to show the Gemini window if the driver (re)starts the app
   env             {NAME: value} added to the driver's environment (a detached worker does not inherit the caller's)
-  cdp_url         CDP endpoint for the read-only page probe (default http://127.0.0.1:9222)
+  cdp_url         CDP endpoint for the read-only page probe (default http://127.0.0.1:9223)
 
 `collect` never starts a research: before running the driver it probes the page (read-only, through the driver's
 Python and playwright) and refuses with COLLECT_WOULD_START when the plan card still has an active start button.
@@ -84,10 +84,10 @@ FAILURES = [
     ("No Gemini app-* directory", "APP_NOT_INSTALLED", 3, "install the Google Gemini desktop app for Windows and sign in once"),
     ("Target pattern not found in main.js", "ASAR_PATTERN_MISMATCH", 3,
      "this Gemini app version is not supported by patch_gemini_app.py; Gemini.exe was killed and NOT relaunched: start it by hand, do not retry"),
-    ("did not become ready in time", "CDP_NOT_READY", 3, "Gemini was (re)started but port 9222 stayed silent for 20 s; retry once, then check powershell/taskkill on PATH"),
+    ("did not become ready in time", "CDP_NOT_READY", 3, "Gemini was (re)started but port 9223 stayed silent for 20 s; retry once, then check powershell/taskkill on PATH"),
     ("connect_over_cdp", "CDP_CONNECT_FAILED", 3, "CDP answered the liveness check but refused the connection; retry once"),
     ("Could not find a gemini.google.com page", "GEMINI_PAGE_NOT_FOUND", 3,
-     "the app is not on gemini.google.com (not signed in?) or another browser owns port 9222; start the app with --show and sign in"),
+     "the app is not on gemini.google.com (not signed in?) or another browser owns port 9223; start the app with --show and sign in"),
     ("Could not activate 'Deep Research' mode", "DEEP_RESEARCH_TOGGLE_NOT_FOUND", 3, "the Tools menu did not offer Deep Research; UI changed or the account lacks it"),
     ("safety/keyword filter blocked", "SAFETY_BLOCKED", 2, "Gemini refused the prompt; the caller must rephrase in a new job"),
     ("Research Plan confirmation button did not appear", "PLAN_TIMEOUT", 2,

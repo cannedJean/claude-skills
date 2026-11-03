@@ -186,13 +186,37 @@ def prevent_background_throttling(page):
 def ensure_pro_mode(page):
     """Ensure the wanted model mode is selected. Default 'Pro' (e.g. '3.8 Pro'); GEMINI_DR_MODE=Argon selects 'Argon'."""
     target = os.environ.get("GEMINI_DR_MODE", "Pro").strip() or "Pro"
+    mode_selectors = [
+        '[data-test-id*="mode-menu"]',
+        'button[aria-label*="Model selector"]',
+        'button[aria-label*="모델 선택"]',
+        'gem-menu-button button',
+        'gem-menu-button',
+        'button[aria-label*="Gemini"]',
+        '[data-test-id="bard-mode-menu-button"]',
+        'bard-mode-switcher button',
+    ]
+    combined_selector = ", ".join(mode_selectors)
     try:
-        page.wait_for_selector('[data-test-id="bard-mode-menu-button"], bard-mode-switcher button', timeout=10000)
+        page.wait_for_selector(combined_selector, timeout=10000)
     except Exception:
         pass
-    mode_btn = page.locator('[data-test-id="bard-mode-menu-button"], bard-mode-switcher button').first
+
+    mode_btn = None
+    for sel in mode_selectors:
+        loc = page.locator(sel).first
+        try:
+            if loc.count() > 0 and loc.is_visible():
+                mode_btn = loc
+                break
+        except Exception:
+            continue
+
+    if not mode_btn:
+        mode_btn = page.locator(combined_selector).first
+
     if mode_btn.count() > 0:
-        current_mode = mode_btn.inner_text().strip()
+        current_mode = (mode_btn.inner_text() or mode_btn.get_attribute("aria-label") or "").strip()
         if target not in current_mode:
             log(f"Current model mode is '{current_mode}'. Switching to '{target}'...")
             mode_btn.evaluate("el => el.click()")
@@ -215,7 +239,8 @@ def ensure_pro_mode(page):
             )
             if switched:
                 time.sleep(1.0)
-                log(f"Switched model mode to: {mode_btn.inner_text().strip()}")
+                new_mode = (mode_btn.inner_text() or mode_btn.get_attribute("aria-label") or "").strip()
+                log(f"Switched model mode to: {new_mode}")
             else:
                 log(f"Warning: Could not find enabled '{target}' option in mode menu.")
                 page.keyboard.press("Escape")
@@ -356,7 +381,11 @@ def wait_for_new_plan(page, prev_plan_count=0, timeout_sec=180):
         current_plan_count = page.locator('[data-test-id="research-steps"], .research-steps').count()
         active_confirm = page.locator(
             '[data-test-id="confirm-button"]:not(.gem-button-disabled) button:not([disabled]), '
-            'button[aria-label="연구 시작"]:not([disabled])'
+            '[data-test-id="confirm-button"]:not(.gem-button-disabled), '
+            'button[aria-label="연구 시작"]:not([disabled]), '
+            'button[aria-label="Start research"]:not([disabled]), '
+            'button:has-text("연구 시작"):not([disabled]), '
+            'button:has-text("Start research"):not([disabled])'
         )
 
         if current_plan_count > prev_plan_count and active_confirm.count() > 0:
@@ -375,11 +404,12 @@ def wait_for_new_plan(page, prev_plan_count=0, timeout_sec=180):
         if elapsed - last_reload_at >= 60 and "/app/" in page.url:
             last_reload_at = elapsed
             log(f"Refreshing conversation state ({int(elapsed)}s elapsed)...")
-            page.reload(wait_until="domcontentloaded")
             try:
+                page.reload(wait_until="domcontentloaded")
+                prevent_background_throttling(page)
                 page.wait_for_selector("model-response", timeout=15000)
-            except Exception:
-                pass
+            except Exception as e:
+                log(f"Reload recovery notice: {e}")
             time.sleep(3.0)
             continue
 
@@ -394,11 +424,16 @@ def apply_plan_edit(page, edit_feedback, timeout_sec=180):
     prev_plan_count = page.locator('[data-test-id="research-steps"], .research-steps').count()
     prev_resp_count = page.locator("model-response").count()
 
-    edit_btn = page.locator(
-        '[data-test-id="edit-button"]:not(.gem-button-disabled) button:not([disabled]), '
-        '[data-test-id="edit-button"]:not(.gem-button-disabled), '
-        'button[aria-label="연구 계획 수정"]:not([disabled])'
-    ).last
+    edit_selectors = [
+        '[data-test-id="edit-button"]:not(.gem-button-disabled) button:not([disabled])',
+        '[data-test-id="edit-button"]:not(.gem-button-disabled)',
+        'button[aria-label="Edit plan"]:not([disabled])',
+        'button[aria-label="연구 계획 수정"]:not([disabled])',
+        '[data-test-id="edit-button"]',
+        'button:has-text("계획 수정"):not([disabled])',
+        'button:has-text("Edit plan"):not([disabled])',
+    ]
+    edit_btn = page.locator(", ".join(edit_selectors)).last
 
     if edit_btn.count() > 0:
         log("Clicking '계획 수정' (edit-button)...")
@@ -416,11 +451,15 @@ def apply_plan_edit(page, edit_feedback, timeout_sec=180):
 
 def confirm_current_plan(page):
     """Click '연구 시작' (confirm-button) on the latest Research Plan."""
-    confirm_btn = page.locator(
-        '[data-test-id="confirm-button"]:not(.gem-button-disabled) button:not([disabled]), '
-        '[data-test-id="confirm-button"]:not(.gem-button-disabled), '
-        'button[aria-label="연구 시작"]:not([disabled])'
-    ).last
+    confirm_selectors = [
+        '[data-test-id="confirm-button"]:not(.gem-button-disabled) button:not([disabled])',
+        '[data-test-id="confirm-button"]:not(.gem-button-disabled)',
+        'button[aria-label="연구 시작"]:not([disabled])',
+        'button[aria-label="Start research"]:not([disabled])',
+        'button:has-text("연구 시작"):not([disabled])',
+        'button:has-text("Start research"):not([disabled])',
+    ]
+    confirm_btn = page.locator(", ".join(confirm_selectors)).last
     if confirm_btn.count() == 0:
         raise RuntimeError("No active '연구 시작' (confirm-button) found on the current page.")
     log("Clicking '연구 시작' (Confirm Plan) to start Deep Research execution...")
@@ -613,10 +652,14 @@ def wait_for_report_completion(page, timeout_sec=1200):
         else:
             stable_ticks = 0
             last_len = state["reportTextLen"]
-            if time.time() - last_reload_time > 90:
+            if time.time() - last_reload_time > 60:
                 last_reload_time = time.time()
-                log("Refreshing conversation state from server...")
-                page.reload(wait_until="domcontentloaded")
+                log("Refreshing conversation state from server (60s background freeze recovery)...")
+                try:
+                    page.reload(wait_until="domcontentloaded")
+                    prevent_background_throttling(page)
+                except Exception as e:
+                    log(f"Reload recovery notice: {e}")
                 time.sleep(3.0)
 
         time.sleep(2.0)
@@ -727,13 +770,22 @@ def main():
             print("=== [PLAN_REVIEW_HOOK_END] ===\n", flush=True)
             return
 
+        confirm_locators = (
+            '[data-test-id="confirm-button"]:not(.gem-button-disabled) button:not([disabled]), '
+            '[data-test-id="confirm-button"]:not(.gem-button-disabled), '
+            'button[aria-label="연구 시작"]:not([disabled]), '
+            'button[aria-label="Start research"]:not([disabled]), '
+            'button:has-text("연구 시작"):not([disabled]), '
+            'button:has-text("Start research"):not([disabled])'
+        )
+
         # Step mode 2: Approve the currently displayed plan and execute Deep Research
         if args.step == "approve":
-            confirm_btn = page.locator('[data-test-id="confirm-button"]:not(.gem-button-disabled) button:not([disabled])').last
+            confirm_btn = page.locator(confirm_locators).last
             if confirm_btn.count() > 0:
                 confirm_current_plan(page)
         elif args.resume_url:
-            confirm_btn = page.locator('[data-test-id="confirm-button"]:not(.gem-button-disabled) button:not([disabled])').last
+            confirm_btn = page.locator(confirm_locators).last
             if confirm_btn.count() > 0:
                 if args.review_plan or args.plan_hook:
                     plan_text = stop_auto_confirm_fuse_and_expand_plan(page)
