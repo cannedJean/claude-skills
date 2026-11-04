@@ -9,9 +9,13 @@ Covers:
             setup + preflight sync verification)
   - Tier 4: End-to-end real-world workflows (Standard lifecycle, iterative plan refinement, detached async re-attach,
             unattended auto mode, safety/timeout error propagation)
+  - Tier 5: AGY & Gemini Model/Effort specification, alias normalization, CLI override priority,
+            environment variable fallbacks, multi-turn persistence, and invocation chain propagation (R1-R4)
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -27,8 +31,19 @@ SKILL_DIR = SCRIPTS_DIR.parent
 DEEP_RESEARCH_PY = SCRIPTS_DIR / "deep_research.py"
 FAKE_AGY_DR = TESTS_DIR / "fake_agy_dr.py"
 
+sys.path.insert(0, str(SCRIPTS_DIR))
+from deep_research import (
+    DEFAULT_AGY_EFFORT,
+    DEFAULT_AGY_MODEL,
+    DEFAULT_GEMINI_MODEL,
+    DEFAULT_GEMINI_THINKING,
+    normalize_agy_effort,
+    normalize_agy_model,
+    normalize_gemini_model,
+)
 
-class DeepResearchTestCase(unittest.TestCase):
+
+class DeepResearchTestBase(unittest.TestCase):
     def setUp(self) -> None:
         # Allocate test directories in the system temp dir (outside any git repository)
         self.tmp_root = Path(tempfile.mkdtemp(prefix="dr_test_")).resolve()
@@ -43,6 +58,13 @@ class DeepResearchTestCase(unittest.TestCase):
 
     def run_dr(self, args: list[str], scenario: str = "perfect", extra_env: dict | None = None) -> tuple[int, dict, str]:
         env = dict(os.environ)
+        # Clear external model/effort env vars to guarantee deterministic defaults in tests
+        for var in [
+            "AGY_DR_MODEL", "AGY_MODEL", "AGY_TASK_MODEL",
+            "AGY_DR_EFFORT", "AGY_EFFORT", "AGY_TASK_EFFORT",
+            "GEMINI_DR_MODEL", "GEMINI_MODEL", "GEMINI_DR_MODE", "GEMINI_DR_THINKING",
+        ]:
+            env.pop(var, None)
         env.update({
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
@@ -70,6 +92,8 @@ class DeepResearchTestCase(unittest.TestCase):
                 data = {"_raw_stdout": cp.stdout}
         return cp.returncode, data, cp.stderr
 
+
+class DeepResearchTestCase(DeepResearchTestBase):
     # ------------------------------------------------------------------ Tier 1 & 2: Setup, Preflight & Isolation
     def test_setup_and_preflight_synchronization(self) -> None:
         # Before setup, target_skill_dir does not exist -> sync_status == missing_target
@@ -274,6 +298,10 @@ class DeepResearchTestCase(unittest.TestCase):
         self.assertEqual(meta["sources_count"], 3)
         self.assertEqual(len(meta["progress_highlights"]), 3)
         self.assertTrue(meta["confinement"]["enabled"])
+        self.assertEqual(meta["agy_model"], "flash 3.8")
+        self.assertEqual(meta["agy_effort"], "high")
+        self.assertEqual(meta["gemini_model"], "Pro")
+        self.assertEqual(meta["gemini_thinking"], "high")
 
     def test_approve_no_wait_status_and_collect_reattach(self) -> None:
         report_out = self.out_dir / "async_report.md"
@@ -331,6 +359,9 @@ class DeepResearchTestCase(unittest.TestCase):
         meta = json.loads(Path(str(report_out) + ".meta.json").read_text(encoding="utf-8"))
         self.assertEqual(meta["job_id"], "auto_job_01")
         self.assertGreaterEqual(meta["report_chars"], 400)
+        self.assertEqual(meta["agy_model"], "flash 3.8")
+        self.assertEqual(meta["agy_effort"], "high")
+        self.assertEqual(meta["gemini_model"], "Pro")
 
     # ------------------------------------------------------------------ Tier 2 & 5: Error & Gate Rejections
     def test_report_quality_gate_rejects_short_or_headingless_reports(self) -> None:
@@ -414,6 +445,595 @@ class DeepResearchTestCase(unittest.TestCase):
         )
         self.assertEqual(rc, 3)
         self.assertEqual(res.get("code"), "WORKER_DIED")
+
+
+# ------------------------------------------------------------------ Model & Effort Configuration Tests (R1 - R4)
+
+class ModelAndEffortNormalizationTestCase(unittest.TestCase):
+    """Direct unit tests for normalizer functions and friendly alias resolution (R1)."""
+
+    def test_normalize_agy_model_defaults_and_aliases(self) -> None:
+        # Defaults for None and blank/whitespace
+        self.assertEqual(normalize_agy_model(None), DEFAULT_AGY_MODEL)
+        self.assertEqual(normalize_agy_model(""), DEFAULT_AGY_MODEL)
+        self.assertEqual(normalize_agy_model("   "), DEFAULT_AGY_MODEL)
+
+        # Flash aliases (case-insensitive and whitespace-stripped)
+        flash_aliases = [
+            "flash",
+            "flash 3.8",
+            "flash-3.8",
+            "flash3.8",
+            "3.8 flash",
+            "3.8-flash",
+            "플래시",
+            "FLASH",
+            "Flash 3.8",
+            " 3.8 flash ",
+            " 플래시 ",
+        ]
+        for alias in flash_aliases:
+            with self.subTest(alias=alias):
+                self.assertEqual(normalize_agy_model(alias), "flash 3.8")
+
+        # Pro aliases
+        pro_aliases = [
+            "pro",
+            "pro 3.8",
+            "pro-3.8",
+            "pro3.8",
+            "3.8 pro",
+            "프로",
+            "PRO",
+            "Pro 3.8",
+            " 프로 ",
+        ]
+        for alias in pro_aliases:
+            with self.subTest(alias=alias):
+                self.assertEqual(normalize_agy_model(alias), "pro")
+
+        # Custom slugs preserved as-is
+        custom_slugs = [
+            "gemini-2.5-flash",
+            "custom-slug-abc",
+            "claude-3-7-sonnet",
+            "deepseek-r1",
+        ]
+        for slug in custom_slugs:
+            with self.subTest(slug=slug):
+                self.assertEqual(normalize_agy_model(slug), slug)
+
+    def test_normalize_agy_effort_defaults_and_aliases(self) -> None:
+        # Defaults for None and blank/whitespace
+        self.assertEqual(normalize_agy_effort(None), DEFAULT_AGY_EFFORT)
+        self.assertEqual(normalize_agy_effort(""), DEFAULT_AGY_EFFORT)
+        self.assertEqual(normalize_agy_effort("   "), DEFAULT_AGY_EFFORT)
+
+        # High aliases
+        high_aliases = ["high", "높음", "h", "최대", "hi", "HIGH", " 높음 ", "H"]
+        for alias in high_aliases:
+            with self.subTest(alias=alias):
+                self.assertEqual(normalize_agy_effort(alias), "high")
+
+        # Medium aliases
+        med_aliases = ["medium", "중간", "보통", "m", "med", "mid", "MEDIUM", " 중간 ", " 보통 "]
+        for alias in med_aliases:
+            with self.subTest(alias=alias):
+                self.assertEqual(normalize_agy_effort(alias), "medium")
+
+        # Low aliases
+        low_aliases = ["low", "낮음", "l", "lo", "LOW", " 낮음 ", "L"]
+        for alias in low_aliases:
+            with self.subTest(alias=alias):
+                self.assertEqual(normalize_agy_effort(alias), "low")
+
+        # Invalid effort values rejected with exit code 5 (die suppresses output during unit test)
+        invalid_values = ["ultra", "extreme", "none", "123", "최저", "최고"]
+        for invalid in invalid_values:
+            with self.subTest(invalid=invalid):
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as cm:
+                        normalize_agy_effort(invalid)
+                self.assertEqual(cm.exception.code, 5)
+
+    def test_normalize_gemini_model_defaults_and_aliases(self) -> None:
+        # Defaults for None and blank/whitespace
+        self.assertEqual(normalize_gemini_model(None), (DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_THINKING))
+        self.assertEqual(normalize_gemini_model(""), (DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_THINKING))
+        self.assertEqual(normalize_gemini_model("   "), (DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_THINKING))
+
+        # Pro / High aliases -> ("Pro", "high")
+        pro_aliases = [
+            "pro",
+            "3.8 pro",
+            "pro 3.8",
+            "high",
+            "높음",
+            "pro high",
+            "pro-high",
+            "pro (높음)",
+            "프로",
+            "advanced",
+            "PRO",
+            " 높음 ",
+            "PRO HIGH",
+        ]
+        for alias in pro_aliases:
+            with self.subTest(alias=alias):
+                self.assertEqual(normalize_gemini_model(alias), ("Pro", "high"))
+
+        # Flash aliases -> ("Flash", "high")
+        flash_aliases = [
+            "flash",
+            "flash 3.8",
+            "flash-3.8",
+            "flash3.8",
+            "3.8 flash",
+            "플래시",
+            "FLASH",
+            " 플래시 ",
+        ]
+        for alias in flash_aliases:
+            with self.subTest(alias=alias):
+                self.assertEqual(normalize_gemini_model(alias), ("Flash", "high"))
+
+        # Argon aliases -> ("Argon", "high")
+        argon_aliases = ["argon", "아르곤", "ARGON", " 아르곤 "]
+        for alias in argon_aliases:
+            with self.subTest(alias=alias):
+                self.assertEqual(normalize_gemini_model(alias), ("Argon", "high"))
+
+        # Custom slugs -> (slug, "high")
+        custom_slugs = ["gemini-1.5-pro", "gemini-2.0-flash-exp", "custom-preview"]
+        for slug in custom_slugs:
+            with self.subTest(slug=slug):
+                self.assertEqual(normalize_gemini_model(slug), (slug, "high"))
+
+
+class ModelAndEffortCliOptionsTestCase(DeepResearchTestBase):
+    """Verify CLI options, defaults, and override behaviors across all subcommands (R1, R2)."""
+
+    def test_init_subcommand_defaults_and_overrides(self) -> None:
+        # 1. Defaults when CLI flags omitted
+        rc_def, res_def, _ = self.run_dr([
+            "init",
+            "--job", "job_cli_def",
+            "--prompt", "Analyze database query planners.",
+            "--goal", "Compare cost-based and rule-based optimizers.",
+        ])
+        self.assertEqual(rc_def, 0)
+        self.assertEqual(res_def["agy_model"], "flash 3.8")
+        self.assertEqual(res_def["agy_effort"], "high")
+        self.assertEqual(res_def["gemini_model"], "Pro")
+        self.assertEqual(res_def["gemini_thinking"], "high")
+
+        job_file = self.jobs_dir / "job_cli_def" / "job.json"
+        job_data = json.loads(job_file.read_text(encoding="utf-8"))
+        self.assertEqual(job_data["agy_model"], "flash 3.8")
+        self.assertEqual(job_data["agy_effort"], "high")
+        self.assertEqual(job_data["gemini_model"], "Pro")
+        self.assertEqual(job_data["gemini_thinking"], "high")
+
+        # 2. Explicit CLI overrides
+        rc_ovr, res_ovr, _ = self.run_dr([
+            "init",
+            "--job", "job_cli_ovr",
+            "--prompt", "Analyze database query planners.",
+            "--goal", "Compare cost-based and rule-based optimizers.",
+            "--agy-model", "pro",
+            "--agy-effort", "medium",
+            "--gemini-model", "flash",
+        ])
+        self.assertEqual(rc_ovr, 0)
+        self.assertEqual(res_ovr["agy_model"], "pro")
+        self.assertEqual(res_ovr["agy_effort"], "medium")
+        self.assertEqual(res_ovr["gemini_model"], "Flash")
+        self.assertEqual(res_ovr["gemini_thinking"], "high")
+
+        job_file_ovr = self.jobs_dir / "job_cli_ovr" / "job.json"
+        job_data_ovr = json.loads(job_file_ovr.read_text(encoding="utf-8"))
+        self.assertEqual(job_data_ovr["agy_model"], "pro")
+        self.assertEqual(job_data_ovr["agy_effort"], "medium")
+        self.assertEqual(job_data_ovr["gemini_model"], "Flash")
+
+        # 3. Friendly Korean aliases on CLI
+        rc_ko, res_ko, _ = self.run_dr([
+            "init",
+            "--job", "job_cli_ko",
+            "--prompt", "Analyze database query planners.",
+            "--goal", "Compare cost-based and rule-based optimizers.",
+            "--agy-model", "플래시",
+            "--agy-effort", "낮음",
+            "--gemini-model", "아르곤",
+        ])
+        self.assertEqual(rc_ko, 0)
+        self.assertEqual(res_ko["agy_model"], "flash 3.8")
+        self.assertEqual(res_ko["agy_effort"], "low")
+        self.assertEqual(res_ko["gemini_model"], "Argon")
+
+        # 4. Invalid effort flag rejected with exit code 5
+        rc_bad, res_bad, _ = self.run_dr([
+            "init",
+            "--job", "job_cli_bad",
+            "--prompt", "Analyze database query planners.",
+            "--goal", "Compare cost-based and rule-based optimizers.",
+            "--agy-effort", "super-effort",
+        ])
+        self.assertEqual(rc_bad, 5)
+        self.assertEqual(res_bad.get("code"), "INVALID_EFFORT")
+
+    def test_subcommands_cli_options_propagation_plan_edit_approve(self) -> None:
+        # Initialize with defaults
+        self.run_dr([
+            "init",
+            "--job", "flow_subcommands",
+            "--prompt", "Distributed lock manager comparison.",
+            "--goal", "Raft vs Paxos throughput, latency, and fault recovery.",
+        ])
+
+        # Step 1: plan with explicit CLI overrides
+        rc_plan, _, _ = self.run_dr([
+            "plan",
+            "--job", "flow_subcommands",
+            "--agy-model", "pro",
+            "--agy-effort", "low",
+            "--gemini-model", "flash",
+        ])
+        self.assertEqual(rc_plan, 0)
+
+        job_dir = self.jobs_dir / "flow_subcommands"
+        relay_dir = job_dir / "relay"
+
+        # Verify relay/request.json
+        req_plan = json.loads((relay_dir / "request.json").read_text(encoding="utf-8"))
+        self.assertEqual(req_plan["gemini_model"], "Flash")
+        self.assertEqual(req_plan["gemini_thinking"], "high")
+        self.assertEqual(req_plan["env"]["GEMINI_DR_MODE"], "Flash")
+        self.assertEqual(req_plan["env"]["GEMINI_DR_THINKING"], "high")
+
+        # Verify relay/agy_invoked.json
+        inv_plan = json.loads((relay_dir / "agy_invoked.json").read_text(encoding="utf-8"))
+        self.assertEqual(inv_plan["model"], "pro")
+        self.assertEqual(inv_plan["effort"], "low")
+        self.assertIn("--model", inv_plan["argv"])
+        self.assertEqual(inv_plan["argv"][inv_plan["argv"].index("--model") + 1], "pro")
+        self.assertIn("--effort", inv_plan["argv"])
+        self.assertEqual(inv_plan["argv"][inv_plan["argv"].index("--effort") + 1], "low")
+
+        # Step 2: edit with partial CLI override (change effort to medium)
+        rc_edit, _, _ = self.run_dr([
+            "edit",
+            "--job", "flow_subcommands",
+            "--feedback", "Add Zab protocol benchmarks.",
+            "--agy-effort", "medium",
+        ])
+        self.assertEqual(rc_edit, 0)
+
+        req_edit = json.loads((relay_dir / "request.json").read_text(encoding="utf-8"))
+        # Inherited from previous step
+        self.assertEqual(req_edit["gemini_model"], "Flash")
+        inv_edit = json.loads((relay_dir / "agy_invoked.json").read_text(encoding="utf-8"))
+        self.assertEqual(inv_edit["model"], "pro")
+        self.assertEqual(inv_edit["effort"], "medium")
+
+        # Step 3: approve with model override (switch gemini to argon)
+        report_out = self.out_dir / "flow_report.md"
+        reason_str = "Plan thoroughly benchmarks Raft, Paxos, and Zab fault recovery as required."
+        rc_app, app_res, _ = self.run_dr([
+            "approve",
+            "--job", "flow_subcommands",
+            "--reason", reason_str,
+            "--gemini-model", "argon",
+            "--out", str(report_out),
+        ])
+        self.assertEqual(rc_app, 0)
+        self.assertEqual(app_res["agy_model"], "pro")
+        self.assertEqual(app_res["agy_effort"], "medium")
+        self.assertEqual(app_res["gemini_model"], "Argon")
+
+        # Verify deliverables and .meta.json
+        meta_out = Path(str(report_out) + ".meta.json")
+        self.assertTrue(meta_out.is_file())
+        meta = json.loads(meta_out.read_text(encoding="utf-8"))
+        self.assertEqual(meta["agy_model"], "pro")
+        self.assertEqual(meta["agy_effort"], "medium")
+        self.assertEqual(meta["gemini_model"], "Argon")
+        self.assertEqual(meta["gemini_thinking"], "high")
+
+    def test_auto_subcommand_defaults_and_explicit_options(self) -> None:
+        # 1. auto with defaults
+        out_def = self.out_dir / "auto_def.md"
+        rc_def, res_def, _ = self.run_dr([
+            "auto",
+            "--job", "auto_def_job",
+            "--prompt", "Compare log-structured merge trees and B-trees.",
+            "--goal", "Read amplification, write amplification, and space amplification.",
+            "--out", str(out_def),
+        ])
+        self.assertEqual(rc_def, 0)
+        self.assertEqual(res_def["agy_model"], "flash 3.8")
+        self.assertEqual(res_def["agy_effort"], "high")
+        self.assertEqual(res_def["gemini_model"], "Pro")
+
+        job_dir_def = self.jobs_dir / "auto_def_job"
+        inv_def = json.loads((job_dir_def / "relay" / "agy_invoked.json").read_text(encoding="utf-8"))
+        self.assertEqual(inv_def["model"], "flash 3.8")
+        self.assertEqual(inv_def["effort"], "high")
+
+        req_def = json.loads((job_dir_def / "relay" / "request.json").read_text(encoding="utf-8"))
+        self.assertEqual(req_def["gemini_model"], "Pro")
+        self.assertEqual(req_def["env"]["GEMINI_DR_MODE"], "Pro")
+
+        meta_def = json.loads(Path(str(out_def) + ".meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta_def["agy_model"], "flash 3.8")
+        self.assertEqual(meta_def["agy_effort"], "high")
+        self.assertEqual(meta_def["gemini_model"], "Pro")
+
+        # 2. auto with explicit overrides and friendly aliases
+        out_ovr = self.out_dir / "auto_ovr.md"
+        rc_ovr, res_ovr, _ = self.run_dr([
+            "auto",
+            "--job", "auto_ovr_job",
+            "--prompt", "Compare log-structured merge trees and B-trees.",
+            "--goal", "Read amplification, write amplification, and space amplification.",
+            "--agy-model", "프로",
+            "--agy-effort", "낮음",
+            "--gemini-model", "flash",
+            "--out", str(out_ovr),
+        ])
+        self.assertEqual(rc_ovr, 0)
+        self.assertEqual(res_ovr["agy_model"], "pro")
+        self.assertEqual(res_ovr["agy_effort"], "low")
+        self.assertEqual(res_ovr["gemini_model"], "Flash")
+
+        job_dir_ovr = self.jobs_dir / "auto_ovr_job"
+        inv_ovr = json.loads((job_dir_ovr / "relay" / "agy_invoked.json").read_text(encoding="utf-8"))
+        self.assertEqual(inv_ovr["model"], "pro")
+        self.assertEqual(inv_ovr["effort"], "low")
+
+        req_ovr = json.loads((job_dir_ovr / "relay" / "request.json").read_text(encoding="utf-8"))
+        self.assertEqual(req_ovr["gemini_model"], "Flash")
+        self.assertEqual(req_ovr["env"]["GEMINI_DR_MODE"], "Flash")
+
+        meta_ovr = json.loads(Path(str(out_ovr) + ".meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta_ovr["agy_model"], "pro")
+        self.assertEqual(meta_ovr["agy_effort"], "low")
+        self.assertEqual(meta_ovr["gemini_model"], "Flash")
+
+    def test_collect_subcommand_model_options_propagation(self) -> None:
+        # Initialize job
+        self.run_dr([
+            "init",
+            "--job", "collect_model_job",
+            "--prompt", "Evaluate consensus protocols.",
+            "--goal", "Raft vs PBFT throughput comparison.",
+        ])
+
+        # Run collect in relay mode (Case 3) with explicit overrides
+        report_out = self.out_dir / "collect_report.md"
+        rc_col, res_col, _ = self.run_dr([
+            "collect",
+            "--job", "collect_model_job",
+            "--agy-model", "pro",
+            "--agy-effort", "medium",
+            "--gemini-model", "argon",
+            "--out", str(report_out),
+        ])
+        self.assertEqual(rc_col, 0)
+        self.assertEqual(res_col["status"], "completed")
+        self.assertEqual(res_col["agy_model"], "pro")
+        self.assertEqual(res_col["agy_effort"], "medium")
+        self.assertEqual(res_col["gemini_model"], "Argon")
+
+        job_dir = self.jobs_dir / "collect_model_job"
+        inv_col = json.loads((job_dir / "relay" / "agy_invoked.json").read_text(encoding="utf-8"))
+        self.assertEqual(inv_col["model"], "pro")
+        self.assertEqual(inv_col["effort"], "medium")
+
+        req_col = json.loads((job_dir / "relay" / "request.json").read_text(encoding="utf-8"))
+        self.assertEqual(req_col["gemini_model"], "Argon")
+        self.assertEqual(req_col["env"]["GEMINI_DR_MODE"], "Argon")
+
+        meta_col = json.loads(Path(str(report_out) + ".meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta_col["agy_model"], "pro")
+        self.assertEqual(meta_col["agy_effort"], "medium")
+        self.assertEqual(meta_col["gemini_model"], "Argon")
+
+
+class ModelAndEffortEnvironmentVariablesTestCase(DeepResearchTestBase):
+    """Verify environment variable fallbacks and CLI override precedence (R1)."""
+
+    def test_env_vars_fallback_when_cli_omitted(self) -> None:
+        # Test fallback with AGY_MODEL, AGY_EFFORT, GEMINI_MODEL, GEMINI_DR_THINKING
+        extra_env = {
+            "AGY_MODEL": "pro",
+            "AGY_EFFORT": "medium",
+            "GEMINI_MODEL": "flash",
+            "GEMINI_DR_THINKING": "low",
+        }
+        rc, res, _ = self.run_dr(
+            [
+                "init",
+                "--job", "job_env_test_1",
+                "--prompt", "Investigate distributed tracing.",
+                "--goal", "Compare OpenTelemetry and Jaeger sampling strategies.",
+            ],
+            extra_env=extra_env,
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(res["agy_model"], "pro")
+        self.assertEqual(res["agy_effort"], "medium")
+        self.assertEqual(res["gemini_model"], "Flash")
+        self.assertEqual(res["gemini_thinking"], "low")
+
+        job_file = self.jobs_dir / "job_env_test_1" / "job.json"
+        job_data = json.loads(job_file.read_text(encoding="utf-8"))
+        self.assertEqual(job_data["agy_model"], "pro")
+        self.assertEqual(job_data["agy_effort"], "medium")
+        self.assertEqual(job_data["gemini_model"], "Flash")
+        self.assertEqual(job_data["gemini_thinking"], "low")
+
+    def test_alternate_env_vars_fallback(self) -> None:
+        # Test fallback with AGY_TASK_MODEL, AGY_TASK_EFFORT, GEMINI_DR_MODE
+        extra_env = {
+            "AGY_TASK_MODEL": "pro",
+            "AGY_TASK_EFFORT": "low",
+            "GEMINI_DR_MODE": "argon",
+        }
+        rc, res, _ = self.run_dr(
+            [
+                "init",
+                "--job", "job_env_test_2",
+                "--prompt", "Investigate distributed tracing.",
+                "--goal", "Compare OpenTelemetry and Jaeger sampling strategies.",
+            ],
+            extra_env=extra_env,
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(res["agy_model"], "pro")
+        self.assertEqual(res["agy_effort"], "low")
+        self.assertEqual(res["gemini_model"], "Argon")
+
+    def test_cli_options_override_environment_variables(self) -> None:
+        # Environment variables set to values, but CLI provides different values
+        extra_env = {
+            "AGY_MODEL": "flash 3.8",
+            "AGY_EFFORT": "low",
+            "GEMINI_MODEL": "flash",
+        }
+        rc, res, _ = self.run_dr(
+            [
+                "init",
+                "--job", "job_env_override",
+                "--prompt", "Investigate distributed tracing.",
+                "--goal", "Compare OpenTelemetry and Jaeger sampling strategies.",
+                "--agy-model", "pro",
+                "--agy-effort", "high",
+                "--gemini-model", "pro",
+            ],
+            extra_env=extra_env,
+        )
+        self.assertEqual(rc, 0)
+        # CLI overrides env vars
+        self.assertEqual(res["agy_model"], "pro")
+        self.assertEqual(res["agy_effort"], "high")
+        self.assertEqual(res["gemini_model"], "Pro")
+
+
+class ModelAndEffortPersistenceAndPropagationTestCase(DeepResearchTestBase):
+    """Verify multi-turn job persistence and execution chain propagation (R2)."""
+
+    def test_multi_turn_persistence_and_meta_deliverable(self) -> None:
+        report_out = self.out_dir / "persistent_report.md"
+
+        # 1. init with custom model choices
+        rc_init, _, _ = self.run_dr([
+            "init",
+            "--job", "multi_turn_job",
+            "--prompt", "Multi-version concurrency control in modern databases.",
+            "--goal", "Compare PostgreSQL tuple visibility and MySQL undo log approaches.",
+            "--agy-model", "flash",
+            "--agy-effort", "high",
+            "--gemini-model", "pro",
+            "--out", str(report_out),
+        ])
+        self.assertEqual(rc_init, 0)
+
+        job_dir = self.jobs_dir / "multi_turn_job"
+        job_json_1 = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+        self.assertEqual(job_json_1["agy_model"], "flash 3.8")
+        self.assertEqual(job_json_1["agy_effort"], "high")
+        self.assertEqual(job_json_1["gemini_model"], "Pro")
+
+        # 2. plan with NO model options -> persists original choices
+        rc_plan, _, _ = self.run_dr(["plan", "--job", "multi_turn_job"])
+        self.assertEqual(rc_plan, 0)
+
+        job_json_2 = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+        self.assertEqual(job_json_2["agy_model"], "flash 3.8")
+        self.assertEqual(job_json_2["agy_effort"], "high")
+        self.assertEqual(job_json_2["gemini_model"], "Pro")
+
+        # 3. edit with effort change -> updates only effort, maintains model
+        rc_edit, _, _ = self.run_dr([
+            "edit",
+            "--job", "multi_turn_job",
+            "--feedback", "Add CockroachDB latching and hybrid-logical-clock details.",
+            "--agy-effort", "medium",
+        ])
+        self.assertEqual(rc_edit, 0)
+
+        job_json_3 = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+        self.assertEqual(job_json_3["agy_model"], "flash 3.8")
+        self.assertEqual(job_json_3["agy_effort"], "medium")
+        self.assertEqual(job_json_3["gemini_model"], "Pro")
+
+        # 4. approve and stream to finalization
+        reason_str = "Plan satisfies all concurrency control review criteria across Postgres, MySQL, and CockroachDB."
+        rc_app, _, _ = self.run_dr([
+            "approve",
+            "--job", "multi_turn_job",
+            "--reason", reason_str,
+            "--out", str(report_out),
+        ])
+        self.assertEqual(rc_app, 0)
+
+        # 5. Verify final .meta.json reflects complete lifecycle state
+        meta_path = Path(str(report_out) + ".meta.json")
+        self.assertTrue(meta_path.is_file())
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        self.assertEqual(meta["agy_model"], "flash 3.8")
+        self.assertEqual(meta["agy_effort"], "medium")
+        self.assertEqual(meta["gemini_model"], "Pro")
+        self.assertEqual(meta["gemini_thinking"], "high")
+
+    def test_relay_command_line_and_request_env_structure(self) -> None:
+        self.run_dr([
+            "init",
+            "--job", "chain_test_job",
+            "--prompt", "Hardware transactional memory analysis.",
+            "--goal", "Intel TSX vs ARM TME performance and abort rates.",
+        ])
+
+        rc_plan, _, _ = self.run_dr([
+            "plan",
+            "--job", "chain_test_job",
+            "--agy-model", "pro",
+            "--agy-effort", "low",
+            "--gemini-model", "argon",
+        ])
+        self.assertEqual(rc_plan, 0)
+
+        job_dir = self.jobs_dir / "chain_test_job"
+        relay_dir = job_dir / "relay"
+
+        # Check relay/request.json has exact keys: gemini_model, gemini_thinking, env with GEMINI_DR_MODE and GEMINI_DR_THINKING
+        req = json.loads((relay_dir / "request.json").read_text(encoding="utf-8"))
+        self.assertEqual(req["gemini_model"], "Argon")
+        self.assertEqual(req["gemini_thinking"], "high")
+        self.assertIn("env", req)
+        self.assertEqual(req["env"]["GEMINI_DR_MODE"], "Argon")
+        self.assertEqual(req["env"]["GEMINI_DR_THINKING"], "high")
+
+        # Check relay/agy_invoked.json recorded exact args passed by invoke_agy_relay
+        inv = json.loads((relay_dir / "agy_invoked.json").read_text(encoding="utf-8"))
+        self.assertEqual(inv["model"], "pro")
+        self.assertEqual(inv["effort"], "low")
+
+        argv = inv["argv"]
+        # In agy_task command structure:
+        # sys.executable, agy_task, "--model", agy_model, "run", "--effort", agy_effort, "--deep-research", ...
+        self.assertIn("--model", argv)
+        model_idx = argv.index("--model")
+        self.assertEqual(argv[model_idx + 1], "pro")
+
+        self.assertIn("run", argv)
+        run_idx = argv.index("run")
+        self.assertIn("--effort", argv)
+        effort_idx = argv.index("--effort")
+        self.assertGreater(effort_idx, run_idx)
+        self.assertEqual(argv[effort_idx + 1], "low")
+        self.assertIn("--deep-research", argv)
 
 
 if __name__ == "__main__":

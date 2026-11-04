@@ -141,6 +141,7 @@ def main(argv=None) -> int:
         return run_bg_worker(Path(argv[1]), argv[2])
 
     p = argparse.ArgumentParser()
+    p.add_argument("--model")
     sub = p.add_subparsers(dest="cmd", required=True)
     pf = sub.add_parser("preflight")
     pf.add_argument("--workdir")
@@ -151,6 +152,7 @@ def main(argv=None) -> int:
     r.add_argument("-w", "--workdir", required=True)
     r.add_argument("-t", "--task")
     r.add_argument("-f", "--task-file")
+    r.add_argument("--effort", choices=["low", "medium", "high"])
     args, _ = p.parse_known_args(argv)
 
     if args.cmd == "preflight":
@@ -159,6 +161,14 @@ def main(argv=None) -> int:
 
     job_dir = Path(args.workdir).resolve()
     relay_dir = job_dir / "relay"
+    relay_dir.mkdir(parents=True, exist_ok=True)
+    invoked_info = {
+        "model": getattr(args, "model", None),
+        "effort": getattr(args, "effort", None),
+        "argv": argv,
+    }
+    write_json_atomic(relay_dir / "agy_invoked.json", invoked_info)
+
     req_path = relay_dir / "request.json"
     req = json.loads(req_path.read_text(encoding="utf-8"))
     step = req.get("step")
@@ -336,6 +346,7 @@ def main(argv=None) -> int:
             "denied": [],
         },
         "deep_research": dr_payload,
+        "agy_invoked": invoked_info,
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0

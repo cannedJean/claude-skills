@@ -37,6 +37,7 @@ Claude Code (Lead Orchestrator & Plan Reviewer)
   │
   ├─ 1. Orchestration Layer (scripts/deep_research.py — stdlib only)
   │     • Subcommands: preflight, setup, init, plan, edit, approve, auto, status, collect
+  │     • Pins & normalizes models: --agy-model, --agy-effort, --gemini-model (default: flash 3.8 high, Pro high)
   │     • Enforces 5 deterministic quality, provenance, and isolation gates
   │
   ├─ 2. Operator Relay Layer (skills/agy-delegate / scripts/relay_step.py)
@@ -88,13 +89,13 @@ Claude Code (Lead Orchestrator & Plan Reviewer)
 |---|---|---|
 | `preflight` | `[--target-dir DIR]` | Verify `agy`, `playwright`, Gemini app installation, CDP port 9223 liveness, and script synchronization. |
 | `setup` | `[--target-dir DIR]` | Synchronize bundled scripts (`relay_step.py`, `run_deep_research.py`, `patch_gemini_app.py`) and `SKILL.md` to target skill. |
-| `init` | `--prompt <text>` `--goal <text>` `[--out <path>]` | Create isolated job directory outside git tree; write `prompt.md` and `goal.md`. |
-| `plan` | `--job <id_or_path>` `[--deadline <sec>]` `[--show]` | Execute `plan` relay step; intercept fuse; save `plan_v1.md`. |
-| `edit` | `--job <id_or_path>` `--feedback <text>` | Submit plan refinement feedback (`edit` relay step); save `plan_vN.md`. |
-| `approve` | `--job <id_or_path>` `--reason <text>` `[--no-wait]` | Enforce Plan Approval Gate (`>=20` chars); start detached research; stream progress; enforce Report Quality Gate; save report. |
-| `auto` | `--prompt <text>` `--goal <text>` `[--out <path>]` `[--no-wait]` | Unattended end-to-end execution (`init` + `auto` relay step + live streaming + Quality Gate). |
+| `init` | `--prompt <text>` `--goal <text>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` | Create isolated job directory outside git tree; write `prompt.md` and `goal.md`; lock initial model/effort settings. |
+| `plan` | `--job <id_or_path>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--deadline <sec>]` `[--show]` | Execute `plan` relay step; intercept fuse; save `plan_v1.md`. |
+| `edit` | `--job <id_or_path>` `--feedback <text>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` | Submit plan refinement feedback (`edit` relay step); save `plan_vN.md`. |
+| `approve` | `--job <id_or_path>` `--reason <text>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` | Enforce Plan Approval Gate (`>=20` chars); start detached research; stream progress; enforce Report Quality Gate; save report. |
+| `auto` | `--prompt <text>` `--goal <text>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` | Unattended end-to-end execution (`init` + `auto` relay step + live streaming + Quality Gate). |
 | `status` | `--job <id_or_path>` | Check job state, detached worker PID liveness, and latest progress entry. |
-| `collect` | `--job <id_or_path>` `[--out <path>]` `[--no-wait]` | Re-attach to detached worker or completed conversation; verify Quality Gate; save report. |
+| `collect` | `--job <id_or_path>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` | Re-attach to detached worker or completed conversation; verify Quality Gate; save report. |
 
 ### Supporting Script CLIs
 
@@ -107,6 +108,138 @@ Claude Code (Lead Orchestrator & Plan Reviewer)
 - **`run_deep_research.py`**:
   - `python scripts/run_deep_research.py --help` (exit 0)
   - `python scripts/run_deep_research.py --step {plan,edit,approve,auto} --prompt <text> [--output <path>] [--dry-run]`
+
+## Model & Reasoning Effort Configuration
+
+Claude Code can explicitly pin the Antigravity model, Antigravity reasoning effort level, and Google Gemini desktop application model when initiating or executing deep research.
+
+### Default Behavior
+
+When model and effort flags are omitted (and corresponding environment variables are unset), `deep_research.py` automatically applies optimal defaults:
+- **Antigravity CLI Model (`--agy-model`)**: `flash 3.8`
+- **Antigravity Reasoning Effort (`--agy-effort`)**: `high`
+- **Google Gemini Desktop Model (`--gemini-model`)**: `Pro` with thinking level `높음` (`high`)
+
+These default settings ensure balanced, high-depth synthesis with thorough chain-of-thought analysis in both Antigravity orchestration and the Gemini desktop application.
+
+### CLI Option Parameters
+
+The following options are available across `init`, `plan`, `edit`, `approve`, `auto`, and `collect`:
+
+| Option | Argument | Description | Default |
+|---|---|---|---|
+| `--agy-model` | `MODEL_SLUG` | Antigravity CLI model slug passed to `agy_task.py --model`. Accepts model names, friendly aliases, or custom slugs. | `flash 3.8` |
+| `--agy-effort` | `EFFORT` | Antigravity reasoning effort level passed to `agy_task.py ... --effort`. Choices: `low`, `medium`, `high`. | `high` |
+| `--gemini-model` | `MODEL_MODE` | Google Gemini desktop app mode and thinking level passed via `GEMINI_DR_MODE` / `GEMINI_DR_THINKING`. | `Pro` (`high` thinking) |
+
+### Friendly Aliases (English & Korean)
+
+Input values are automatically normalized to canonical slugs and settings. Both English and Korean aliases are supported:
+
+#### Antigravity Model (`--agy-model`)
+| Canonical Model | Recognized Aliases |
+|---|---|
+| `flash 3.8` | `flash`, `flash 3.8`, `flash-3.8`, `flash3.8`, `3.8 flash`, `3.8-flash`, `플래시` |
+| `pro` | `pro`, `pro 3.8`, `pro-3.8`, `pro3.8`, `3.8 pro`, `프로` |
+| *Custom Slugs* | Any custom slug (e.g., `gemini-2.5-flash`, `claude-3-5-sonnet`) is preserved verbatim. |
+
+#### Antigravity Reasoning Effort (`--agy-effort`)
+| Canonical Effort | Recognized Aliases |
+|---|---|
+| `high` | `high`, `높음`, `h`, `최대`, `hi` |
+| `medium` | `medium`, `중간`, `보통`, `m`, `med`, `mid` |
+| `low` | `low`, `낮음`, `l`, `lo` |
+
+*Note*: Any invalid effort value exits with status code `5` (`INVALID_EFFORT`).
+
+#### Google Gemini Desktop Model (`--gemini-model`)
+| Mode / Thinking | Recognized Aliases |
+|---|---|
+| `("Pro", "high")` | `pro`, `3.8 pro`, `pro 3.8`, `high`, `높음`, `pro high`, `pro-high`, `pro (높음)`, `프로`, `advanced` |
+| `("Flash", "high")` | `flash`, `flash 3.8`, `flash-3.8`, `flash3.8`, `3.8 flash`, `플래시` |
+| `("Argon", "high")` | `argon`, `아르곤` |
+| *Custom Mode* | Any other string preserves the specified mode name with `high` thinking level by default. |
+
+### Environment Variables & Resolution Precedence
+
+Settings can also be configured via environment variables. The configuration resolution precedence is strictly ordered from highest to lowest:
+
+1. **Command-Line Arguments**: `--agy-model`, `--agy-effort`, `--gemini-model` passed directly to the subcommand.
+2. **Job State (`job.json`)**: Previously resolved settings persisted in the active job directory (inherited across subsequent subcommands).
+3. **Specific Environment Variables**:
+   - `AGY_DR_MODEL`: Specific Antigravity model for deep research.
+   - `AGY_DR_EFFORT`: Specific Antigravity reasoning effort for deep research.
+   - `GEMINI_DR_MODEL`: Specific Gemini desktop model mode.
+   - `GEMINI_DR_THINKING`: Explicit thinking level override (`high`, `medium`, `low`).
+4. **General Environment Variables**:
+   - `AGY_MODEL` or `AGY_TASK_MODEL`: Fallback Antigravity model.
+   - `AGY_EFFORT` or `AGY_TASK_EFFORT`: Fallback Antigravity effort.
+   - `GEMINI_MODEL` or `GEMINI_DR_MODE`: Fallback Gemini desktop model mode.
+5. **Built-in Defaults**: `agy_model="flash 3.8"`, `agy_effort="high"`, `gemini_model="Pro"`, `gemini_thinking="high"`.
+
+### Execution Chain Propagation & Provenance
+
+When model options are resolved:
+1. **Antigravity CLI (`agy_task.py`)**: `deep_research.py` invokes `agy_task.py --model <agy_model> run --effort <agy_effort> --deep-research ...`.
+2. **Relay Protocol (`relay/request.json`)**: Injects `"gemini_model"`, `"gemini_thinking"`, and `"env": {"GEMINI_DR_MODE": ..., "GEMINI_DR_THINKING": ...}` into the step request.
+3. **Desktop Driver (`run_deep_research.py`)**: `ensure_pro_mode` reads the environment variables and selects the target model and thinking controls in the Gemini desktop app UI.
+4. **Metadata & Provenance (`.meta.json`)**: On completion, resolved models and effort levels are stored in `<job_dir>/job.json` and recorded in the report metadata deliverable `<out>.md.meta.json` under `"agy_model"`, `"agy_effort"`, `"gemini_model"`, and `"gemini_thinking"`.
+
+### Concrete CLI Command Examples
+
+#### 1. Initializing Research with Custom Models and Korean Aliases
+```bash
+python scripts/deep_research.py init \
+  --prompt "Evaluate vector databases for 100M embeddings." \
+  --goal "Compare throughput, p99 latency, and DRAM/SSD footprint." \
+  --agy-model "플래시" \
+  --agy-effort "높음" \
+  --gemini-model "프로" \
+  --out ./reports/vector_db_report.md
+```
+
+#### 2. Overriding Effort During Plan Review and Revision
+```bash
+# Generate plan with high effort
+python scripts/deep_research.py plan --job <job_id> --agy-effort "high"
+
+# Revise plan with updated instructions and model
+python scripts/deep_research.py edit \
+  --job <job_id> \
+  --feedback "Add GPU memory footprint comparison for IVF-PQ." \
+  --agy-model "pro" \
+  --agy-effort "medium"
+```
+
+#### 3. Approving Research Plan with Explicit Gemini Model
+```bash
+python scripts/deep_research.py approve \
+  --job <job_id> \
+  --reason "The plan thoroughly addresses all evaluation criteria in goal.md including throughput and memory footprint." \
+  --gemini-model "pro"
+```
+
+#### 4. Unattended End-to-End Execution (`auto`) with Pinned Models
+```bash
+python scripts/deep_research.py auto \
+  --prompt "Analyze state-of-the-art sparse-dense hybrid retrieval in Lucene 10." \
+  --goal "Cover block-max WAND, BM25 quantization, and cite primary benchmarks." \
+  --agy-model "flash 3.8" \
+  --agy-effort "high" \
+  --gemini-model "pro" \
+  --out ./reports/hybrid_retrieval.md
+```
+
+#### 5. Session-wide Configuration via Environment Variables
+```bash
+# Set environment variables for the shell session
+export AGY_MODEL="flash 3.8"
+export AGY_EFFORT="high"
+export GEMINI_MODEL="pro"
+
+# Commands automatically adopt the exported configuration
+python scripts/deep_research.py init --prompt "..." --goal "..."
+```
 
 ## Step-by-Step Workflow Instructions
 
@@ -136,10 +269,14 @@ Pre-lock acceptance criteria and initialize an isolated job directory outside an
 python scripts/deep_research.py init \
   --prompt "Compare HNSW, DiskANN, and IVF-PQ for cloud-native vector search at 50M vectors." \
   --goal "1. Compare Recall@10, p99 latency, and DRAM/SSD footprint. 2. Cover streaming ingestion & recovery. 3. Cite primary benchmarks and papers." \
+  --agy-model "flash 3.8" \
+  --agy-effort "high" \
+  --gemini-model "pro" \
   --out ./reports/vector_indexing_report.md
 ```
 
 - **Pre-Plan Gate**: Non-empty `--prompt` and `--goal` are required (exit code 2 if omitted).
+- **Model & Effort Defaults**: When `--agy-model`, `--agy-effort`, or `--gemini-model` are omitted, `deep_research.py` automatically initializes with defaults: Antigravity model `flash 3.8` (effort `high`), and Gemini desktop model `Pro` (thinking `높음`/`high`). Friendly aliases (e.g. `플래시`, `높음`, `프로`) are recognized. Resolved settings persist in `job.json` and are inherited by downstream steps unless overridden.
 - **Job Isolation Gate**: Job directory is created under `%LOCALAPPDATA%\agy-deep-research\jobs\<id>` (or `$AGY_DR_JOBS`). Any path inside a git repository is rejected with exit code 5 (`GIT_REPO_ESCAPE`).
 - **Korean Safety Check**: Prompts are scanned for sensitive political/election keywords that cause safety refusal.
 
@@ -190,7 +327,7 @@ python scripts/deep_research.py approve \
 - Launches detached worker (`mode: "detach"`), records worker PID in `relay/started.json`.
 - Streams real-time thoughts from `<job_dir>/relay/progress.jsonl` to `stderr` (`[progress <elapsed>s] <text>`) while verifying `pid_alive(pid)`.
 - **Report Quality Gate**: Validates that completed Markdown report contains `>= 400` characters and valid `#` headings.
-- Writes `<out>.md` and provenance metadata `<out>.md.meta.json`.
+- Writes `<out>.md` and provenance metadata `<out>.md.meta.json` (capturing report statistics and resolved `agy_model`, `agy_effort`, `gemini_model`, and `gemini_thinking`).
 
 ### Phase 6: Asynchronous Detached Execution & Re-attachment
 
@@ -217,6 +354,9 @@ When the user explicitly instructs to run without interactive plan review:
 python scripts/deep_research.py auto \
   --prompt "Analyze state-of-the-art sparse-dense hybrid retrieval in Lucene 10." \
   --goal "Cover block-max WAND, BM25 quantization, SIMD optimizations, and cite Apache Lucene JIRAs." \
+  --agy-model "flash 3.8" \
+  --agy-effort "high" \
+  --gemini-model "pro" \
   --out ./reports/hybrid_retrieval.md
 ```
 

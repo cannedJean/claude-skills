@@ -54,13 +54,13 @@ python skills/agy-deep-research/scripts/deep_research.py preflight
 |---|---|---|
 | `preflight` | `[--target-dir DIR]` | Verify `agy`, `playwright`, `Gemini.exe` / CDP port `9223`, and SHA-256 sync status of bundled scripts. |
 | `setup` | `[--target-dir DIR]` | Copy/update `relay_step.py`, `run_deep_research.py`, `patch_gemini_app.py`, and `SKILL.md` into target skill. |
-| `init` | `--prompt TEXT\|--prompt-file FILE` `--goal TEXT\|--goal-file FILE` `[--job ID_OR_PATH]` `[--out PATH]` | Create an isolated job directory outside any `.git` repo and write `prompt.md` + `goal.md`. |
-| `plan` | `--job ID_OR_PATH` `[--deadline SEC]` `[--show]` | Execute `plan` relay step via `agy_task.py run --deep-research` and save `plan_v1.md`. |
-| `edit` | `--job ID_OR_PATH` `--feedback TEXT\|--feedback-file FILE` `[--deadline SEC]` | Send plan refinement feedback (`edit` relay step) and save `plan_vN.md`. |
-| `approve` | `--job ID_OR_PATH` `--reason TEXT` (`>=20` chars) `[--out PATH]` `[--no-wait]` `[--timeout SEC]` | Enforce Plan Approval Gate, start detached research (`mode="detach"`), stream `progress.jsonl` to `stderr`, enforce Report Quality Gate, and write `<out>.md` + `<out>.md.meta.json`. |
-| `auto` | `--prompt ...` `--goal ...` `[--reason TEXT]` `[--out PATH]` `[--no-wait]` `[--timeout SEC]` | Unattended end-to-end execution (`init` + `auto` detached relay step + live streaming + Quality Gate). |
+| `init` | `--prompt TEXT\|--prompt-file FILE` `--goal TEXT\|--goal-file FILE` `[--job ID_OR_PATH]` `[--agy-model MODEL]` `[--agy-effort EFFORT]` `[--gemini-model MODEL]` `[--out PATH]` | Create an isolated job directory outside any `.git` repo, write `prompt.md` + `goal.md`, and initialize model/effort settings. |
+| `plan` | `--job ID_OR_PATH` `[--agy-model MODEL]` `[--agy-effort EFFORT]` `[--gemini-model MODEL]` `[--deadline SEC]` `[--show]` | Execute `plan` relay step via `agy_task.py run --deep-research` and save `plan_v1.md`. |
+| `edit` | `--job ID_OR_PATH` `--feedback TEXT\|--feedback-file FILE` `[--agy-model MODEL]` `[--agy-effort EFFORT]` `[--gemini-model MODEL]` `[--deadline SEC]` | Send plan refinement feedback (`edit` relay step) and save `plan_vN.md`. |
+| `approve` | `--job ID_OR_PATH` `--reason TEXT` (`>=20` chars) `[--agy-model MODEL]` `[--agy-effort EFFORT]` `[--gemini-model MODEL]` `[--out PATH]` `[--no-wait]` `[--timeout SEC]` | Enforce Plan Approval Gate, start detached research (`mode="detach"`), stream `progress.jsonl` to `stderr`, enforce Report Quality Gate, and write `<out>.md` + `<out>.md.meta.json`. |
+| `auto` | `--prompt ...` `--goal ...` `[--agy-model MODEL]` `[--agy-effort EFFORT]` `[--gemini-model MODEL]` `[--reason TEXT]` `[--out PATH]` `[--no-wait]` `[--timeout SEC]` | Unattended end-to-end execution (`init` + `auto` detached relay step + live streaming + Quality Gate). |
 | `status` | `--job ID_OR_PATH` | Inspect job status, detached worker `pid_alive(pid)` state, and latest `progress.jsonl` entry. |
-| `collect` | `--job ID_OR_PATH` `[--out PATH]` `[--no-wait]` `[--timeout SEC]` | Re-attach to a running worker or collect finished report from conversation, then run Report Quality Gate. |
+| `collect` | `--job ID_OR_PATH` `[--agy-model MODEL]` `[--agy-effort EFFORT]` `[--gemini-model MODEL]` `[--out PATH]` `[--no-wait]` `[--timeout SEC]` | Re-attach to a running worker or collect finished report from conversation, then run Report Quality Gate. |
 
 ### Supporting Scripts
 
@@ -79,6 +79,54 @@ python skills/agy-deep-research/scripts/deep_research.py preflight
   python scripts/run_deep_research.py --help
   python scripts/run_deep_research.py --step {auto,plan,edit,approve} --prompt <text> [--output <path>] [--dry-run]
   ```
+
+## Model & Reasoning Effort Options
+
+`agy-deep-research` supports explicitly pinning Antigravity and Gemini models as well as thinking effort levels.
+
+### Default Behavior
+
+When options and environment variables are omitted:
+- **Antigravity CLI Model (`--agy-model`)**: `flash 3.8` (reasoning effort: `high`)
+- **Google Gemini Desktop Model (`--gemini-model`)**: `Pro` (thinking level: `높음` / `high`)
+
+### CLI Options
+
+| Flag | Description | Default | Choices / Friendly Aliases |
+|---|---|---|---|
+| `--agy-model` | Antigravity model slug passed to `agy_task.py --model` | `flash 3.8` | `flash`, `flash 3.8`, `플래시`, `pro`, `프로`, or any custom model slug |
+| `--agy-effort` | Antigravity reasoning effort passed to `agy_task.py ... --effort` | `high` | `low` (`낮음`), `medium` (`중간`), `high` (`높음`, `최대`) |
+| `--gemini-model` | Gemini desktop app model mode and thinking level | `pro` | `pro`, `프로`, `high`, `높음` -> `("Pro", "high")`; `flash`, `플래시` -> `("Flash", "high")`; `argon`, `아르곤` -> `("Argon", "high")` |
+
+### Environment Variables & Precedence
+
+Model options can also be provided via environment variables. The resolution hierarchy is:
+1. **CLI Flag**: `--agy-model`, `--agy-effort`, `--gemini-model` passed to subcommand
+2. **Job State**: Persisted in `<job_dir>/job.json` (inherited across `plan`, `edit`, `approve`, `collect`)
+3. **Specific Environment Variables**: `AGY_DR_MODEL`, `AGY_DR_EFFORT`, `GEMINI_DR_MODEL`, `GEMINI_DR_THINKING`
+4. **General Environment Variables**: `AGY_MODEL` / `AGY_TASK_MODEL`, `AGY_EFFORT` / `AGY_TASK_EFFORT`, `GEMINI_MODEL` / `GEMINI_DR_MODE`
+5. **Built-in Defaults**: `flash 3.8` (high effort) and `Pro` (high thinking)
+
+### Example Usage
+
+```bash
+# Explicit models and Korean aliases at initialization
+python skills/agy-deep-research/scripts/deep_research.py init \
+  --prompt "Analyze vector database indexing algorithms." \
+  --goal "Compare HNSW, DiskANN, and IVF-PQ recall@10 and memory footprint." \
+  --agy-model "플래시" \
+  --agy-effort "높음" \
+  --gemini-model "프로"
+
+# Unattended end-to-end execution with custom effort
+python skills/agy-deep-research/scripts/deep_research.py auto \
+  --prompt "State of the art in sparse-dense retrieval." \
+  --goal "Cover Lucene 10 BM25 quantization and SIMD block-max WAND." \
+  --agy-model "flash 3.8" \
+  --agy-effort "high" \
+  --gemini-model "pro" \
+  --out ./reports/retrieval.md
+```
 
 ## Job Directory Layout & Relay Protocol (`relay_version: 2`)
 

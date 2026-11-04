@@ -184,8 +184,10 @@ def prevent_background_throttling(page):
 
 
 def ensure_pro_mode(page):
-    """Ensure the wanted model mode is selected. Default 'Pro' (e.g. '3.8 Pro'); GEMINI_DR_MODE=Argon selects 'Argon'."""
+    """Ensure the wanted model mode and thinking level are selected. Default 'Pro' / 'high';
+    GEMINI_DR_MODE selects model, GEMINI_DR_THINKING selects reasoning intensity."""
     target = os.environ.get("GEMINI_DR_MODE", "Pro").strip() or "Pro"
+    thinking_target = os.environ.get("GEMINI_DR_THINKING", "high").strip() or "high"
     mode_selectors = [
         '[data-test-id*="mode-menu"]',
         'button[aria-label*="Model selector"]',
@@ -216,19 +218,20 @@ def ensure_pro_mode(page):
         mode_btn = page.locator(combined_selector).first
 
     if mode_btn.count() > 0:
-        current_mode = (mode_btn.inner_text() or mode_btn.get_attribute("aria-label") or "").strip()
-        if target not in current_mode:
+        current_mode = str(mode_btn.inner_text() or mode_btn.get_attribute("aria-label") or "").strip()
+        if target.lower() not in current_mode.lower():
             log(f"Current model mode is '{current_mode}'. Switching to '{target}'...")
             mode_btn.evaluate("el => el.click()")
             time.sleep(0.8)
             switched = page.evaluate(
                 """(target) => {
+                    const targetLower = target.toLowerCase();
                     const items = Array.from(document.querySelectorAll(
                         'button[role="menuitemradio"], button[role="menuitem"], [role="menuitemradio"], [role="menuitem"], mat-option'
                     ));
                     const proItem = items.find(el => {
-                        const txt = (el.innerText || '').trim();
-                        return txt.includes(target) && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+                        const txt = (el.innerText || '').trim().toLowerCase();
+                        return txt.includes(targetLower) && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
                     });
                     if (proItem) {
                         (proItem.querySelector('button') || proItem).click();
@@ -239,13 +242,73 @@ def ensure_pro_mode(page):
             )
             if switched:
                 time.sleep(1.0)
-                new_mode = (mode_btn.inner_text() or mode_btn.get_attribute("aria-label") or "").strip()
+                new_mode = str(mode_btn.inner_text() or mode_btn.get_attribute("aria-label") or "").strip()
                 log(f"Switched model mode to: {new_mode}")
             else:
                 log(f"Warning: Could not find enabled '{target}' option in mode menu.")
                 page.keyboard.press("Escape")
         else:
             log(f"Model mode already set to: {current_mode}")
+
+    # Select thinking level if UI controls are present
+    thinking_selectors = [
+        '[data-test-id*="thinking"]',
+        'button[aria-label*="Thinking"]',
+        'button[aria-label*="사고"]',
+        'button[aria-label*="thinking"]',
+        '[aria-label*="Thinking level"]',
+        '[aria-label*="사고 수준"]',
+    ]
+    try:
+        thinking_btn = None
+        for sel in thinking_selectors:
+            loc = page.locator(sel).first
+            try:
+                if loc.count() > 0 and loc.is_visible():
+                    thinking_btn = loc
+                    break
+            except Exception:
+                continue
+
+        if thinking_btn and thinking_btn.count() > 0:
+            current_thinking = str(thinking_btn.inner_text() or thinking_btn.get_attribute("aria-label") or "").strip()
+            thinking_map = {
+                "high": ["high", "높음"],
+                "medium": ["medium", "중간", "보통"],
+                "low": ["low", "낮음"],
+            }
+            targets = thinking_map.get(thinking_target.lower(), [thinking_target.lower()])
+            already_match = any(t in current_thinking.lower() for t in targets)
+            if not already_match:
+                log(f"Current thinking level is '{current_thinking}'. Switching to '{thinking_target}'...")
+                thinking_btn.evaluate("el => el.click()")
+                time.sleep(0.8)
+                switched_th = page.evaluate(
+                    """(targets) => {
+                        const items = Array.from(document.querySelectorAll(
+                            'button[role="menuitemradio"], button[role="menuitem"], [role="menuitemradio"], [role="menuitem"], mat-option, [role="option"]'
+                        ));
+                        const matchItem = items.find(el => {
+                            const txt = (el.innerText || '').trim().toLowerCase();
+                            return targets.some(t => txt.includes(t)) && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+                        });
+                        if (matchItem) {
+                            (matchItem.querySelector('button') || matchItem).click();
+                            return true;
+                        }
+                        return false;
+                    }""", targets
+                )
+                if switched_th:
+                    time.sleep(0.5)
+                    log(f"Switched thinking level to: {thinking_target}")
+                else:
+                    log(f"Notice: Thinking option '{thinking_target}' not found in menu.")
+                    page.keyboard.press("Escape")
+            else:
+                log(f"Thinking level already set to: {current_thinking}")
+    except Exception as e:
+        log(f"Notice: Thinking level selection check skipped ({e})")
 
 
 def activate_deep_research_mode(page):

@@ -73,6 +73,101 @@ def die(msg: str, exit_code: int, **extra) -> None:
     sys.exit(exit_code)
 
 
+DEFAULT_AGY_MODEL = "flash 3.8"
+DEFAULT_AGY_EFFORT = "high"
+DEFAULT_GEMINI_MODEL = "Pro"
+DEFAULT_GEMINI_THINKING = "high"
+
+
+def normalize_agy_model(val: str | None) -> str:
+    if val is None or not str(val).strip():
+        return DEFAULT_AGY_MODEL
+    raw = str(val).strip()
+    low = raw.lower()
+    if low in ("flash", "flash 3.8", "flash-3.8", "flash3.8", "3.8 flash", "3.8-flash", "플래시"):
+        return "flash 3.8"
+    if low in ("pro", "pro 3.8", "pro-3.8", "pro3.8", "3.8 pro", "프로"):
+        return "pro"
+    return raw
+
+
+def normalize_agy_effort(val: str | None) -> str:
+    if val is None or not str(val).strip():
+        return DEFAULT_AGY_EFFORT
+    raw = str(val).strip()
+    low = raw.lower()
+    if low in ("high", "높음", "h", "최대", "hi"):
+        return "high"
+    if low in ("medium", "중간", "보통", "m", "med", "mid"):
+        return "medium"
+    if low in ("low", "낮음", "l", "lo"):
+        return "low"
+    die(f"invalid --agy-effort '{val}': choose from low, medium, high (aliases: 높음, 중간, 낮음)", 5, code="INVALID_EFFORT")
+    return "high"
+
+
+def normalize_gemini_model(val: str | None) -> tuple[str, str]:
+    if val is None or not str(val).strip():
+        return (DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_THINKING)
+    raw = str(val).strip()
+    low = raw.lower()
+    if low in ("pro", "3.8 pro", "pro 3.8", "high", "높음", "pro high", "pro-high", "pro (높음)", "프로", "advanced"):
+        return ("Pro", "high")
+    if low in ("flash", "flash 3.8", "flash-3.8", "flash3.8", "3.8 flash", "플래시"):
+        return ("Flash", "high")
+    if low in ("argon", "아르곤"):
+        return ("Argon", "high")
+    return (raw, "high")
+
+
+def _sync_job_model_settings(job: dict, a) -> None:
+    cli_agy_model = getattr(a, "agy_model", None)
+    if cli_agy_model is not None and str(cli_agy_model).strip():
+        job["agy_model"] = normalize_agy_model(cli_agy_model)
+    elif "agy_model" not in job:
+        env_val = os.environ.get("AGY_DR_MODEL") or os.environ.get("AGY_MODEL") or os.environ.get("AGY_TASK_MODEL")
+        job["agy_model"] = normalize_agy_model(env_val)
+
+    cli_agy_effort = getattr(a, "agy_effort", None)
+    if cli_agy_effort is not None and str(cli_agy_effort).strip():
+        job["agy_effort"] = normalize_agy_effort(cli_agy_effort)
+    elif "agy_effort" not in job:
+        env_val = os.environ.get("AGY_DR_EFFORT") or os.environ.get("AGY_EFFORT") or os.environ.get("AGY_TASK_EFFORT")
+        job["agy_effort"] = normalize_agy_effort(env_val)
+
+    cli_gemini_model = getattr(a, "gemini_model", None)
+    if cli_gemini_model is not None and str(cli_gemini_model).strip():
+        g_model, g_thinking = normalize_gemini_model(cli_gemini_model)
+        job["gemini_model"] = g_model
+        job["gemini_thinking"] = os.environ.get("GEMINI_DR_THINKING") or g_thinking
+    elif "gemini_model" not in job or "gemini_thinking" not in job:
+        env_val = os.environ.get("GEMINI_DR_MODEL") or os.environ.get("GEMINI_MODEL") or os.environ.get("GEMINI_DR_MODE")
+        g_model, g_thinking = normalize_gemini_model(env_val)
+        job["gemini_model"] = job.get("gemini_model", g_model)
+        job["gemini_thinking"] = os.environ.get("GEMINI_DR_THINKING") or job.get("gemini_thinking", g_thinking)
+
+
+def _add_model_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--agy-model",
+        dest="agy_model",
+        default=None,
+        help="Antigravity model slug (default: 'flash 3.8'; aliases: flash, flash 3.8, pro, custom slug)",
+    )
+    parser.add_argument(
+        "--agy-effort",
+        dest="agy_effort",
+        default=None,
+        help="Antigravity reasoning effort level (default: 'high'; choices: low, medium, high; aliases: 높음, 중간, 낮음)",
+    )
+    parser.add_argument(
+        "--gemini-model",
+        dest="gemini_model",
+        default=None,
+        help="Gemini desktop app model mode (default: 'pro' [high thinking]; aliases: pro, high, 높음, flash, argon)",
+    )
+
+
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -486,17 +581,38 @@ def build_relay_task_prompt(step: str, seq: int, job_dir: Path, dr_skill_dir: Pa
     )
 
 
-def invoke_agy_relay(job_dir: Path, step: str, seq: int, target_skill_dir: str | None = None) -> tuple[int, dict, dict | None]:
+def invoke_agy_relay(
+    job_dir: Path,
+    step: str,
+    seq: int,
+    target_skill_dir: str | None = None,
+    agy_model: str | None = None,
+    agy_effort: str | None = None,
+) -> tuple[int, dict, dict | None]:
     agy_task = Path(os.environ.get("AGY_TASK") or DEFAULT_AGY_TASK).resolve()
     if not agy_task.is_file():
         die(f"agy_task.py not found at {agy_task}", 3, code="AGY_TASK_NOT_FOUND")
     dr_skill_dir = resolve_active_dr_skill_dir(target_skill_dir)
     task_prompt = build_relay_task_prompt(step, seq, job_dir, dr_skill_dir)
 
+    job_data = read_json_safe(job_dir / "job.json") or {}
+    if not agy_model:
+        agy_model = job_data.get("agy_model") or normalize_agy_model(
+            os.environ.get("AGY_DR_MODEL") or os.environ.get("AGY_MODEL") or os.environ.get("AGY_TASK_MODEL")
+        )
+    if not agy_effort:
+        agy_effort = job_data.get("agy_effort") or normalize_agy_effort(
+            os.environ.get("AGY_DR_EFFORT") or os.environ.get("AGY_EFFORT") or os.environ.get("AGY_TASK_EFFORT")
+        )
+
     cmd = [
         sys.executable,
         str(agy_task),
+        "--model",
+        agy_model,
         "run",
+        "--effort",
+        agy_effort,
         "--deep-research",
         "--dr-skill-dir",
         str(dr_skill_dir),
@@ -609,6 +725,45 @@ def stream_progress_and_finalize(
     return finalize_completed_report(job_dir, job, res, out_path, highlights)
 
 
+def write_output_meta(
+    job_dir: Path,
+    job: dict,
+    out_path: Path,
+    gate_stats: dict,
+    res: dict,
+    highlights: list[str],
+    completed_at: str,
+    sources_count: int,
+    elapsed_s: float,
+    url: str,
+) -> Path:
+    meta_path = Path(str(out_path) + ".meta.json")
+    meta = {
+        "job_id": job["job_id"],
+        "created_at": job.get("created_at"),
+        "completed_at": completed_at,
+        "prompt": read_text(job_dir / "prompt.md").strip() if (job_dir / "prompt.md").is_file() else "",
+        "goal": read_text(job_dir / "goal.md").strip() if (job_dir / "goal.md").is_file() else "",
+        "approved_plan": job.get("latest_plan") or "",
+        "plan_iterations": int(job.get("plan_iterations") or 0),
+        "approval_reason": job.get("approval_reason") or "",
+        "url": url,
+        "report_file": str(out_path),
+        "meta_file": str(meta_path),
+        "report_chars": gate_stats["report_chars"],
+        "sources_count": int(sources_count),
+        "elapsed_s": float(elapsed_s),
+        "progress_highlights": highlights,
+        "confinement": job.get("last_confinement") or {"mode": "deep-research", "enabled": True},
+        "agy_model": job.get("agy_model", DEFAULT_AGY_MODEL),
+        "agy_effort": job.get("agy_effort", DEFAULT_AGY_EFFORT),
+        "gemini_model": job.get("gemini_model", DEFAULT_GEMINI_MODEL),
+        "gemini_thinking": job.get("gemini_thinking", DEFAULT_GEMINI_THINKING),
+    }
+    write_json_atomic(meta_path, meta)
+    return meta_path
+
+
 def finalize_completed_report(
     job_dir: Path,
     job: dict,
@@ -658,26 +813,18 @@ def finalize_completed_report(
     if res.get("plan") and not job.get("latest_plan"):
         job["latest_plan"] = res["plan"]
 
-    meta_path = Path(str(out_path) + ".meta.json")
-    meta = {
-        "job_id": job["job_id"],
-        "created_at": job.get("created_at"),
-        "completed_at": completed_at,
-        "prompt": read_text(job_dir / "prompt.md").strip() if (job_dir / "prompt.md").is_file() else "",
-        "goal": read_text(job_dir / "goal.md").strip() if (job_dir / "goal.md").is_file() else "",
-        "approved_plan": job.get("latest_plan") or "",
-        "plan_iterations": int(job.get("plan_iterations") or 0),
-        "approval_reason": job.get("approval_reason") or "",
-        "url": url,
-        "report_file": str(out_path),
-        "meta_file": str(meta_path),
-        "report_chars": gate_stats["report_chars"],
-        "sources_count": int(sources_count),
-        "elapsed_s": float(elapsed_s),
-        "progress_highlights": highlights,
-        "confinement": job.get("last_confinement") or {"mode": "deep-research", "enabled": True},
-    }
-    write_json_atomic(meta_path, meta)
+    meta_path = write_output_meta(
+        job_dir=job_dir,
+        job=job,
+        out_path=out_path,
+        gate_stats=gate_stats,
+        res=res,
+        highlights=highlights,
+        completed_at=completed_at,
+        sources_count=int(sources_count),
+        elapsed_s=float(elapsed_s),
+        url=url,
+    )
 
     job.update({
         "status": "completed",
@@ -689,6 +836,10 @@ def finalize_completed_report(
         "sources_count": int(sources_count),
         "elapsed_s": float(elapsed_s),
         "progress_highlights": highlights,
+        "agy_model": job.get("agy_model", DEFAULT_AGY_MODEL),
+        "agy_effort": job.get("agy_effort", DEFAULT_AGY_EFFORT),
+        "gemini_model": job.get("gemini_model", DEFAULT_GEMINI_MODEL),
+        "gemini_thinking": job.get("gemini_thinking", DEFAULT_GEMINI_THINKING),
     })
     save_job(job_dir, job)
 
@@ -704,6 +855,10 @@ def finalize_completed_report(
         "plan_iterations": int(job.get("plan_iterations") or 0),
         "elapsed_s": float(elapsed_s),
         "progress_highlights": highlights,
+        "agy_model": job.get("agy_model", DEFAULT_AGY_MODEL),
+        "agy_effort": job.get("agy_effort", DEFAULT_AGY_EFFORT),
+        "gemini_model": job.get("gemini_model", DEFAULT_GEMINI_MODEL),
+        "gemini_thinking": job.get("gemini_thinking", DEFAULT_GEMINI_THINKING),
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
@@ -717,6 +872,7 @@ def cmd_plan(a) -> int:
     job_dir = resolve_job_dir(a.job, must_exist=True)
     enforce_pre_plan_gate(job_dir)
     job = load_job(job_dir)
+    _sync_job_model_settings(job, a)
 
     seq = int(job.get("seq") or 0) + 1
     job["seq"] = seq
@@ -736,12 +892,21 @@ def cmd_plan(a) -> int:
         "driver": str(dr_skill_dir / "scripts" / "run_deep_research.py"),
         "prompt_file": str(job_dir / "prompt.md"),
         "deadline": int(getattr(a, "deadline", None) or DEFAULT_PLAN_DEADLINE),
+        "gemini_model": job["gemini_model"],
+        "gemini_thinking": job["gemini_thinking"],
+        "env": {
+            "GEMINI_DR_MODE": job["gemini_model"],
+            "GEMINI_DR_THINKING": job["gemini_thinking"],
+        },
     }
     if getattr(a, "show", False):
         req["show"] = True
     write_json_atomic(relay_dir / "request.json", req)
 
-    rc, agy_summary, dr_res = invoke_agy_relay(job_dir, "plan", seq, getattr(a, "dr_skill_dir", None))
+    rc, agy_summary, dr_res = invoke_agy_relay(
+        job_dir, "plan", seq, getattr(a, "dr_skill_dir", None),
+        agy_model=job["agy_model"], agy_effort=job["agy_effort"],
+    )
     if agy_summary.get("confinement"):
         job["last_confinement"] = agy_summary["confinement"]
 
@@ -800,6 +965,7 @@ def cmd_edit(a) -> int:
             2,
             code="EDIT_INVALID_STATE",
         )
+    _sync_job_model_settings(job, a)
     feedback_text = resolve_text_input(a.feedback, a.feedback_file, "feedback")
     seq = int(job.get("seq") or 0) + 1
     iteration = int(job.get("plan_iterations") or 1) + 1
@@ -823,12 +989,21 @@ def cmd_edit(a) -> int:
         "resume_url": job.get("url") or "current",
         "feedback_file": str(feedback_path),
         "deadline": int(getattr(a, "deadline", None) or DEFAULT_PLAN_DEADLINE),
+        "gemini_model": job["gemini_model"],
+        "gemini_thinking": job["gemini_thinking"],
+        "env": {
+            "GEMINI_DR_MODE": job["gemini_model"],
+            "GEMINI_DR_THINKING": job["gemini_thinking"],
+        },
     }
     if getattr(a, "show", False):
         req["show"] = True
     write_json_atomic(relay_dir / "request.json", req)
 
-    rc, agy_summary, dr_res = invoke_agy_relay(job_dir, "edit", seq, getattr(a, "dr_skill_dir", None))
+    rc, agy_summary, dr_res = invoke_agy_relay(
+        job_dir, "edit", seq, getattr(a, "dr_skill_dir", None),
+        agy_model=job["agy_model"], agy_effort=job["agy_effort"],
+    )
     if agy_summary.get("confinement"):
         job["last_confinement"] = agy_summary["confinement"]
 
@@ -880,6 +1055,7 @@ def cmd_approve(a) -> int:
     job_dir = resolve_job_dir(a.job, must_exist=True)
     job = load_job(job_dir)
     clean_reason = enforce_approval_gate(job_dir, job, a.reason)
+    _sync_job_model_settings(job, a)
 
     seq = int(job.get("seq") or 0) + 1
     out_path = Path(a.out).expanduser().resolve() if getattr(a, "out", None) else Path(job.get("out_path") or (job_dir / "report.md")).resolve()
@@ -910,12 +1086,21 @@ def cmd_approve(a) -> int:
         "expected_plan_count": int(job.get("plan_count") or 1),
         "output": str(job_dir / "report.md"),
         "timeout": timeout_sec,
+        "gemini_model": job["gemini_model"],
+        "gemini_thinking": job["gemini_thinking"],
+        "env": {
+            "GEMINI_DR_MODE": job["gemini_model"],
+            "GEMINI_DR_THINKING": job["gemini_thinking"],
+        },
     }
     if getattr(a, "show", False):
         req["show"] = True
     write_json_atomic(relay_dir / "request.json", req)
 
-    rc, agy_summary, dr_res = invoke_agy_relay(job_dir, "approve", seq, getattr(a, "dr_skill_dir", None))
+    rc, agy_summary, dr_res = invoke_agy_relay(
+        job_dir, "approve", seq, getattr(a, "dr_skill_dir", None),
+        agy_model=job["agy_model"], agy_effort=job["agy_effort"],
+    )
     if agy_summary.get("confinement"):
         job["last_confinement"] = agy_summary["confinement"]
 
@@ -966,6 +1151,23 @@ def _init_job_internal(a) -> tuple[str, Path, dict]:
     (job_dir / "relay").mkdir(parents=True, exist_ok=True)
 
     out_default = str(Path(a.out).expanduser().resolve()) if getattr(a, "out", None) else str(job_dir / "report.md")
+
+    raw_agy_model = getattr(a, "agy_model", None)
+    if raw_agy_model is None or not str(raw_agy_model).strip():
+        raw_agy_model = os.environ.get("AGY_DR_MODEL") or os.environ.get("AGY_MODEL") or os.environ.get("AGY_TASK_MODEL")
+    agy_model = normalize_agy_model(raw_agy_model)
+
+    raw_agy_effort = getattr(a, "agy_effort", None)
+    if raw_agy_effort is None or not str(raw_agy_effort).strip():
+        raw_agy_effort = os.environ.get("AGY_DR_EFFORT") or os.environ.get("AGY_EFFORT") or os.environ.get("AGY_TASK_EFFORT")
+    agy_effort = normalize_agy_effort(raw_agy_effort)
+
+    raw_gemini_model = getattr(a, "gemini_model", None)
+    if raw_gemini_model is None or not str(raw_gemini_model).strip():
+        raw_gemini_model = os.environ.get("GEMINI_DR_MODEL") or os.environ.get("GEMINI_MODEL") or os.environ.get("GEMINI_DR_MODE")
+    gemini_model, default_thinking = normalize_gemini_model(raw_gemini_model)
+    gemini_thinking = os.environ.get("GEMINI_DR_THINKING") or default_thinking
+
     job = {
         "job_id": job_id,
         "job_dir": str(job_dir),
@@ -983,6 +1185,10 @@ def _init_job_internal(a) -> tuple[str, Path, dict]:
         "approval_reason": None,
         "worker_pid": None,
         "progress_highlights": [],
+        "agy_model": agy_model,
+        "agy_effort": agy_effort,
+        "gemini_model": gemini_model,
+        "gemini_thinking": gemini_thinking,
     }
     save_job(job_dir, job)
     return job_id, job_dir, job
@@ -1085,6 +1291,7 @@ def cmd_collect(a) -> int:
         if f.exists():
             f.unlink()
 
+    _sync_job_model_settings(job, a)
     dr_skill_dir = resolve_active_dr_skill_dir(getattr(a, "dr_skill_dir", None))
     req = {
         "relay_version": RELAY_VERSION,
@@ -1095,12 +1302,21 @@ def cmd_collect(a) -> int:
         "resume_url": job.get("url") or "current",
         "output": str(job_dir / "report.md"),
         "timeout": timeout_sec,
+        "gemini_model": job.get("gemini_model", DEFAULT_GEMINI_MODEL),
+        "gemini_thinking": job.get("gemini_thinking", DEFAULT_GEMINI_THINKING),
+        "env": {
+            "GEMINI_DR_MODE": job.get("gemini_model", DEFAULT_GEMINI_MODEL),
+            "GEMINI_DR_THINKING": job.get("gemini_thinking", DEFAULT_GEMINI_THINKING),
+        },
     }
     if job.get("approval_reason"):
         req["allow_probe_error"] = False
     write_json_atomic(relay_dir / "request.json", req)
 
-    rc, agy_summary, dr_res = invoke_agy_relay(job_dir, "collect", seq, getattr(a, "dr_skill_dir", None))
+    rc, agy_summary, dr_res = invoke_agy_relay(
+        job_dir, "collect", seq, getattr(a, "dr_skill_dir", None),
+        agy_model=job.get("agy_model"), agy_effort=job.get("agy_effort"),
+    )
     if agy_summary.get("confinement"):
         job["last_confinement"] = agy_summary["confinement"]
 
@@ -1126,6 +1342,10 @@ def run_cmd_init(a) -> int:
         "prompt_chars": len(read_text(job_dir / "prompt.md").strip()),
         "goal_chars": len(read_text(job_dir / "goal.md").strip()),
         "warnings": job["warnings"],
+        "agy_model": job["agy_model"],
+        "agy_effort": job["agy_effort"],
+        "gemini_model": job["gemini_model"],
+        "gemini_thinking": job["gemini_thinking"],
     }
     print(json.dumps(res, ensure_ascii=False, indent=2))
     return 0
@@ -1157,12 +1377,21 @@ def run_cmd_auto(a) -> int:
         "prompt_file": str(job_dir / "prompt.md"),
         "output": str(job_dir / "report.md"),
         "timeout": timeout_sec,
+        "gemini_model": job["gemini_model"],
+        "gemini_thinking": job["gemini_thinking"],
+        "env": {
+            "GEMINI_DR_MODE": job["gemini_model"],
+            "GEMINI_DR_THINKING": job["gemini_thinking"],
+        },
     }
     if getattr(a, "show", False):
         req["show"] = True
     write_json_atomic(relay_dir / "request.json", req)
 
-    rc, agy_summary, dr_res = invoke_agy_relay(job_dir, "auto", seq, getattr(a, "dr_skill_dir", None))
+    rc, agy_summary, dr_res = invoke_agy_relay(
+        job_dir, "auto", seq, getattr(a, "dr_skill_dir", None),
+        agy_model=job["agy_model"], agy_effort=job["agy_effort"],
+    )
     if agy_summary.get("confinement"):
         job["last_confinement"] = agy_summary["confinement"]
 
@@ -1275,6 +1504,9 @@ def build_parser() -> argparse.ArgumentParser:
     co.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="collect timeout in seconds")
     co.add_argument("--poll-interval", type=float, default=0.25, help="progress poll interval in seconds")
     co.add_argument("--dr-skill-dir", help="override local-gemini-deep-research skill directory")
+
+    for sp in (ini, pl, ed, ap, au, co):
+        _add_model_options(sp)
 
     return p
 
