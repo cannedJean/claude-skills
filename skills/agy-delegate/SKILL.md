@@ -54,8 +54,9 @@ Commands below are relative to this skill's directory (`scripts/agy_task.py`).
    browser is a Chrome DevTools subagent; the hook lets it navigate only to the listed origins and click,
    scroll, resize, take screenshots and read console/network, while typing, page scripts, uploads and every other
    site stay blocked. Clicks are not filtered: a button that triggers a paid or state-changing action is one click
-   away, and a link can lead off the site, so name such buttons in the task as off-limits and tell the user. The run exits 5 while the user's own Chrome has remote
-   debugging on, because agy would otherwise drive that signed-in Chrome: ask the user to turn it off at
+   away, and a link can lead off the site, so name such buttons in the task as off-limits and tell the user. The runner starts its own throwaway headless Chrome
+   (fresh temporary profile, no sign-ins; Windows only) and points agy at it. The run exits 5 while the user's own
+   Chrome has remote debugging on, because agy would otherwise drive that signed-in Chrome: ask the user to turn it off at
    `chrome://inspect/#remote-debugging` and retry. `--no-confine` is not the way to get a browser: it removes the
    path confinement and the audit log too.
 

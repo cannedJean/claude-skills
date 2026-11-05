@@ -75,7 +75,8 @@ before the subcommand: `python scripts/agy_task.py --model <slug> run -w ... -t 
 
 Exit codes: 0 ok, 2 agent status not SUCCESS or verify failed, 3 agy error, 4 preflight, 5 bad arguments.
 
-Env: `AGY_BIN`, `AGY_TASK_MODEL`, `AGY_TASK_TIMEOUT`, `AGY_CHROME_USER_DATA_DIRS` (path-separated Chrome
+Env: `AGY_BIN`, `AGY_TASK_MODEL`, `AGY_TASK_TIMEOUT`, `AGY_CHROME_BIN` (Chrome for the isolated browser),
+`AGY_CHROME_USER_DATA_DIRS` (path-separated Chrome
 user-data folders checked for a live `DevToolsActivePort`; default: the Chrome/Chromium channels of this OS).
 
 ## Permissions model
@@ -156,7 +157,14 @@ Limits: the hook sees tool arguments, not the page. Clicking a link (or `back`/`
 take the browser off the allowed origin; typing, scripts and uploads stay blocked there too, and the browser is
 a fresh profile without the user's sign-ins, but say so when reporting.
 
-agy's Chrome DevTools MCP auto-connects to a Chrome that exposes remote debugging (its `DevToolsActivePort`).
+agy's Chrome DevTools MCP never starts a browser: it attaches to the `DevToolsActivePort` of the default Chrome
+profile (found through `LOCALAPPDATA` on Windows). In browser mode the runner therefore starts its own headless
+Chrome with a fresh temporary profile (no sign-ins, no extensions; system temp, outside the work dir), copies that
+Chrome's `DevToolsActivePort` into a temporary `LOCALAPPDATA` tree and gives agy (only agy) that `LOCALAPPDATA`
+(plus the real `npm_config_cache`), then stops Chrome and deletes both folders when the run ends. `AGY_CHROME_BIN`
+overrides the Chrome path. This redirection exists only on Windows; elsewhere browser mode exits 5.
+
+Without that redirection the MCP would auto-connect to a Chrome that exposes remote debugging.
 If the user's everyday Chrome does, the browser tools would drive that signed-in profile, so the runner
 refuses browser mode (exit 5) while any default Chrome user-data folder has a `DevToolsActivePort` whose port
 accepts connections; turn remote debugging off (`chrome://inspect/#remote-debugging`) to let agy start its
