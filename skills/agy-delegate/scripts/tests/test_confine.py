@@ -1271,6 +1271,92 @@ class BrowserFlag(unittest.TestCase):
                     agy_task.check_confine_args(p.parse_args(["run", "-t", "x", "--allow-browser-origin", o]))
                 self.assertEqual(cm.exception.code, 5)
 
+
+FAKE_CHROME = r"""
+import sys, time, pathlib
+args = sys.argv[1:]
+ud = [a.split("=", 1)[1] for a in args if a.startswith("--user-data-dir=")][0]
+mode = pathlib.Path(__file__).with_suffix(".mode").read_text().strip() if pathlib.Path(__file__).with_suffix(".mode").exists() else "ok"
+if mode == "ok":
+    (pathlib.Path(ud) / "DevToolsActivePort").write_text("45678\n/devtools/browser/fake-id\n")
+time.sleep(60)
+"""
+
+
+class IsolatedBrowserLaunch(unittest.TestCase):
+    def setUp(self):
+        self.work = Path(tempfile.mkdtemp(prefix="cfib_"))
+        self.addCleanup(shutil.rmtree, self.work, True)
+        self.fake = self.work / "fake_chrome.py"
+        self.fake.write_text(FAKE_CHROME, encoding="utf-8")
+
+    def browser(self, **kw):
+        from unittest import mock
+        p = mock.patch.object(agy_task, "find_chrome", lambda: [sys.executable, str(self.fake)])
+        p.start()
+        self.addCleanup(p.stop)
+        return agy_task.IsolatedBrowser(**kw)
+
+    @unittest.skipUnless(WIN, "the LOCALAPPDATA redirection is Windows-only")
+    def test_starts_a_separate_chrome_and_points_agy_at_it(self):
+        b = self.browser()
+        with b:
+            env = b.env()
+            port_file = Path(env["LOCALAPPDATA"]) / "Google" / "Chrome" / "User Data" / "DevToolsActivePort"
+            self.assertEqual(port_file.read_text().split()[0], "45678")
+            self.assertFalse(str(b.profile).startswith(str(self.work)))  # never inside the work dir
+            self.assertTrue(b.profile.exists())
+            self.assertIn("npm_config_cache", {k.lower() for k in env})
+            proc = b.proc
+            self.assertIsNone(proc.poll())
+        self.assertIsNotNone(proc.poll())  # Chrome stopped
+        self.assertFalse(b.profile.exists())
+        self.assertFalse(Path(env["LOCALAPPDATA"]).exists())
+
+    @unittest.skipUnless(WIN, "the LOCALAPPDATA redirection is Windows-only")
+    def test_a_chrome_that_never_becomes_ready_is_an_error(self):
+        self.fake.with_suffix(".mode").write_text("never")
+        b = self.browser(ready_timeout=1.5)
+        with self.assertRaises(SystemExit) as cm:
+            with b:
+                pass
+        self.assertEqual(cm.exception.code, 3)
+        self.assertIsNotNone(b.proc.poll())
+
+    def test_refused_where_redirection_is_unsupported(self):
+        from unittest import mock
+        with mock.patch.object(agy_task, "IS_WINDOWS", False):
+            with self.assertRaises(SystemExit) as cm:
+                with agy_task.IsolatedBrowser():
+                    pass
+        self.assertEqual(cm.exception.code, 5)
+
+    def test_find_chrome_prefers_AGY_CHROME_BIN(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"AGY_CHROME_BIN": str(self.fake)}):
+            self.assertEqual(agy_task.find_chrome(), [str(self.fake)])
+
+    @unittest.skipUnless(WIN, "the LOCALAPPDATA redirection is Windows-only")
+    def test_run_hands_the_isolated_browser_to_agy_only_in_browser_mode(self):
+        from unittest import mock
+        seen = []
+
+        def fake_run(agy, prompt, workdir, a, extra=None, stream=True, confine=None, extra_env=None):
+            seen.append(dict(extra_env or {}))
+            return 0, {"status": "SUCCESS"}, "", []
+        chrome = mock.patch.object(agy_task, "find_chrome", lambda: [sys.executable, str(self.fake)])
+        guard = mock.patch.object(agy_task, "live_chrome_devtools", lambda: [])
+        dns = mock.patch.object(agy_task, "origin_resolves_publicly", lambda o: None)
+        with chrome, guard, dns, mock.patch.object(agy_task, "run_agy", fake_run), \
+                mock.patch.object(agy_task, "find_agy", lambda x: sys.executable):
+            p = agy_task.build_parser()
+            agy_task.cmd_run(p.parse_args(["run", "-w", str(self.work / "w1"), "-t", "x", "--no-schema",
+                                           "--allow-browser-origin", SITE]))
+            agy_task.cmd_run(p.parse_args(["run", "-w", str(self.work / "w2"), "-t", "x", "--no-schema"]))
+        self.assertIn("LOCALAPPDATA", seen[0])
+        self.assertNotIn("LOCALAPPDATA", seen[1])
+
+
 if __name__ == "__main__":
     unittest.main()
 

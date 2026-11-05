@@ -42,6 +42,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -318,6 +319,96 @@ def child_env(confine_env: dict) -> dict:
     return env
 
 
+def find_chrome() -> list:
+    """argv prefix that starts Google Chrome (AGY_CHROME_BIN overrides)."""
+    env = os.environ.get("AGY_CHROME_BIN")
+    if env:
+        return [env]
+    cands = []
+    if IS_WINDOWS:
+        for var in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+            base = os.environ.get(var)
+            if base:
+                cands.append(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe")
+    elif sys.platform == "darwin":
+        cands.append(Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"))
+    else:
+        cands += [Path(p) for p in (shutil.which("google-chrome") or "", shutil.which("chromium") or "") if p]
+    for c in cands:
+        if c.is_file():
+            return [str(c)]
+    die("Google Chrome not found for the isolated browser; set AGY_CHROME_BIN to chrome.exe", 4)
+
+
+class IsolatedBrowser:
+    """A throwaway headless Chrome (fresh temporary profile: no sign-ins, no extensions) for agy's browser.
+
+    agy's Chrome DevTools MCP only attaches to the DevToolsActivePort of the *default* Chrome profile, found through
+    LOCALAPPDATA on Windows. The runner starts its own Chrome, copies that Chrome's DevToolsActivePort into a fake
+    LOCALAPPDATA tree and gives agy (and only agy) that LOCALAPPDATA, so the MCP drives the throwaway Chrome and never
+    the user's. Profile and fake tree live in the system temp dir, outside the work dir, and are deleted afterwards."""
+
+    def __init__(self, ready_timeout: float = 20.0):
+        self.ready_timeout = ready_timeout
+        self.proc = self.profile = self.fake_lad = None
+        self._env = {}
+
+    def __enter__(self):
+        if not IS_WINDOWS:
+            die("browser mode currently needs Windows: agy's Chrome DevTools MCP attaches only to the default Chrome "
+                "profile, and the runner can redirect it to a separate browser only through LOCALAPPDATA", 5)
+        real_lad = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        self.profile = Path(tempfile.mkdtemp(prefix="agy_chrome_profile_"))
+        self.fake_lad = Path(tempfile.mkdtemp(prefix="agy_chrome_lad_"))
+        argv = find_chrome() + [f"--user-data-dir={self.profile}", "--remote-debugging-port=0", "--headless=new",
+                                "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync",
+                                "about:blank"]
+        self.proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        port_file = self.profile / "DevToolsActivePort"
+        deadline = time.time() + self.ready_timeout
+        ready = False
+        while time.time() < deadline and self.proc.poll() is None:
+            with contextlib.suppress(OSError):
+                if port_file.read_text(encoding="utf-8", errors="ignore").strip():
+                    ready = True
+                    break
+            time.sleep(0.2)
+        if not ready:
+            self._stop()
+            die("could not start a separate Chrome for agy's browser (no DevToolsActivePort appeared)", 3)
+        ud = self.fake_lad / "Google" / "Chrome" / "User Data"
+        ud.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(port_file, ud / "DevToolsActivePort")
+        self._env = {"LOCALAPPDATA": str(self.fake_lad),
+                     "npm_config_cache": os.environ.get("npm_config_cache") or str(Path(real_lad) / "npm-cache")}
+        log(f"isolated browser: headless Chrome pid={self.proc.pid} with a fresh temporary profile")
+        return self
+
+    def env(self) -> dict:
+        return dict(self._env)
+
+    def _stop(self):
+        if self.proc is not None and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(10)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                with contextlib.suppress(Exception):
+                    self.proc.wait(5)
+        for d in (self.profile, self.fake_lad):
+            if d:
+                for _ in range(10):  # Chrome may hold files for a moment after exiting
+                    shutil.rmtree(d, ignore_errors=True)
+                    if not d.exists():
+                        break
+                    time.sleep(0.3)
+
+    def __exit__(self, *exc):
+        self._stop()
+        return False
+
+
 def find_agy(explicit=None) -> str:
     if explicit:
         return explicit
@@ -536,11 +627,11 @@ def cannot_start(cmd: list, e: OSError) -> str:
     return f"cannot start agy: {e}"
 
 
-def run_agy(agy: str, prompt: str, workdir: Path, a, extra=None, stream: bool = True, confine=None):
-    """Run agy headless in workdir (confined to it when confine is a Confinement);
-    returns (rc, result_dict_or_None, stderr_text, events)."""
+def run_agy(agy: str, prompt: str, workdir: Path, a, extra=None, stream: bool = True, confine=None, extra_env=None):
+    """Run agy headless in workdir (confined to it when confine is a Confinement); extra_env is added to agy's
+    environment (the isolated browser's redirection). Returns (rc, result_dict_or_None, stderr_text, events)."""
     with confine or contextlib.nullcontext():
-        return _run_agy(agy, prompt, workdir, a, extra, stream, confine.env() if confine else {})
+        return _run_agy(agy, prompt, workdir, a, extra, stream, {**(confine.env() if confine else {}), **(extra_env or {})})
 
 
 def _run_agy(agy: str, prompt: str, workdir: Path, a, extra, stream: bool, confine_env: dict):
@@ -749,7 +840,9 @@ def cmd_run(a) -> int:
     log(f"workdir={workdir} files_before={len(before)} model={a.model or 'default'} allow_all={a.allow_all} "
         f"confined={a.confine} deep_research={is_dr}")
     t0 = time.time()
-    rc, res, err, events = run_agy(agy, prompt, workdir, a, extra=extra, stream=True, confine=confine)
+    with (IsolatedBrowser() if origins else contextlib.nullcontext()) as browser:
+        rc, res, err, events = run_agy(agy, prompt, workdir, a, extra=extra, stream=True, confine=confine,
+                                       extra_env=browser.env() if browser else None)
     elapsed = round(time.time() - t0, 1)
     after = snapshot(workdir, hook_files=a.confine)
     changes = diff_snapshots(before, after)
@@ -852,8 +945,9 @@ def cmd_resume(a) -> int:
     confine_mode = "deep-research" if is_dr else "default"
     confine = Confinement(workdir, workdir / ".agy_task" / f"resume-{stamp}" / "confine.jsonl", mode=confine_mode,
                           dr_dir=dr_dir, browser_origins=getattr(a, "allow_browser_origin", None) or ()) if a.confine else None
-    rc, res, err, events = run_agy(agy, a.task, workdir, a, extra=["--conversation", a.conversation_id], stream=True,
-                              confine=confine)
+    with (IsolatedBrowser() if getattr(a, "allow_browser_origin", None) else contextlib.nullcontext()) as browser:
+        rc, res, err, events = run_agy(agy, a.task, workdir, a, extra=["--conversation", a.conversation_id],
+                                       stream=True, confine=confine, extra_env=browser.env() if browser else None)
     changes = diff_snapshots(before, snapshot(workdir, hook_files=a.confine))
     out = {"status": "ok" if rc == 0 and (res or {}).get("status") == "SUCCESS" else "error",
            "agent_status": (res or {}).get("status"), "conversation_id": (res or {}).get("conversation_id"),
