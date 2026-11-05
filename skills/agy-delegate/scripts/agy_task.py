@@ -162,6 +162,162 @@ def die(msg: str, code: int):
     sys.exit(code)
 
 
+LOCAL_SUFFIXES = {"localhost", "local", "lan", "internal", "intranet", "home", "corp", "home.arpa", "localdomain"}
+
+
+def normalize_origin(raw: str):
+    """'scheme://host[:port]' for a public http(s) origin without credentials or path, else None.
+    Local, loopback, private, link-local and numeric-obfuscated hosts are refused: a browser allowed onto them could
+    reach the user's own services (for example a Chrome DevTools endpoint on 127.0.0.1)."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(str(raw).strip())
+        port = u.port
+    except ValueError:
+        return None
+    if (u.scheme not in ("http", "https") or not u.hostname or u.username is not None or u.password is not None
+            or u.path not in ("", "/") or u.query or u.fragment or u.params):
+        return None
+    host = u.hostname.lower()
+    # plain ASCII labels only (same rule as the hook's origin_key): a browser rewrites percent-encoded, full-width
+    # and other unicode hosts (１２７.０.０.１ -> 127.0.0.1), so such a host could name anything; IPv6 literals and
+    # trailing dots are refused too.
+    if not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)*", host):
+        return None
+    if re.fullmatch(r"(0x[0-9a-f]*|\d+)(\.(0x[0-9a-f]*|\d+)){0,3}", host):
+        try:  # 2130706433, 0x7f.1, 127.1 ...: resolve the way inet_aton does, then it must be a public address
+            ip = ipaddress.ip_address(socket.inet_aton(host))
+        except OSError:
+            ip = None
+        if ip is None or not _public_ip(ip):
+            return None
+    else:
+        labels = host.split(".")
+        if len(labels) < 2 or labels[-1] in LOCAL_SUFFIXES or ".".join(labels[-2:]) in LOCAL_SUFFIXES:
+            return None  # single-label (intranet) names and local-only suffixes
+    if port == 0:
+        return None
+    default = 443 if u.scheme == "https" else 80
+    return f"{u.scheme}://{host}" + (f":{port}" if port and port != default else "")
+
+
+def chrome_user_data_dirs() -> list:
+    """User-data folders of the Chrome channels agy's Chrome DevTools MCP can auto-connect to. AGY_CHROME_USER_DATA_DIRS
+    (path-separated) adds folders; it never removes the defaults."""
+    if IS_WINDOWS:
+        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+        names = ["Google/Chrome", "Google/Chrome Beta", "Google/Chrome Dev", "Google/Chrome SxS", "Chromium"]
+        dirs = [base / n / "User Data" for n in names]
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+        dirs = [base / n for n in ("Google/Chrome", "Google/Chrome Beta", "Google/Chrome Dev",
+                                   "Google/Chrome Canary", "Chromium")]
+    else:
+        base = Path.home() / ".config"
+        dirs = [base / n for n in ("google-chrome", "google-chrome-beta", "google-chrome-unstable", "chromium")]
+    extra = [Path(p) for p in (os.environ.get("AGY_CHROME_USER_DATA_DIRS") or "").split(os.pathsep) if p.strip()]
+    return dirs + [d for d in extra if d not in dirs]
+
+
+def _port_open(port: int) -> bool:
+    import socket
+    for host in ("127.0.0.1", "::1"):
+        with contextlib.suppress(OSError, ValueError):
+            with socket.create_connection((host, port), timeout=0.5):
+                return True
+    return False
+
+
+def live_chrome_devtools() -> list:
+    """[(user-data dir, port or None)] for Chrome profiles whose DevToolsActivePort accepts connections now (on
+    127.0.0.1 or ::1). A DevToolsActivePort that exists but cannot be parsed is reported with port None (fail closed)."""
+    live = []
+    for d in chrome_user_data_dirs():
+        f = d / "DevToolsActivePort"
+        try:
+            text = f.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        m = re.match(r"\s*\+?(\d+)", text.lstrip("\ufeff"))  # parseInt-like, as the MCP reads it
+        if not m:
+            live.append((str(d), None))
+            continue
+        port = int(m.group(1))
+        if 0 < port < 65536 and _port_open(port):
+            live.append((str(d), port))
+    return live
+
+
+# environment that can point agy's browser (or its Chrome DevTools MCP) somewhere else: AGY_BROWSER_WS_URL,
+# AGY_BROWSER_ACTIVE_PORT_FILE, CHROME_DEVTOOLS_MCP_JS, JETSKI_EVAL_CHROME_DEVTOOLS_MCP_COMMAND, ...
+BROWSER_ENDPOINT_OVERRIDES = re.compile(r"^(AGY_BROWSER_|CHROME_DEVTOOLS_MCP|JETSKI_EVAL_.*CHROME|ANTIGRAVITY_(NODE_PATH|LS_ADDRESS|"
+                                        r"GEMINI_DIR|APP_DATA_DIR|EXECUTABLE_DATA_DIR)$)", re.I)
+# well-known cloud metadata / host endpoints that are "global" by address class
+METADATA_IPS = {"168.63.129.16", "100.100.100.200", "fd00:ec2::254"}
+
+
+def _public_ip(ip) -> bool:
+    import ipaddress
+    if ip.version == 6:  # unwrap IPv4 carried in IPv6 (mapped, NAT64 64:ff9b::/96, 6to4)
+        if ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        elif ip in ipaddress.ip_network("64:ff9b::/96"):
+            ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+        elif ip.sixtofour:
+            ip = ip.sixtofour
+    return ip.is_global and not ip.is_multicast and str(ip) not in METADATA_IPS
+
+
+def origin_resolves_publicly(origin: str):
+    """None if every address the origin's host resolves to is public, else a reason. A lookup failure is a reason."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+    host = urlparse(origin).hostname or ""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (OSError, UnicodeError) as e:
+        return f"{host} does not resolve ({type(e).__name__})"
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        except ValueError:
+            return f"{host} resolves to an unreadable address"
+        if not _public_ip(ip):
+            return f"{host} resolves to a non-public address ({ip})"
+    return None
+
+
+def refuse_browser_on_users_chrome(a) -> None:
+    if not getattr(a, "allow_browser_origin", None):
+        return
+    set_overrides = sorted(k for k, v in os.environ.items() if v and BROWSER_ENDPOINT_OVERRIDES.match(k))
+    if set_overrides:
+        die("browser mode refused: " + ", ".join(set_overrides) + " can point agy's browser at a browser or MCP of "
+            "someone's choosing; unset it so agy starts its own browser.", 5)
+    live = live_chrome_devtools()
+    if live:
+        where = ", ".join(f"{d} (port {p})" if p else f"{d} (unreadable DevToolsActivePort)" for d, p in live)
+        die("browser mode refused: your own Chrome has remote debugging turned on (" + where + "). agy's browser "
+            "tools would attach to that signed-in Chrome instead of a separate one. Turn remote debugging off "
+            "(chrome://inspect/#remote-debugging, or restart Chrome without --remote-debugging-port) and retry. "
+            "If Chrome is closed, delete the stale DevToolsActivePort file named above.", 5)
+    for origin in a.allow_browser_origin:
+        why = origin_resolves_publicly(origin)
+        if why:
+            die(f"browser mode refused for {origin}: {why}. Only public sites can be allowed (this is checked once "
+                "at launch; DNS changes during the run are not covered).", 5)
+
+
+def child_env(confine_env: dict) -> dict:
+    """agy's environment: ours minus any inherited AGY_CONFINE_* (only this run's confinement settings count)."""
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("AGY_CONFINE_")}
+    env.update(PYTHONIOENCODING="utf-8", NO_COLOR="1", **confine_env)
+    return env
+
+
 def find_agy(explicit=None) -> str:
     if explicit:
         return explicit
@@ -266,9 +422,11 @@ class Confinement:
     there before. That includes our own entry and launcher left by a run that was killed: the agy session of that
     run may still be alive, and it must stay hooked."""
 
-    def __init__(self, workdir: Path, log_file: Path, inlined=(), mode: str = "default", dr_dir: Path | str | None = None):
+    def __init__(self, workdir: Path, log_file: Path, inlined=(), mode: str = "default", dr_dir: Path | str | None = None,
+                 browser_origins=()):
         self.workdir, self.log_file, self.inlined = workdir, log_file, list(inlined)
         self.mode = mode
+        self.browser_origins = list(dict.fromkeys(browser_origins or ()))
         if dr_dir:
             self.dr_dir = Path(dr_dir).resolve()
         elif mode == "deep-research":
@@ -289,6 +447,8 @@ class Confinement:
             env["AGY_CONFINE_MODE"] = "deep-research"
             if self.dr_dir:
                 env["AGY_CONFINE_DR_DIR"] = str(self.dr_dir)
+        if self.browser_origins:  # opt-in: agy's Chrome DevTools tools may browse these origins (see confine_hook)
+            env["AGY_CONFINE_BROWSER_ORIGINS"] = json.dumps(self.browser_origins)
         return env
 
     def __enter__(self):
@@ -385,7 +545,7 @@ def run_agy(agy: str, prompt: str, workdir: Path, a, extra=None, stream: bool = 
 
 def _run_agy(agy: str, prompt: str, workdir: Path, a, extra, stream: bool, confine_env: dict):
     cmd = agy_cmd(agy, prompt, workdir, a, extra, stream)
-    env = dict(os.environ, PYTHONIOENCODING="utf-8", NO_COLOR="1", **confine_env)
+    env = child_env(confine_env)
     try:
         proc = subprocess.Popen(cmd, cwd=str(workdir), stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     except OSError as e:  # e.g. WinError 206: CreateProcess takes at most 32,767 characters of command line
@@ -481,6 +641,21 @@ def check_confine_args(a) -> None:
             die(f"--inlined {rel!r}: give a path relative to the work directory that stays inside it", 5)
     if getattr(a, "inlined", None) and not a.confine:
         log("note: --inlined has no effect with --no-confine (only the confinement hook enforces it)")
+    if getattr(a, "allow_browser_origin", None):
+        if getattr(a, "deep_research", False):
+            die("--allow-browser-origin cannot be combined with --deep-research", 5)
+        if not a.confine:
+            die("--allow-browser-origin needs the confinement hook (the hook is what limits the browser to the listed "
+                "origins); drop --no-confine", 5)
+        origins = []
+        for raw in a.allow_browser_origin:
+            o = normalize_origin(raw)
+            if not o:
+                die(f"--allow-browser-origin {raw!r}: give an http(s) origin such as https://example.org "
+                    "(no credentials, no path)", 5)
+            if o not in origins:
+                origins.append(o)
+        a.allow_browser_origin = origins
 
 
 def cmd_run(a) -> int:
@@ -494,6 +669,13 @@ def cmd_run(a) -> int:
     if not task or not task.strip():
         die("provide --task TEXT or --task-file FILE", 5)
     check_confine_args(a)
+    if not a.dry_run:
+        refuse_browser_on_users_chrome(a)
+    origins = getattr(a, "allow_browser_origin", None) or []
+    browser_rule = ("- Browser: use the /browser subagent (Chrome DevTools) on these origins only: "
+                    + ", ".join(origins) + ". Navigating, clicking, scrolling, resizing, screenshots and "
+                    "console/network reads work; typing text, page scripts, uploads and other sites are blocked. "
+                    "Save any screenshots inside this directory, passing absolute paths.") if origins else ""
 
     stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     workdir = Path(a.workdir).resolve() if a.workdir else (Path.cwd() / "agy_tasks" / stamp)
@@ -529,7 +711,7 @@ def cmd_run(a) -> int:
         workdir_str = str(workdir).replace("\\", "/")
         prompt = DEEP_RESEARCH_FRAME.format(workdir=workdir_str, dr_dir=dr_dir_str, task=task.strip(), inputs=inputs)
     elif a.bare:
-        prompt = task.strip() + "\n" + inputs
+        prompt = task.strip() + "\n" + inputs + ("\n" + browser_rule if browser_rule else "")
     else:
         cmd_rule = ("- You MAY run shell commands (tests, builds) inside the directory."
                     if a.allow_all else
@@ -539,13 +721,15 @@ def cmd_run(a) -> int:
                     if a.confine else
                     "- Shell commands are not approved in this session unless pre-allowed; prefer writing code "
                     "and tests over running them. If you must verify, say what command to run in `notes`.")
+        if browser_rule:
+            cmd_rule += "\n" + browser_rule
         prompt = PROMPT_FRAME.format(workdir=workdir, task=task.strip(), inputs=inputs, cmd_rule=cmd_rule)
 
     schema_file = meta_dir / "schema.json"
     extra = [] if a.no_schema else ["--json-schema", str(schema_file)]
     if a.dry_run:
         plan = {"status": "dry-run", "workdir": str(workdir), "would_stage": staged, "confined": a.confine,
-                "inlined": a.inlined or [], "bare": a.bare,
+                "inlined": a.inlined or [], "bare": a.bare, "browser_origins": origins,
                 "command": agy_cmd(agy, "<prompt>", workdir, a, extra, stream=True), "prompt": prompt,
                 "schema": chosen_schema}
         if is_dr:
@@ -560,7 +744,8 @@ def cmd_run(a) -> int:
 
     before = snapshot(workdir, hook_files=a.confine)
     confine_mode = "deep-research" if is_dr else "default"
-    confine = Confinement(workdir, meta_dir / "confine.jsonl", a.inlined or (), mode=confine_mode, dr_dir=dr_dir) if a.confine else None
+    confine = Confinement(workdir, meta_dir / "confine.jsonl", a.inlined or (), mode=confine_mode, dr_dir=dr_dir,
+                          browser_origins=origins) if a.confine else None
     log(f"workdir={workdir} files_before={len(before)} model={a.model or 'default'} allow_all={a.allow_all} "
         f"confined={a.confine} deep_research={is_dr}")
     t0 = time.time()
@@ -656,6 +841,7 @@ def cmd_resume(a) -> int:
     except FileNotFoundError as e:
         die(str(e), 4)
     check_confine_args(a)
+    refuse_browser_on_users_chrome(a)
     workdir = Path(a.workdir).resolve() if a.workdir else Path.cwd()
     if a.confine and (workdir == Path.home() or workdir.parent == workdir):
         die(f"refusing to confine agy to {workdir} (too broad)", 5)
@@ -664,7 +850,8 @@ def cmd_resume(a) -> int:
     is_dr = getattr(a, "deep_research", False)
     dr_dir = Path(getattr(a, "dr_skill_dir", None) or os.environ.get("AGY_CONFINE_DR_DIR") or DEFAULT_DR_SKILL_DIR).resolve()
     confine_mode = "deep-research" if is_dr else "default"
-    confine = Confinement(workdir, workdir / ".agy_task" / f"resume-{stamp}" / "confine.jsonl", mode=confine_mode, dr_dir=dr_dir) if a.confine else None
+    confine = Confinement(workdir, workdir / ".agy_task" / f"resume-{stamp}" / "confine.jsonl", mode=confine_mode,
+                          dr_dir=dr_dir, browser_origins=getattr(a, "allow_browser_origin", None) or ()) if a.confine else None
     rc, res, err, events = run_agy(agy, a.task, workdir, a, extra=["--conversation", a.conversation_id], stream=True,
                               confine=confine)
     changes = diff_snapshots(before, snapshot(workdir, hook_files=a.confine))
@@ -721,6 +908,10 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--inlined", action="append", metavar="REL",
                    help="work-dir file whose full text the task already holds; the confinement hook denies opening "
                         "it (repeatable)")
+    r.add_argument("--allow-browser-origin", action="append", metavar="ORIGIN",
+                   help="let agy's /browser (Chrome DevTools) tools browse this http(s) origin, e.g. "
+                        "https://example.org (repeatable). Needs confinement; no typing, scripts or uploads; refused "
+                        "while your own Chrome has remote debugging on")
     r.add_argument("--sandbox", action="store_true", help="agy --sandbox (terminal restrictions; macOS/Linux)")
     r.add_argument("--no-schema", action="store_true", help="do not request structured output")
     r.add_argument("--bare", action="store_true",
@@ -741,6 +932,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="run in deep-research mode (pass --dangerously-skip-permissions to agy while keeping confinement active)")
     rs.add_argument("--dr-skill-dir", default=os.environ.get("AGY_CONFINE_DR_DIR"),
                     help="path to local-gemini-deep-research skill directory (default: ~/.gemini/config/skills/local-gemini-deep-research)")
+    rs.add_argument("--allow-browser-origin", action="append", metavar="ORIGIN")
     rs.add_argument("--sandbox", action="store_true")
     return p
 

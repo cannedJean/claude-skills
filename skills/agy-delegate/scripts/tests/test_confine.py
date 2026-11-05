@@ -184,6 +184,78 @@ class Hook(unittest.TestCase):
         if WIN:
             self.assertEqual(self.decide("write_to_file", {"TargetFile": ".AGENTS\\hooks.json"}), "deny")
 
+    def test_agent_prose_arguments_are_not_paths(self):
+        self.check([
+            ("edit url text", "edit_file", {"Path": "in.txt", "Target": "https://old.example.com", "Replacement": "https://new.example.com"}, "ask"),
+            ("edit code text", "edit_file", {"Path": "in.txt", "Target": "x = 1", "Replacement": "x: int = 1"}, "ask"),
+            ("edit css text", "edit_file", {"Path": "in.txt", "Target": "color: red;", "Replacement": "color: blue;"}, "ask"),
+            ("finish notes", "finish", {"summary": "done", "files": ["in.txt"], "notes": "Note: run python -m pytest to verify"}, "ask"),
+            ("edit outside still denied", "edit_file", {"Path": "../secret.txt", "Target": "a", "Replacement": "b"}, "deny"),
+            ("other tool Target path still checked", "some_tool", {"Target": "../../secret.txt"}, "deny"),
+        ])
+
+    def test_native_browser_shell_like_and_resource_tools_are_denied(self):
+        for name in ("open_browser_url", "execute_browser_javascript", "click_browser_pixel", "capture_browser_screenshot",
+                     "read_browser_page", "list_browser_pages", "capture_browser_console_logs", "shell_exec",
+                     "run_extension_code", "execute_notebook", "restart_dev_server", "read_resource", "list_resources"):
+            with self.subTest(name=name):
+                self.assertEqual(self.decide(name, {"Url": "https://x.example", "CommandLine": "dir"}), "deny")
+
+    def test_unknown_tools_fail_closed(self):
+        for name, args in [("run_workflow", {"Script": "import os", "Description": "x"}),
+                           ("run_workflow", {"ScriptPath": "wf.py", "Description": "x"}),
+                           ("sed_file", {"Path": "in.txt", "Script": "1r C:/x"}), ("custom_tool", {}), ("brand_new", {})]:
+            with self.subTest(name=name):
+                self.assertEqual(self.decide(name, args), "deny")
+        self.assertEqual(self.decide("run_workflow", {"Script": "x"}, mode="deep-research", dr_dir=self.dr_dir), "deny")
+
+    def test_known_agent_tools_inside_the_root_are_allowed(self):
+        self.check([
+            ("ask_question", "ask_question", {"questions": [{"question": "1. 목적 (Purpose): 이 작업의 목적은?",
+                                                              "options": ["(a) x: y", "(b) z"]}]}, "ask"),
+            ("define_subagent", "define_subagent", {"name": "edge_reviewer", "description": "d",
+                                                    "system_prompt": "You are strict. Rules: cite lines."}, "ask"),
+            ("invoke_subagent", "invoke_subagent", {"Prompt": "review in.txt", "Role": "QA: Edge Cases"}, "ask"),
+            ("manage_task", "manage_task", {"Action": "create", "Title": "t"}, "ask"),
+            ("schedule", "schedule", {"Cron": "*/5 * * * *", "Prompt": "x"}, "ask"),
+            ("send_message", "send_message", {"To": "abc", "Message": "Note: done"}, "ask"),
+            ("write_file", "write_file", {"Path": "in.txt", "Content": "a: b", "Overwrite": True}, "ask"),
+            ("read_file", "read_file", {"Path": "in.txt"}, "ask"),
+        ])
+
+    def test_browser_subagent_needs_browser_mode(self):
+        for args in ({"Prompt": "Open https://example.com", "TypeName": "browser"},
+                     {"Subagents": [{"TypeName": "Browser", "Prompt": "x"}]}):
+            with self.subTest(args=args):
+                self.assertEqual(self.decide("invoke_subagent", args), "deny")
+
+    def test_subagent_workspace_must_be_the_root(self):
+        self.assertEqual(self.decide("invoke_subagent", {"Prompt": "x", "Workspace": str(self.root / "sub")}), "deny")
+        self.assertEqual(self.decide("invoke_subagent", {"Prompt": "x", "Workspace": str(self.base)}), "deny")
+        self.assertEqual(self.decide("invoke_subagent", {"Prompt": "x", "Workspace": str(self.root)}), "ask")
+        for v in ("inherit", "INHERIT", ""):
+            with self.subTest(workspace=v):
+                self.assertEqual(self.decide("invoke_subagent", {"Prompt": "x", "TypeName": "self", "Workspace": v}), "ask")
+        self.assertEqual(self.decide("invoke_subagent", {"Subagents": [{"Prompt": "x", "Workspace": "inherit"}]}), "ask")
+        sub_uri = "file:///" + str(self.root / "sub").replace(BS, "/")
+        self.assertEqual(self.decide("invoke_subagent", {"Prompt": "x", "WorkspaceUris": [sub_uri]}), "deny")
+        self.assertEqual(self.decide("invoke_subagent", {"Prompt": "x", "workspace_path": str(self.base)}), "deny")
+
+    def test_agy_config_folders_are_read_only_at_any_depth(self):
+        for rel in (".agent/hooks.json", "_agents/hooks.json", "_agent/mcp_config.json", "sub/.agents/hooks.json",
+                    "sub/.agent/plugins/p/plugin.json", ".git/config", ".git/hooks/pre-commit", ".AGENT/x.json"):
+            with self.subTest(rel=rel):
+                self.assertEqual(self.decide("write_file", {"Path": rel, "Content": "{}"}), "deny")
+        self.assertEqual(self.decide("read_file", {"Path": ".agents/hooks.json"}), "ask")
+
+    def test_url_arguments_to_local_hosts_are_denied(self):
+        for url in ("http://127.0.0.1:9222/json/list", "http://169.254.169.254/latest/meta-data/",
+                    "http://localhost:3000/admin", "http://[::1]:9222/json/version", "http://intranet/",
+                    "http://10.0.0.1/", "http://printer.local/", "http://[64:ff9b::7f00:1]/"):
+            with self.subTest(url=url):
+                self.assertEqual(self.decide("read_url_content", {"Url": url}), "deny")
+        self.assertEqual(self.decide("read_url_content", {"Url": "https://example.com/x"}), "ask")
+
     def test_hard_link_is_denied(self):
         outside = self.base / "linked_secret.txt"
         outside.write_text("s")
@@ -199,6 +271,20 @@ class Hook(unittest.TestCase):
         for p in ("sub/.. /.. /escape.txt", ".../escape.txt", "sub/. ./x", "..  /x"):
             with self.subTest(p):
                 self.assertEqual(self.decide("write_to_file", {"TargetFile": p, "CodeContent": "x"}), "deny")
+
+    def test_scheme_looking_values_in_file_arguments_are_denied(self):
+        # Node and Win32 resolve "zz://../x" or "http://../x" as an ordinary relative path ("zz:" is a name)
+        for name, args in [("write_to_file", {"TargetFile": "zz://../../escape.txt", "CodeContent": "x"}),
+                           ("write_to_file", {"TargetFile": "http://../../escape.txt", "CodeContent": "x"}),
+                           ("view_file", {"AbsolutePath": "zz://../../../../Users/x/.ssh/id_rsa"}),
+                           ("view_file", {"AbsolutePath": "https://example.com/x"}),
+                           ("list_dir", {"DirectoryPath": "ab://.."}),
+                           ("grep_search", {"SearchPath": "zz://../..", "Query": "x"})]:
+            with self.subTest(args=args):
+                self.assertEqual(self.decide(name, args), "deny")
+        # a real URL argument stays a URL
+        self.assertEqual(self.decide("read_url_content", {"Url": "https://example.com/x"}), "ask")
+        self.assertEqual(self.decide("read_url_content", {"Url": "zz://../../x"}), "deny")
 
     def test_fails_closed(self):
         self.assertEqual(self.decide(None, None, stdin=b"not json"), "deny")
@@ -777,6 +863,413 @@ class Installer(unittest.TestCase):
         self.assertEqual(cp.returncode, 5, f"Expected returncode 5, got {cp.returncode}: {cp.stdout} {cp.stderr}")
         self.assertIn("cannot be combined with --deep-research", cp.stderr or cp.stdout)
 
+
+SITE = "https://app.example.org"
+CD = "mcp_chrome_devtools_"
+
+
+class HookBrowser(unittest.TestCase):
+    """Opt-in browser allowlist: agy's Chrome DevTools MCP tools, limited to listed origins, no text entry."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.base = Path(tempfile.mkdtemp(prefix="cfb_"))
+        cls.root = cls.base / "work"
+        (cls.root / ".agents").mkdir(parents=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.base, True)
+
+    def decide(self, name, args, origins=(SITE,), mode=None):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("AGY_CONFINE_")}
+        env["AGY_CONFINE_ROOT"] = str(self.root)
+        env["AGY_CONFINE_LOG"] = str(self.base / "log.jsonl")
+        if origins is not None:
+            env["AGY_CONFINE_BROWSER_ORIGINS"] = json.dumps(list(origins))
+        if mode:
+            env["AGY_CONFINE_MODE"] = mode
+        data = json.dumps({"toolCall": {"name": name, "args": args}}).encode()
+        cp = subprocess.run([sys.executable, str(HOOK)], input=data, capture_output=True,
+                            cwd=str(self.root / ".agents"), env=env)
+        return json.loads(cp.stdout)["decision"]
+
+    def test_browser_stays_denied_without_opt_in(self):
+        for origins in (None, ()):
+            self.assertEqual(self.decide(CD + "navigate_page", {"url": SITE}, origins=origins), "deny")
+            self.assertEqual(self.decide(CD + "click", {"uid": "1_2"}, origins=origins), "deny")
+
+    def test_navigation_only_to_listed_origins(self):
+        for args, want in [
+            ({"url": SITE + "/"}, "ask"),
+            ({"url": SITE + "/explore?q=1#x"}, "ask"),
+            ({"type": "url", "url": "HTTPS://APP.EXAMPLE.ORG/places/1"}, "ask"),
+            ({"type": "back"}, "ask"),
+            ({"type": "reload", "ignoreCache": True}, "ask"),
+            ({"url": "https://evil.example.org/"}, "deny"),
+            ({"url": "https://app.example.org.evil.net/"}, "deny"),
+            ({"url": "https://user:pw@app.example.org/"}, "deny"),
+            ({"url": "https://evil.net@app.example.org/"}, "deny"),
+            ({"url": "http://app.example.org/"}, "deny"),
+            ({"url": "https://app.example.org:8443/"}, "deny"),
+            ({"url": "file:///C:/Users/x/.env"}, "deny"),
+            ({"url": "chrome://settings"}, "deny"),
+            ({"url": "javascript:alert(1)"}, "deny"),
+            ({"type": "url"}, "deny"),
+            ({"type": "teleport"}, "deny"),
+            ({"url": SITE, "initScript": "fetch('/api/chat')"}, "deny"),
+        ]:
+            with self.subTest(args=args):
+                self.assertEqual(self.decide(CD + "navigate_page", args), want)
+        self.assertEqual(self.decide(CD + "new_page", {"url": SITE + "/festivals"}), "ask")
+        self.assertEqual(self.decide(CD + "new_page", {"url": "https://other.example.com"}), "deny")
+        self.assertEqual(self.decide(CD + "new_page", {}), "deny")
+
+    def test_reading_and_pointing_tools_are_allowed(self):
+        for tool, args in [("take_snapshot", {}), ("take_screenshot", {"fullPage": True}), ("click", {"uid": "3_7"}),
+                           ("hover", {"uid": "3_7"}), ("drag", {"from_uid": "1", "to_uid": "2"}),
+                           ("emulate", {"viewport": {"width": 390, "height": 844, "isMobile": True}}),
+                           ("resize_page", {"width": 1440, "height": 900}), ("wait_for", {"text": "진주"}),
+                           ("list_console_messages", {}), ("list_network_requests", {}), ("list_pages", {}),
+                           ("select_page", {"pageId": 2}), ("handle_dialog", {"action": "dismiss"}),
+                           ("get_css_styles", {"uid": "1"}),
+                           ("lighthouse_audit", {"mode": "snapshot", "outputDirPath": str(self.root / "lh")}),
+                           ("screencast_start", {"filePath": str(self.root / "rec" / "a.webm")})]:
+            with self.subTest(tool=tool):
+                self.assertEqual(self.decide(CD + tool, args), "ask")
+
+    def test_every_path_like_argument_is_confined(self):
+        R = str(self.root)
+        for args, want in [
+            ({"reqid": 3, "responseFilePath": str(self.root / "net" / "resp.json")}, "ask"),
+            ({"reqid": 3, "responseFilePath": "net/resp.json"}, "deny"),
+            ({"reqid": 3, "requestFilePath": str(self.base / "req.json")}, "deny"),
+            ({"reqid": 3, "responseFilePath": ".agents/hooks.json"}, "deny"),
+            ({"reqid": 3, "responseFilePath": R + os.sep + ".agy_task" + os.sep + "x.json"}, "deny"),
+            ({"reqid": 3, "someNewOutputPath": str(self.base / "x")}, "deny"),
+            ({"reqid": 3, "dest": "C:\\Windows\\x" if WIN else "/etc/x"}, "deny"),
+        ]:
+            with self.subTest(args=args):
+                self.assertEqual(self.decide(CD + "get_network_request", args), want)
+
+    def test_a_hard_linked_target_is_denied(self):
+        outside = self.base / "outside.png"
+        outside.write_bytes(b"x")
+        link = self.root / "link.png"
+        try:
+            os.link(outside, link)
+        except OSError:
+            self.skipTest("hard links unsupported")
+        self.addCleanup(link.unlink)
+        self.assertEqual(self.decide(CD + "take_screenshot", {"filePath": str(link)}), "deny")
+
+    def test_dialog_text_and_request_header_injection_are_denied(self):
+        self.assertEqual(self.decide(CD + "handle_dialog", {"action": "accept", "promptText": "hi"}), "deny")
+        self.assertEqual(self.decide(CD + "handle_dialog", {"action": "accept"}), "ask")
+        self.assertEqual(self.decide(CD + "emulate", {"userAgent": "x"}), "deny")
+        self.assertEqual(self.decide(CD + "emulate", {"extraHttpHeaders": {"X-A": "1"}}), "deny")
+        self.assertEqual(self.decide(CD + "emulate", {"colorScheme": "dark", "cpuThrottlingRate": 2}), "ask")
+
+    def test_scheme_relative_paths_are_denied_for_browser_writers(self):
+        for tool, args in [("take_screenshot", {"filePath": "http://../../../x.png"}),
+                           ("take_screenshot", {"filePath": "zz://../link.png"}),
+                           ("take_snapshot", {"filePath": "zz://../.agents/hooks.json"}),
+                           ("lighthouse_audit", {"outputDirPath": "zz://../../lh"}),
+                           ("screencast_start", {"filePath": "zz://../../cast.webm"}),
+                           ("get_network_request", {"reqid": 1, "responseFilePath": "zz://../../resp"})]:
+            with self.subTest(tool=tool, args=args):
+                self.assertEqual(self.decide(CD + tool, args), "deny")
+
+    def test_native_browser_tools_stay_denied_in_browser_mode(self):
+        for name in ("open_browser_url", "execute_browser_javascript", "read_browser_page", "capture_browser_screenshot"):
+            with self.subTest(name=name):
+                self.assertEqual(self.decide(name, {"Url": SITE}), "deny")
+
+    def test_port_zero_never_matches(self):
+        self.assertEqual(self.decide(CD + "navigate_page", {"url": SITE + ":0/"}), "deny")
+
+    def test_browser_cannot_write_into_config_folders(self):
+        for rel in (".agent/hooks.json", "sub/.agents/x.json", ".git/x", "_agents/mcp_config.json"):
+            target = os.path.join(str(self.root), *rel.split("/"))
+            with self.subTest(rel=rel):
+                self.assertEqual(self.decide(CD + "get_network_request", {"pageId": 1, "reqid": 7, "responseFilePath": target}), "deny")
+                self.assertEqual(self.decide(CD + "take_snapshot", {"pageId": 1, "filePath": target}), "deny")
+
+    def test_blank_optional_paths_are_denied(self):
+        for v in ("   ", "", "	"):
+            with self.subTest(v=repr(v)):
+                self.assertEqual(self.decide(CD + "take_screenshot", {"pageId": 1, "filePath": v}), "deny")
+
+    def test_geolocation_is_not_a_path(self):
+        self.assertEqual(self.decide(CD + "emulate", {"geolocation": "37.5665x126.9780"}), "ask")
+
+    def test_browser_subagent_allowed_in_browser_mode(self):
+        self.assertEqual(self.decide("invoke_subagent", {"Prompt": "open the site", "TypeName": "browser"}), "ask")
+
+    def test_case_variant_duplicate_keys_are_denied(self):
+        for tool, args in [("navigate_page", {"url": SITE, "initScript": "", "INITSCRIPT": "fetch('/x')"}),
+                           ("handle_dialog", {"action": "accept", "promptText": "", "PromptText": "hi"}),
+                           ("emulate", {"userAgent": "", "UserAgent": "x"}),
+                           ("navigate_page", {"url": SITE, "URL": "https://evil.example"})]:
+            with self.subTest(args=args):
+                self.assertEqual(self.decide(CD + tool, args), "deny")
+
+    def test_obfuscated_hosts_never_match(self):
+        for url in ("https://ａｐｐ.example.org/", "https://app%2eexample.org/", "https://app.example.org./",
+                    "https://app.example.org../"):
+            with self.subTest(url=url):
+                self.assertEqual(self.decide(CD + "navigate_page", {"url": url}), "deny")
+        for origins in (["http://１２７.０.０.１:9222"], ["http://local%68ost:9222"]):
+            with self.subTest(origins=origins):
+                self.assertEqual(self.decide(CD + "new_page", {"url": origins[0] + "/json"}, origins=origins), "deny")
+
+    def test_writers_must_name_a_path_inside_the_root(self):
+        self.assertEqual(self.decide(CD + "lighthouse_audit", {"mode": "snapshot"}), "deny")
+        self.assertEqual(self.decide(CD + "screencast_start", {}), "deny")
+
+    def test_args_that_are_not_an_object_are_denied(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("AGY_CONFINE_")}
+        env.update(AGY_CONFINE_ROOT=str(self.root), AGY_CONFINE_BROWSER_ORIGINS=json.dumps([SITE]))
+        for args in (["https://evil.example"], "https://evil.example", 7):
+            with self.subTest(args=args):
+                data = json.dumps({"toolCall": {"name": CD + "navigate_page", "args": args}}).encode()
+                cp = subprocess.run([sys.executable, str(HOOK)], input=data, capture_output=True,
+                                    cwd=str(self.root / ".agents"), env=env)
+                self.assertEqual(json.loads(cp.stdout)["decision"], "deny")
+
+    def test_text_entry_scripts_uploads_and_unknown_tools_are_denied(self):
+        for tool, args in [("fill", {"uid": "1", "value": "hi"}), ("fill_form", {"elements": []}),
+                           ("type_text", {"text": "hello"}), ("evaluate_script", {"function": "() => 1"}),
+                           ("upload_file", {"uid": "1", "filePaths": ["in.txt"]}), ("take_heapsnapshot", {}),
+                           ("close_page", {"pageId": 1}), ("brand_new_tool", {})]:
+            with self.subTest(tool=tool):
+                self.assertEqual(self.decide(CD + tool, args), "deny")
+
+    def test_press_key_only_navigation_keys(self):
+        for key, want in [("Tab", "ask"), ("Shift+Tab", "ask"), ("Escape", "ask"), ("Enter", "ask"),
+                          ("ArrowDown", "ask"), ("PageDown", "ask"), ("End", "ask"),
+                          ("a", "deny"), ("Control+V", "deny"), ("Control+A", "deny"), ("", "deny")]:
+            with self.subTest(key=key):
+                self.assertEqual(self.decide(CD + "press_key", {"key": key}), want)
+
+    def test_files_written_by_the_browser_stay_inside_the_root(self):
+        R = str(self.root)
+        for tool, args, want in [
+            ("take_screenshot", {"filePath": "shots/home.png"}, "deny"),
+            ("take_screenshot", {"filePath": R + os.sep + "shots" + os.sep + "home.png"}, "ask"),
+            ("take_screenshot", {"filePath": R + os.sep + "a.png"}, "ask"),
+            ("take_screenshot", {"filePath": str(self.base / "out.png")}, "deny"),
+            ("take_screenshot", {"filePath": "../out.png"}, "deny"),
+            ("take_screenshot", {"filePath": ".agents/hooks.json"}, "deny"),
+            ("lighthouse_audit", {"outputDirPath": "lh"}, "deny"),
+            ("lighthouse_audit", {"outputDirPath": R + os.sep + "lh"}, "ask"),
+            ("lighthouse_audit", {"outputDirPath": "   "}, "deny"),
+            ("lighthouse_audit", {"outputDirPath": "."}, "deny"),
+            ("lighthouse_audit", {"outputDirPath": str(self.base)}, "deny"),
+            ("performance_start_trace", {"filePath": str(self.base / "t.json")}, "deny"),
+        ]:
+            with self.subTest(tool=tool, args=args):
+                self.assertEqual(self.decide(CD + tool, args), want)
+
+    def test_other_mcp_and_browser_tools_stay_denied(self):
+        for name in ("mcp_fs_read", "browser_open_url", "mcp_github_create_issue", "browser_subagent"):
+            with self.subTest(name=name):
+                self.assertEqual(self.decide(name, {"url": SITE}), "deny")
+
+    def test_not_in_deep_research_mode(self):
+        self.assertEqual(self.decide(CD + "navigate_page", {"url": SITE}, mode="deep-research"), "deny")
+
+    def test_garbage_origins_allow_nothing(self):
+        for origins in (["not a url"], ["file:///C:/"], ["https://"], ["javascript:x"]):
+            with self.subTest(origins=origins):
+                self.assertEqual(self.decide(CD + "navigate_page", {"url": SITE}, origins=origins), "deny")
+
+
+class BrowserFlag(unittest.TestCase):
+    def setUp(self):
+        self.work = Path(tempfile.mkdtemp(prefix="cfbf_"))
+        self.addCleanup(shutil.rmtree, self.work, True)
+        self.chrome = self.work / "chrome-user-data"
+        self.chrome.mkdir()
+        self.env = dict(os.environ, AGY_CHROME_USER_DATA_DIRS=str(self.chrome))
+
+    def test_flag_parses_and_reaches_the_hook_env(self):
+        p = agy_task.build_parser()
+        a = p.parse_args(["run", "-t", "x", "--allow-browser-origin", SITE, "--allow-browser-origin", SITE + "/"])
+        agy_task.check_confine_args(a)
+        c = agy_task.Confinement(self.work, self.work / "l", browser_origins=a.allow_browser_origin)
+        self.assertEqual(json.loads(c.env()["AGY_CONFINE_BROWSER_ORIGINS"]), [SITE])
+        self.assertNotIn("AGY_CONFINE_BROWSER_ORIGINS", agy_task.Confinement(self.work, self.work / "l").env())
+        r = p.parse_args(["resume", "cid", "-t", "x", "--allow-browser-origin", SITE])
+        self.assertEqual(r.allow_browser_origin, [SITE])
+
+    def test_flag_needs_confinement_and_no_deep_research(self):
+        p = agy_task.build_parser()
+        for argv in (["run", "-t", "x", "--allow-browser-origin", SITE, "--no-confine"],
+                     ["run", "-t", "x", "--allow-browser-origin", SITE, "--deep-research"],
+                     ["run", "-t", "x", "--allow-browser-origin", "file:///C:/"],
+                     ["run", "-t", "x", "--allow-browser-origin", "https://user:pw@app.example.org"],
+                     ["run", "-t", "x", "--allow-browser-origin", "not a url"]):
+            with self.subTest(argv=argv):
+                with self.assertRaises(SystemExit) as cm:
+                    agy_task.check_confine_args(p.parse_args(argv))
+                self.assertEqual(cm.exception.code, 5)
+
+    def test_dry_run_reports_origins_and_prompt_rule(self):
+        cp = subprocess.run([sys.executable, str(SCRIPTS / "agy_task.py"), "--agy-bin", "agy", "run", "-w", str(self.work),
+                             "-t", "TASK", "--allow-browser-origin", SITE, "--dry-run"],
+                            capture_output=True, text=True, encoding="utf-8", env=self.env)
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        data = json.loads(cp.stdout)
+        self.assertEqual(data["browser_origins"], [SITE])
+        self.assertIn(SITE, data["prompt"])
+        self.assertIn("/browser", data["prompt"])
+
+    def dirs(self):
+        from unittest import mock
+        return mock.patch.object(agy_task, "chrome_user_data_dirs", lambda: [self.chrome])
+
+    def listener(self, family=None):
+        import socket
+        fam = family or socket.AF_INET
+        srv = socket.socket(fam)
+        srv.bind(("::1" if fam == socket.AF_INET6 else "127.0.0.1", 0))
+        srv.listen(16)  # probes are never accepted; leave room in the backlog
+        self.addCleanup(srv.close)
+        return srv.getsockname()[1]
+
+    def browser_args(self):
+        a = agy_task.build_parser().parse_args(["run", "-t", "x", "--allow-browser-origin", SITE])
+        agy_task.check_confine_args(a)
+        return a
+
+    def test_refuses_while_the_users_chrome_exposes_devtools(self):
+        port = self.listener()
+        (self.chrome / "DevToolsActivePort").write_text(f"{port}\n/devtools/browser/x\n")
+        with self.dirs():
+            self.assertEqual([p for _, p in agy_task.live_chrome_devtools()], [port])
+            with self.assertRaises(SystemExit) as cm:
+                agy_task.refuse_browser_on_users_chrome(self.browser_args())
+            self.assertEqual(cm.exception.code, 5)
+        cp = subprocess.run([sys.executable, str(SCRIPTS / "agy_task.py"), "--agy-bin", sys.executable, "run", "-w",
+                             str(self.work), "-t", "TASK", "--allow-browser-origin", SITE],
+                            capture_output=True, text=True, encoding="utf-8", env=self.env)
+        self.assertEqual(cp.returncode, 5, cp.stdout + cp.stderr)
+        self.assertIn("remote debugging", cp.stderr)
+
+    def test_an_ipv6_only_listener_is_detected(self):
+        import socket
+        if not socket.has_ipv6:
+            self.skipTest("no IPv6")
+        try:
+            port = self.listener(socket.AF_INET6)
+        except OSError:
+            self.skipTest("no ::1")
+        (self.chrome / "DevToolsActivePort").write_text(f"{port}\n/devtools/browser/x\n")
+        with self.dirs():
+            self.assertEqual([p for _, p in agy_task.live_chrome_devtools()], [port])
+
+    def test_a_stale_devtools_file_does_not_block(self):
+        import socket
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()  # nothing listens on it now
+        (self.chrome / "DevToolsActivePort").write_text(f"{port}\n/devtools/browser/x\n")
+        with self.dirs():
+            self.assertEqual(agy_task.live_chrome_devtools(), [])
+
+    def test_an_unreadable_port_file_fails_closed_and_lenient_parsing_matches(self):
+        port = self.listener()
+        bom = chr(0xFEFF)
+        (self.chrome / "DevToolsActivePort").write_text(f"{bom} {port}junk\n/devtools/browser/x\n", encoding="utf-8")
+        with self.dirs():
+            self.assertEqual([p for _, p in agy_task.live_chrome_devtools()], [port])
+        (self.chrome / "DevToolsActivePort").write_text("garbled\n")
+        with self.dirs(), self.assertRaises(SystemExit) as cm:
+            agy_task.refuse_browser_on_users_chrome(self.browser_args())
+        self.assertEqual(cm.exception.code, 5)
+
+    def test_agy_browser_endpoint_overrides_are_refused(self):
+        from unittest import mock
+        for var in ("AGY_BROWSER_WS_URL", "AGY_BROWSER_ACTIVE_PORT_FILE", "AGY_BROWSER_ANYTHING", "agy_browser_ws_url",
+                    "CHROME_DEVTOOLS_MCP_JS", "JETSKI_EVAL_CHROME_DEVTOOLS_MCP_COMMAND",
+                    "ANTIGRAVITY_NODE_PATH", "ANTIGRAVITY_LS_ADDRESS", "ANTIGRAVITY_GEMINI_DIR"):
+            with self.subTest(var=var), self.dirs(), mock.patch.dict(os.environ, {var: "x"}):
+                with self.assertRaises(SystemExit) as cm:
+                    agy_task.refuse_browser_on_users_chrome(self.browser_args())
+                self.assertEqual(cm.exception.code, 5)
+
+    def test_user_data_dir_override_only_adds(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"AGY_CHROME_USER_DATA_DIRS": ""}):
+            defaults = agy_task.chrome_user_data_dirs()
+        self.assertTrue(defaults)
+        with mock.patch.dict(os.environ, {"AGY_CHROME_USER_DATA_DIRS": str(self.chrome)}):
+            got = agy_task.chrome_user_data_dirs()
+        self.assertIn(self.chrome, got)
+        for d in defaults:
+            self.assertIn(d, got)
+
+    def test_child_env_drops_inherited_confinement_settings(self):
+        from unittest import mock
+        leaked = {"AGY_CONFINE_BROWSER_ORIGINS": json.dumps(["https://evil.example"]), "AGY_CONFINE_MODE": "deep-research",
+                  "AGY_CONFINE_DR_DIR": "C:\\", "AGY_CONFINE_ROOT": "C:\\"}
+        with mock.patch.dict(os.environ, leaked):
+            env = agy_task.child_env({"AGY_CONFINE_ROOT": str(self.work)})
+            bare = agy_task.child_env({})
+        self.assertEqual(env["AGY_CONFINE_ROOT"], str(self.work))
+        for k in ("AGY_CONFINE_BROWSER_ORIGINS", "AGY_CONFINE_MODE", "AGY_CONFINE_DR_DIR"):
+            self.assertNotIn(k, env)
+            self.assertNotIn(k, bare)
+        self.assertNotIn("AGY_CONFINE_ROOT", bare)
+
+    def test_origins_that_resolve_to_non_public_addresses_are_refused(self):
+        import socket
+        from unittest import mock
+        a = self.browser_args()
+
+        def fake(addrs):
+            return lambda host, *args, **kw: [(socket.AF_INET6 if ":" in ip else socket.AF_INET, socket.SOCK_STREAM,
+                                               0, "", (ip, 0)) for ip in addrs]
+
+        for addrs in (["127.0.0.1"], ["93.184.216.34", "10.0.0.7"], ["169.254.169.254"],
+                      ["::ffff:168.63.129.16"], ["64:ff9b::7f00:1"], ["2002:7f00:1::1"]):
+            with self.subTest(addrs=addrs), self.dirs(), mock.patch.object(socket, "getaddrinfo", fake(addrs)):
+                with self.assertRaises(SystemExit) as cm:
+                    agy_task.refuse_browser_on_users_chrome(a)
+                self.assertEqual(cm.exception.code, 5)
+
+        def fail(*args, **kw):
+            raise socket.gaierror("no such host")
+        with self.dirs(), mock.patch.object(socket, "getaddrinfo", fail), self.assertRaises(SystemExit):
+            agy_task.refuse_browser_on_users_chrome(a)
+        with self.dirs(), mock.patch.object(socket, "getaddrinfo", fake(["93.184.216.34"])):
+            agy_task.refuse_browser_on_users_chrome(a)  # public: no exit
+
+    def test_public_origins_are_accepted(self):
+        p = agy_task.build_parser()
+        for o, want in [("https://jinju-hub.netlify.app", "https://jinju-hub.netlify.app"),
+                        ("https://cafe.de/", "https://cafe.de"), ("https://dead.beef.example:8443", "https://dead.beef.example:8443"),
+                        ("http://8.8.8.8", "http://8.8.8.8"), ("HTTPS://Example.ORG", "https://example.org")]:
+            with self.subTest(origin=o):
+                a = p.parse_args(["run", "-t", "x", "--allow-browser-origin", o])
+                agy_task.check_confine_args(a)
+                self.assertEqual(a.allow_browser_origin, [want])
+
+    def test_local_and_private_origins_are_refused(self):
+        p = agy_task.build_parser()
+        for o in ("http://localhost:5173", "http://app.localhost", "http://127.0.0.1:9222", "http://[::1]:8080",
+                  "http://10.0.0.5", "http://192.168.0.2", "http://169.254.169.254", "http://0.0.0.0",
+                  "http://2130706433", "http://0x7f.1", "http://127.1",
+                  "http://１２７.０.０.１:9222", "http://①②⑦.0.0.1", "http://local%68ost:9222", "http://100.64.0.1",
+                  "http://[2001:db8::1]", "http://intranet", "http://printer.local", "http://nas.lan",
+                  "http://svc.internal", "http://x.home.arpa", "https://app.example.org.", "https://app..example.org",
+                  "https://ａｐｐ.example.org", "https://app.example.org:0", "http://168.63.129.16", "http://224.0.0.1"):
+            with self.subTest(origin=o):
+                with self.assertRaises(SystemExit) as cm:
+                    agy_task.check_confine_args(p.parse_args(["run", "-t", "x", "--allow-browser-origin", o]))
+                self.assertEqual(cm.exception.code, 5)
 
 if __name__ == "__main__":
     unittest.main()

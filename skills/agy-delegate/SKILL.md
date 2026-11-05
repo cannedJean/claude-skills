@@ -1,6 +1,6 @@
 ---
 name: agy-delegate
-description: Delegate a small, self-contained coding task to the Antigravity CLI (`agy`, Google's terminal coding agent) in headless mode and collect the files it produced, or run the confined `--deep-research` execution profile for headless Gemini Deep Research relay tasks. Use when the user says things like "이건 agy한테 시켜", "Antigravity로 만들어와", "delegate this to agy", or wants a bounded coding chore done by a second agent and the outputs brought back. Not for tasks that need interactive approval, credentials, or multi-repo changes.
+description: Delegate a small, self-contained coding task to the Antigravity CLI (`agy`, Google's terminal coding agent) in headless mode and collect the files it produced, or run the confined `--deep-research` execution profile for headless Gemini Deep Research relay tasks. Use when the user says things like "이건 agy한테 시켜", "Antigravity로 만들어와", "delegate this to agy", or wants a bounded coding chore done by a second agent and the outputs brought back, including when agy must open or browse a specific website (agy 브라우저로 사이트 열어서 확인). Not for tasks that need interactive approval, credentials, or multi-repo changes.
 ---
 
 # agy-delegate
@@ -46,6 +46,18 @@ Commands below are relative to this skill's directory (`scripts/agy_task.py`).
    - `--dr-skill-dir PATH` specifies the `local-gemini-deep-research` skill directory (default:
      `~/.gemini/config/skills/local-gemini-deep-research` or `AGY_CONFINE_DR_DIR`).
    - `--inlined` and `--bare` are for callers such as agy-outsource: see README.
+   - On Windows Git Bash, an argument starting with `/` is rewritten to a path (`-t "/teamwork x"` becomes
+     `C:/Program Files/Git/teamwork x`). Put slash commands such as `/teamwork` or `/browser` in a `--task-file`.
+
+   **When the task needs agy to open a web page**, keep confinement on and add
+   `--allow-browser-origin https://site.example` (repeatable), and mention `/browser` in the task. agy's
+   browser is a Chrome DevTools subagent; the hook lets it navigate only to the listed origins and click,
+   scroll, resize, take screenshots and read console/network, while typing, page scripts, uploads and every other
+   site stay blocked. Clicks are not filtered: a button that triggers a paid or state-changing action is one click
+   away, and a link can lead off the site, so name such buttons in the task as off-limits and tell the user. The run exits 5 while the user's own Chrome has remote
+   debugging on, because agy would otherwise drive that signed-in Chrome: ask the user to turn it off at
+   `chrome://inspect/#remote-debugging` and retry. `--no-confine` is not the way to get a browser: it removes the
+   path confinement and the audit log too.
 
 4. **Read the JSON on stdout** and report to the user: `status`, `changes.created/modified/deleted`,
    `structured.summary` / `structured.notes`, `deep_research` (in deep-research mode), `verify.rc` and tail.
@@ -53,7 +65,8 @@ Commands below are relative to this skill's directory (`scripts/agy_task.py`).
    Exit codes: 0 ok, 2 agent status not SUCCESS or verify failed, 3 agy error (also agy could not start,
    e.g. a prompt over the Windows command-line limit of 32,767 characters: use a shorter task), 4 preflight,
    5 bad arguments (`--allow-all` without `--no-confine`, `--deep-research` with `--no-confine`, an `--inlined`
-   path that is not work-dir-relative, `resume` confined to `~` or a drive root).
+   path that is not work-dir-relative, `resume` confined to `~` or a drive root, `--allow-browser-origin` with
+   `--no-confine`/`--deep-research`/a non-origin, or while the user's Chrome exposes remote debugging).
 
 5. **Iterate** with the same conversation when a fix is small:
    ```
@@ -72,8 +85,8 @@ Commands below are relative to this skill's directory (`scripts/agy_task.py`).
 - Everything the agent should see must be inside the work directory (`-i`) or in the prompt — with
   confinement on it cannot read anything else.
 - agy is **confined to the work directory** by default (do not pass `--no-confine` unless the user asked):
-  a hook denies paths outside it (any form, links included), every shell, browser and MCP tool, and writes into
-  `.agents/` or `.agy_task/`. `confinement.enabled: false` means the hook did not see every tool call: the run
+  a hook denies paths outside it (any form, links included), every shell, browser and MCP tool (except the
+  Chrome DevTools tools on `--allow-browser-origin` origins), and writes into `.agents/` or `.agy_task/`. `confinement.enabled: false` means the hook did not see every tool call: the run
   was **not** confined; say so. Report a non-zero `confinement.denied_count` (check `denied[].rule` / `reason`).
   Details: README.md "Permissions model".
 - Under `--deep-research` confinement profile:

@@ -65,6 +65,7 @@ Per-run artifacts are kept under `<workdir>/.agy_task/<stamp>/`.
 | `--dr-skill-dir PATH` | directory containing local-gemini-deep-research scripts (default: `~/.gemini/config/skills/local-gemini-deep-research` or `AGY_CONFINE_DR_DIR`) |
 | `--inlined REL` | work-dir-relative file whose full text the task already holds; view tools on it are denied and the agent is pointed back to the prompt, saving a model call per opened file; listing, searching and editing it stay allowed. Such denials are counted in `inlined_denied_count`, apart from `denied_count`: a token-saving refusal, not an attempt to get out (repeatable; `run` only; no effect with `--no-confine`) |
 | `--bare` | send the task text as is, without the rules/report frame; only for tasks that already state the work-dir rules and the delivery format (agy-outsource work orders do). `--dry-run` shows the unframed prompt |
+| `--allow-browser-origin ORIGIN` | let agy's `/browser` (Chrome DevTools MCP) tools browse this http(s) origin (repeatable; `run` and `resume`). Needs confinement, not with `--deep-research`; refused (exit 5) while one of the user's Chrome profiles has a live DevTools port. See "Browser allowlist" below |
 | `--sandbox` | agy terminal sandbox (macOS/Linux) |
 | `--no-schema` | skip structured output |
 | `--dry-run` | print the exact agy command and framed prompt without running |
@@ -74,7 +75,8 @@ before the subcommand: `python scripts/agy_task.py --model <slug> run -w ... -t 
 
 Exit codes: 0 ok, 2 agent status not SUCCESS or verify failed, 3 agy error, 4 preflight, 5 bad arguments.
 
-Env: `AGY_BIN`, `AGY_TASK_MODEL`, `AGY_TASK_TIMEOUT`.
+Env: `AGY_BIN`, `AGY_TASK_MODEL`, `AGY_TASK_TIMEOUT`, `AGY_CHROME_USER_DATA_DIRS` (path-separated Chrome
+user-data folders checked for a live `DevToolsActivePort`; default: the Chrome/Chromium channels of this OS).
 
 ## Permissions model
 
@@ -96,9 +98,20 @@ hook (`scripts/confine_hook.py`, installed as `<workdir>/.agents/hooks.json` for
 it starts through a temporary `.agents/confine.cmd` launcher so paths with spaces or `&`, `^`, `%` work;
 a pre-existing file of either name is restored byte for byte, also our own entry left by a killed run, whose
 agy session may still be alive and must stay hooked). It
-hard-denies any tool call whose path arguments resolve outside the work directory, hard-linked files,
-traversal look-alike components (`.. `, `...`), every shell, browser and MCP tool, writes into `.agents/`
-or `.agy_task/`, and view tools on `--inlined` files; everything else is left to the rules above (the hook
+allows only the tools it knows how to check (file read/write/edit/list/search tools, `search_web`,
+`read_url_content`, task/subagent/message tools, `schedule`, `ask_question`, `finish`; plus `run_command`
+under `--deep-research` and the Chrome DevTools tools under `--allow-browser-origin`) and denies every other tool
+(`rule: "tool"`, e.g. `run_workflow`, `sed_file`), so a new agy tool fails closed. It
+hard-denies any tool call whose path arguments resolve outside the work directory, scheme-looking values such as
+`zz://../x` or `http://../x` in a file argument (Node resolves them as relative paths; only arguments named
+`*url`/`*uri`/`*href` may hold an http(s) URL), hard-linked files, writes into agy/git configuration folders at any depth (`.agents`, `.agent`, `_agents`,
+`_agent`, `.agy_task`, `.git`), URL arguments that point at local, private or metadata hosts, a subagent
+`Workspace` other than the work dir, the browser subagent (`TypeName: browser`) unless browser mode is on,
+traversal look-alike components (`.. `, `...`), every shell tool (also `shell_exec`, `run_extension_code`,
+`execute_notebook`, `restart_dev_server`), every browser tool (any name with a `browser` word, e.g.
+`open_browser_url`), MCP tools and MCP resources (`read_resource`, `list_resources`), writes into `.agents/`
+or `.agy_task/`, and view tools on `--inlined` files. Prose arguments are never treated as paths (contents, queries, `notes`, and
+per tool `edit_file` `Target`/`Replacement`, `finish` `summary`/`code`); everything else is left to the rules above (the hook
 answers `ask`, which never grants more than agy would on its own). Each decision is logged to
 `.agy_task/<stamp>/confine.jsonl` with the rule that fired (`shell`, `tool`, `path`, `hard_link`,
 `protected`, `inlined`, `error`); `inlined` denials are counted apart from `denied_count`, which keeps
@@ -109,6 +122,46 @@ dir did not change while the hook logged nothing. The hook's own files are left 
 `hooks.json` the agent wrote in a `--no-confine` run (agy would run it on every later session there).
 Because a program the agent runs could read any file, `--allow-all` is refused unless `--no-confine` is
 also given.
+
+### Browser allowlist (--allow-browser-origin)
+
+Headless agy has no browser tool until the task mentions `/browser`; it then runs a browser subagent whose
+tools are agy's built-in Chrome DevTools MCP (`mcp_chrome_devtools_*`). With `--allow-browser-origin`, the
+runner passes `AGY_CONFINE_BROWSER_ORIGINS` to the hook, which then answers `ask` (agy decides) for:
+`navigate_page`/`new_page` to a listed origin (scheme, host and port must match exactly; credentials,
+`file:`, `chrome:`, `javascript:` and other hosts are denied, as is `initScript`), `back`/`forward`/`reload`,
+`click`, `hover`, `drag`, `press_key` with navigation keys only (Tab, Shift+Tab, Escape, Enter, Space,
+arrows, PageUp/PageDown, Home, End), `take_snapshot`, `take_screenshot`, `wait_for`, `emulate`,
+`resize_page`, console/network/CSS reads, `lighthouse_audit` (with `outputDirPath`), performance traces,
+screencasts (with `filePath`), `handle_dialog` (without `promptText`), `list_pages`, `select_page`. It denies
+`fill`, `fill_form`, `type_text`, `evaluate_script`, `upload_file`, `take_heapsnapshot`, `close_page`,
+`emulate` with `userAgent`/`extraHttpHeaders`, non-object arguments and any Chrome DevTools tool it does not
+know (`rule: "tool"`); navigation outside the list is `rule: "url"`; every argument that names a file, under
+any key (e.g. `get_network_request` `responseFilePath`), must be an absolute path (the MCP resolves relative
+paths against its own folder) inside the work dir, outside
+`.agents/`/`.agy_task/` and not be a hard link (`rule: "path"`, `protected`, `hard_link`). Every other browser
+or MCP tool stays denied. Browser calls are logged with their `url`/`type`/`key`.
+
+The runner accepts only public origins with plain ASCII hosts: it refuses `localhost` and local-only suffixes
+(`.local`, `.lan`, `.internal`, `.home.arpa`, ...), single-label names, IPv6 literals, non-global IPs
+(loopback, private, link-local, CGNAT, numeric-obfuscated forms), percent-encoded, unicode or full-width hosts
+and trailing dots; the hook applies the same ASCII rule to every navigation URL and argument names that differ
+only in case are denied. It refuses browser mode while any `AGY_BROWSER_*`, `CHROME_DEVTOOLS_MCP*`,
+`JETSKI_EVAL_*CHROME*` or agy path override (`ANTIGRAVITY_NODE_PATH`, `ANTIGRAVITY_LS_ADDRESS`, ...) is set,
+refuses an origin whose host does not resolve or resolves to any non-public address (checked once at launch;
+DNS rebinding during the run is not covered), and drops any
+inherited `AGY_CONFINE_*` variable from agy's environment so only the flags of this run count.
+
+Limits: the hook sees tool arguments, not the page. Clicking a link (or `back`/`forward`, `select_page`) can
+take the browser off the allowed origin; typing, scripts and uploads stay blocked there too, and the browser is
+a fresh profile without the user's sign-ins, but say so when reporting.
+
+agy's Chrome DevTools MCP auto-connects to a Chrome that exposes remote debugging (its `DevToolsActivePort`).
+If the user's everyday Chrome does, the browser tools would drive that signed-in profile, so the runner
+refuses browser mode (exit 5) while any default Chrome user-data folder has a `DevToolsActivePort` whose port
+accepts connections; turn remote debugging off (`chrome://inspect/#remote-debugging`) to let agy start its
+own browser. Clicks are not filtered by target: a button that sends a paid request or writes data on the
+allowed site is reachable, so name such buttons in the task as off-limits.
 
 ### Deep-Research Confinement Profile (--deep-research)
 

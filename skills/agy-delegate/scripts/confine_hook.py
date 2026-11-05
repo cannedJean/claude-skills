@@ -22,7 +22,8 @@ In deep-research mode (AGY_CONFINE_MODE="deep-research"):
 
 Environment (set by agy_task.py): AGY_CONFINE_ROOT (the root; default: the parent of the cwd),
 AGY_CONFINE_LOG (JSON-lines decision log), AGY_CONFINE_INLINED (JSON list of root-relative files whose full text
-the prompt already holds), AGY_CONFINE_MODE, AGY_CONFINE_DR_DIR. Python 3.9+, stdlib only.
+the prompt already holds), AGY_CONFINE_MODE, AGY_CONFINE_DR_DIR, AGY_CONFINE_BROWSER_ORIGINS (JSON list of http(s)
+origins; when set, agy's Chrome DevTools tools may browse those origins - see decide_browser). Python 3.9+, stdlib only.
 """
 from __future__ import annotations
 
@@ -38,18 +39,33 @@ from urllib.request import url2pathname
 
 IS_WINDOWS = sys.platform == "win32"
 PROTECTED = (".agents", ".agy_task")  # hook config and launcher metadata: readable, never writable
+# folders agy (or git) loads configuration or code from, at any depth: readable, never writable
+CONFIG_DIRS = {".agents", ".agent", "_agents", "_agent", ".agy_task", ".git"}
+# every tool the confinement knows how to judge; anything else is denied (fails closed on new agy tools)
+KNOWN_TOOLS = {"view_file", "view_file_outline", "view_code_item", "view_content_chunk", "read_file", "read_notebook",
+               "write_to_file", "write_file", "replace_file_content", "multi_replace_file_content", "edit_file",
+               "list_dir", "grep_search", "grep", "find_by_name", "find", "codebase_search", "search_in_file",
+               "search_web", "read_url_content", "manage_task", "send_message", "manage_subagents", "invoke_subagent",
+               "define_subagent", "finish", "schedule", "ask_question"}
 READ_TOOLS = {"view_file", "view_file_outline", "view_code_item", "view_content_chunk", "list_dir", "grep_search",
               "find_by_name", "codebase_search", "search_in_file", "read_file", "read_notebook"}
 VIEW_TOOLS = {"view_file", "view_file_outline", "view_code_item", "view_content_chunk", "read_file"}
-SHELL_TOOLS = {"run_command", "send_command_input", "read_terminal", "command_status"}
+SHELL_TOOLS = {"run_command", "send_command_input", "read_terminal", "command_status", "shell_exec",
+               "run_extension_code", "execute_notebook", "restart_dev_server"}
+RESOURCE_TOOLS = {"read_resource", "list_resources"}  # MCP resources: another server's data
+NATIVE_BROWSER = re.compile(r"(^|_)browser(_|$)")  # agy's own browser steps: open_browser_url, browser_subagent, ...
 # file contents and prose, never a path: skipped when scanning arguments (anything else that looks like a path
 # - absolute, rooted, ~, file:, or with a .. segment - is checked whatever its key, e.g. a glob Pattern)
 TEXT_KEYS = {"codecontent", "replacementcontent", "targetcontent", "instruction", "description", "toolaction",
              "toolsummary", "query", "searchquery", "commandline", "input", "prompt", "message", "content", "text",
-             "explanation", "summary", "title"}
-PATH_KEY = re.compile(r"(path|paths|file|files|dir|dirs|directory|directories|folder|cwd|uri|url|location|root|target)$",
+             "explanation", "summary", "title", "notes", "question", "questions", "options", "systemprompt",
+             "system_prompt", "role", "name"}
+# per-tool prose arguments (agy CLI tools): an edit's old/new text and a report's notes are never paths
+TOOL_TEXT_KEYS = {"edit_file": {"target", "replacement"}, "finish": {"notes", "summary", "code"}}
+PATH_KEY = re.compile(r"(path|paths|file|files|dir|dirs|directory|directories|folder|cwd|uri|url|(?<!geo)location|root|workspace)$",
                       re.I)
 URL_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]+)://", re.I)
+URL_KEY = re.compile(r"(url|uri|urls|uris|href)$", re.I)  # arguments that really take a web URL
 DOTDOT = re.compile(r"(^|[\\/])\.\.([\\/]|$)")
 
 # Metacharacters for shell chaining and redirection
@@ -69,8 +85,11 @@ def inside(path: str, root: str) -> bool:
         return False
 
 
-def to_fs_path(value: str, root: str):
-    """(canonical path, None) or (None, reason to deny) for one argument naming a file or directory."""
+def to_fs_path(value: str, root: str, url_ok: bool = False):
+    """(canonical path, None) or (None, reason to deny) for one argument naming a file or directory.
+    url_ok: the argument takes a web URL (its key ends in url/uri/href); only then is an http(s) URL "not a file".
+    Anywhere else a scheme-looking value is denied: Node and Win32 resolve "zz://../x" or "http://../x" as an
+    ordinary relative path ("zz:" becomes a folder name), so it could point anywhere."""
     v = value.strip()
     if v.lower().startswith("file:"):
         u = urlparse(v)
@@ -83,7 +102,15 @@ def to_fs_path(value: str, root: str):
     else:
         m = URL_RE.match(v)
         if m and len(m.group(1)) > 1:
-            return None, None  # http(s) and friends: not a local file, agy's permission rules decide
+            if url_ok and m.group(1).lower() in ("http", "https"):
+                try:
+                    host = urlparse(v).hostname
+                except ValueError:
+                    return None, "malformed URL"
+                if not public_host(host or ""):
+                    return None, "URL to a local, private or non-public host"
+                return None, None  # a public web URL in a URL argument: not a local file, agy's rules decide
+            return None, "URL-looking value where a file path is expected"
     if v.startswith("~"):
         v = os.path.expanduser(v)
     for part in re.split(r"[\\/]", v):  # "... ", ".. ", ". ." : traversal look-alikes, never a real name
@@ -102,6 +129,40 @@ def to_fs_path(value: str, root: str):
         return None, "alternate data stream or illegal colon in path"
     path = v if os.path.isabs(v) else os.path.join(root, v)
     return canon(path), None
+
+
+LOCAL_SUFFIXES = ("localhost", "local", "lan", "internal", "intranet", "home", "corp", "home.arpa", "localdomain")
+METADATA_IPS = {"168.63.129.16", "100.100.100.200", "fd00:ec2::254"}
+
+
+def public_host(host: str) -> bool:
+    """Lexical check that a URL host names a public site: plain ASCII DNS name with a dot and no local-only suffix,
+    or a public IP literal (loopback, private, link-local, CGNAT, multicast, metadata and obfuscated forms fail)."""
+    import ipaddress
+    import socket
+    h = (host or "").lower()
+    ip = None
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        if re.fullmatch(r"(0x[0-9a-f]*|\d+)(\.(0x[0-9a-f]*|\d+)){0,3}", h):
+            try:
+                ip = ipaddress.ip_address(socket.inet_aton(h))
+            except OSError:
+                return False
+    if ip is not None:
+        if ip.version == 6:  # unwrap IPv4 carried in IPv6 (mapped, NAT64 64:ff9b::/96, 6to4)
+            if ip.ipv4_mapped:
+                ip = ip.ipv4_mapped
+            elif ip in ipaddress.ip_network("64:ff9b::/96"):
+                ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+            elif ip.sixtofour:
+                ip = ip.sixtofour
+        return ip.is_global and not ip.is_multicast and str(ip) not in METADATA_IPS
+    if not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", h):
+        return False
+    labels = h.split(".")
+    return labels[-1] not in LOCAL_SUFFIXES and ".".join(labels[-2:]) not in LOCAL_SUFFIXES
 
 
 def hard_linked(path: str) -> bool:
@@ -123,20 +184,20 @@ def looks_like_path(value: str) -> bool:
     )
 
 
-def scan(args, root: str, key: str = ""):
+def scan(args, root: str, key: str = "", text_keys=frozenset()):
     """Yield (key, raw value, canonical path or None, deny reason or None) for every path in the arguments."""
     if isinstance(args, dict):
         for k, v in args.items():
-            yield from scan(v, root, str(k))
+            yield from scan(v, root, str(k), text_keys)
     elif isinstance(args, list):
         for v in args:
-            yield from scan(v, root, key)
+            yield from scan(v, root, key, text_keys)
     elif isinstance(args, str) and args.strip():
         k = key.lower()
-        if k in TEXT_KEYS:
+        if k in TEXT_KEYS or k in text_keys:
             return
         if PATH_KEY.search(k) or looks_like_path(args):
-            path, reason = to_fs_path(args, root)
+            path, reason = to_fs_path(args, root, url_ok=bool(URL_KEY.search(k)))
             if path is not None or reason:
                 yield key, args, path, reason
 
@@ -146,6 +207,8 @@ def is_protected_file(rel: str, mode: str = "default") -> bool:
     base_rel = rel_clean.split(":")[0]
     first_part = base_rel.split("/")[0]
     if first_part in PROTECTED:
+        return True
+    if any(part.lower().rstrip(". ") in CONFIG_DIRS for part in base_rel.split("/")):
         return True
     if mode == "deep-research":
         rel_lower = base_rel.lower()
@@ -286,10 +349,105 @@ def validate_deep_research_command(cmd: str, root: str, dr_dir: str, cwd: str = 
     return "ask", "", ""
 
 
-def decide(payload: dict, root: str, inlined=frozenset(), mode: str = "default", dr_dir: str = ""):
+# Opt-in browser allowlist (AGY_CONFINE_BROWSER_ORIGINS, set by agy_task.py --allow-browser-origin). Only agy's built-in
+# Chrome DevTools MCP tools qualify; every other browser/MCP tool stays denied. Navigation is limited to the listed
+# origins; text entry, page scripts, uploads, heap dumps and closing pages are denied (they could submit forms, call APIs
+# from the page or read local files); files the browser writes must land inside the root (never .agents/.agy_task);
+# unknown browser tools fail closed. agy_task.py refuses browser mode while the user's own Chrome exposes a DevTools port,
+# because agy's MCP auto-connects to it: the tools then drive a separate browser, never the user's signed-in one.
+BROWSER_PREFIX = "mcp_chrome_devtools_"
+BROWSER_ALLOWED = {"take_snapshot", "take_screenshot", "wait_for", "list_console_messages", "get_console_message",
+                   "list_network_requests", "get_network_request", "get_css_styles", "lighthouse_audit",
+                   "performance_start_trace", "performance_stop_trace", "performance_analyze_insight",
+                   "screencast_start", "screencast_stop", "handle_dialog", "emulate", "resize_page", "click", "hover",
+                   "drag", "press_key", "navigate_page", "new_page", "list_pages", "select_page"}
+BROWSER_KEYS = {"tab", "shift+tab", "escape", "enter", "space", "arrowup", "arrowdown", "arrowleft", "arrowright",
+                "pageup", "pagedown", "home", "end"}
+BROWSER_REQUIRED_PATH = {"lighthouse_audit": "outputdirpath", "screencast_start": "filepath"}  # else they write to temp
+
+
+PLAIN_HOST = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)*$")  # ASCII labels only: no %, no unicode, no empty/trailing dot
+
+
+def origin_key(url: str):
+    """(scheme, host, port) of an http(s) URL without credentials whose host is plain ASCII, else None.
+    Hosts a browser would rewrite (percent-encoding, full-width or other unicode forms, trailing dots) never match."""
+    try:
+        u = urlparse(str(url).strip())
+        port = u.port
+    except ValueError:
+        return None
+    if u.scheme not in ("https", "http") or not u.hostname or u.username is not None or u.password is not None:
+        return None
+    host = u.hostname.lower()
+    if not PLAIN_HOST.match(host) or port == 0:
+        return None
+    return u.scheme, host, port if port is not None else (443 if u.scheme == "https" else 80)
+
+
+def parse_origins(raw) -> frozenset:
+    try:
+        items = json.loads(raw) if isinstance(raw, str) else list(raw or ())
+    except (ValueError, TypeError):
+        return frozenset()
+    return frozenset(k for k in (origin_key(o) for o in (items if isinstance(items, list) else ())) if k)
+
+
+def decide_browser(tool: str, args: dict, root: str, origins: frozenset):
+    """(decision, reason, path hits, rule) for one Chrome DevTools tool call (tool = name without the prefix)."""
+    if tool not in BROWSER_ALLOWED:
+        return "deny", f"browser tool {tool} is not allowed here (no text entry, page scripts, uploads or unknown tools)", [], "tool"
+    lower = {str(k).lower(): v for k, v in args.items()}
+    if len(lower) != len(args):  # "promptText" and "PROMPTTEXT" together: which one the MCP reads is not ours to guess
+        return "deny", f"browser tool {tool}: argument names that differ only in case", [], "tool"
+    if lower.get("initscript"):
+        return "deny", "page scripts (initScript) are not allowed", [], "tool"
+    if tool == "handle_dialog" and lower.get("prompttext"):
+        return "deny", "handle_dialog promptText would type text into the page", [], "tool"
+    if tool == "emulate" and (lower.get("useragent") or lower.get("extrahttpheaders")):
+        return "deny", "emulate userAgent/extraHttpHeaders are not allowed (viewport, colours and throttling are)", [], "tool"
+    for tool_name, key in BROWSER_REQUIRED_PATH.items():
+        v = lower.get(key)
+        if tool == tool_name and (not isinstance(v, str) or not v.strip()):
+            return "deny", f"{tool} must name its output ({key}) inside {root}", [], "path"
+    for k, v in args.items():
+        if str(k).lower() != "url" and PATH_KEY.search(str(k)):
+            vals = v if isinstance(v, list) else [v]
+            if not vals or any(not isinstance(x, str) or not x.strip() for x in vals):
+                return "deny", f"{k}={v!r}: a file argument must be a non-blank absolute path", [], "path"
+    # every argument that names a file (any key, fail closed) must stay inside the root; URLs are checked below
+    hits = []
+    for key, raw, path, reason in scan({k: v for k, v in args.items() if str(k).lower() != "url"}, root):
+        if reason or path is None or not inside(path, root):
+            return "deny", f"{key}={raw!r}: the browser may only use files inside {root}", [], "path"
+        r = str(raw).strip()
+        if not (r.lower().startswith("file:") or os.path.isabs(r)):
+            return "deny", (f"{key}={raw!r}: give the browser an absolute path inside {root} (it resolves relative "
+                            "paths against its own folder, not the work dir)"), [], "path"
+        if is_protected_file(os.path.relpath(path, root)):
+            return "deny", f"{key}={raw!r} is in a protected (configuration) folder", [], "protected"
+        if hard_linked(path):
+            return "deny", f"{key}={raw!r} is a hard link (its data may live outside {root})", [], "hard_link"
+        hits.append((key, raw, path, None))
+    if tool in ("navigate_page", "new_page"):
+        url = args.get("url")
+        nav = str(args.get("type") or ("url" if url or tool == "new_page" else "")).lower()
+        if nav == "url":
+            if not url or origin_key(url) not in origins:
+                return "deny", f"navigation to {url!r} is outside the allowed origins", [], "url"
+        elif nav not in ("back", "forward", "reload") or url:
+            return "deny", f"navigation type {nav!r} is not allowed", [], "url"
+    if tool == "press_key" and str(args.get("key") or "").strip().lower() not in BROWSER_KEYS:
+        return "deny", f"press_key {args.get('key')!r}: only navigation keys (text entry is disabled)", [], "tool"
+    return "ask", "", hits, ""
+
+
+def decide(payload: dict, root: str, inlined=frozenset(), mode: str = "default", dr_dir: str = "",
+           browser_origins=frozenset()):
     """(decision, reason, path hits, rule). inlined: canonical paths of files whose full text is in the prompt
     (view tools on them are denied). rule names why a call was denied - shell, tool, path (unreadable or outside the
-    root), hard_link, protected, inlined or error - so a caller can tell an attempt to get out from a token-saving refusal."""
+    root), hard_link, protected, inlined, url or error - so a caller can tell an attempt to get out from a
+    token-saving refusal. browser_origins: opt-in allowlist for agy's Chrome DevTools tools (see decide_browser)."""
     root = canon(root)
     if dr_dir:
         dr_dir = canon(dr_dir)
@@ -298,8 +456,13 @@ def decide(payload: dict, root: str, inlined=frozenset(), mode: str = "default",
     name = str(tc.get("name") or "").lower()
     args = tc.get("args") or {}
 
-    # Browser and MCP tools are unconditionally denied
-    if name.startswith("browser") or "mcp" in name:
+    if browser_origins and mode != "deep-research" and name.startswith(BROWSER_PREFIX):
+        if not isinstance(args, dict):
+            return "deny", f"tool {name}: arguments must be an object", [], "tool"
+        return decide_browser(name[len(BROWSER_PREFIX):], args, root, browser_origins)
+
+    # Browser, MCP and MCP-resource tools are otherwise unconditionally denied
+    if NATIVE_BROWSER.search(name) or "mcp" in name or name in RESOURCE_TOOLS:
         return "deny", f"tool {name} is disabled: this session may only touch files inside " + root, [], "tool"
 
     # Shell tools handling
@@ -324,8 +487,28 @@ def decide(payload: dict, root: str, inlined=frozenset(), mode: str = "default",
         if name in SHELL_TOOLS:
             return "deny", "shell commands are disabled: this session may only touch files inside " + root, [], "shell"
 
+    if name not in KNOWN_TOOLS:
+        return "deny", f"tool {name} is not one this confinement knows how to check, so it is denied", [], "tool"
+    if not isinstance(args, dict):
+        return "deny", f"tool {name}: arguments must be an object", [], "tool"
+    if name == "invoke_subagent":
+        specs = [args] + [x for k, v in args.items() if str(k).lower() == "subagents" and isinstance(v, list)
+                          for x in v if isinstance(x, dict)]
+        for spec in specs:
+            for k, v in spec.items():
+                kl = str(k).lower()
+                if kl in ("typename", "type", "agent", "agenttype", "subagenttype") and str(v).strip().lower() == "browser"                         and not browser_origins:
+                    return "deny", "the browser subagent needs browser mode (--allow-browser-origin)", [], "tool"
+                if kl.startswith("workspace"):
+                    for w in (v if isinstance(v, list) else [v]):
+                        if str(w).strip().lower() in ("", "inherit", "none"):
+                            continue  # agy's default: the subagent shares this work dir
+                        wpath, wreason = to_fs_path(str(w), root)
+                        if wreason or wpath != root:
+                            return "deny", f"a subagent must work in {root}, not {w!r}", [], "path"
+
     # Filesystem tools path scanning
-    hits = list(scan(args, root))
+    hits = list(scan(args, root, text_keys=frozenset(TOOL_TEXT_KEYS.get(name, ()))))
     for key, raw, path, reason in hits:
         if reason:
             return "deny", f"{key}={raw!r}: {reason}; only paths inside {root} are allowed", hits, "path"
@@ -386,11 +569,18 @@ def main() -> int:
         dr_dir = canon(dr_dir_env) if dr_dir_env else ""
         payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace") or "{}")
         tc = payload.get("toolCall") or {}
-        decision, reason, hits, rule = decide(payload, root, inlined_paths(root), mode=mode, dr_dir=dr_dir)
+        origins = parse_origins(os.environ.get("AGY_CONFINE_BROWSER_ORIGINS") or "[]")
+        decision, reason, hits, rule = decide(payload, root, inlined_paths(root), mode=mode, dr_dir=dr_dir,
+                                              browser_origins=origins)
         entry.update(tool=tc.get("name"), decision=decision, reason=reason,
                      paths=[{"key": k, "value": v} for k, v, _, _ in hits][:8])
         if rule:
             entry["rule"] = rule
+        targs = tc.get("args") or {}
+        if str(tc.get("name") or "").lower().startswith(BROWSER_PREFIX) and isinstance(targs, dict):
+            seen = {k: str(targs[k])[:300] for k in ("url", "type", "key") if targs.get(k)}
+            if seen:
+                entry["browser"] = seen
         if tc.get("name") in SHELL_TOOLS:
             entry["command"] = str((tc.get("args") or {}).get("CommandLine", ""))[:300]
     except Exception as e:  # fail closed
