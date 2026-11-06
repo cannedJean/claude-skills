@@ -51,8 +51,12 @@ Commands below are relative to this skill's directory (`scripts/agy_task.py`).
    - `-i PATH` (repeatable) copies files/dirs into the work directory before the run.
    - `--verify CMD` runs locally afterwards (tests, a smoke command); a non-zero rc marks the run `verify-failed`.
    - `--collect DIR` copies created/modified files into another directory.
-   - `--effort low|medium|high`, `--timeout 10m` as needed. The model is a global option and goes before the
+   - `--effort low|medium|high` as needed. The model is a global option and goes before the
      subcommand: `python scripts/agy_task.py --model <slug> run ...` (`agy models` lists slugs; aliases `argon`, `아르곤` supported).
+   - `--timeout` defaults to `auto`: single agent 20m, `/teamwork` 60m, deep research 90m; ×1.5 for medium and
+     ×2 for high effort; +1m per 50 KB of `--input` (max +30m). Measured Argon-low `/teamwork` reviews took more
+     than 15 minutes each, so leave it on `auto` unless the user gives a limit; pass e.g. `--timeout 2h` to extend.
+     The chosen value is in the JSON as `timeout: {value, source}`.
    - `--single-agent` overrides the Argon default to `/teamwork`, running as a single agent.
    - `--dry-run` shows the exact agy command and framed prompt without running (use it to check a spec).
    - Use `python3` on macOS/Linux, `python` on Windows. `--verify` runs in the platform shell.
@@ -67,10 +71,28 @@ Commands below are relative to this skill's directory (`scripts/agy_task.py`).
      `~/.gemini/config/skills/local-gemini-deep-research` or `AGY_CONFINE_DR_DIR`).
    - `--inlined` and `--bare` are for callers such as agy-outsource: see README.
 
+   **Independent tasks run in parallel as a batch.** When a job splits into parts that do not need each other's
+   output (review dimensions such as bugs / tests / docs / requirement coverage, or modules that touch different
+   files), give each part its own task and run them with `batch`: one agy session and one work directory per
+   task, at most `--parallel` (default 3) at a time. Parts where one consumes another's result stay sequential
+   `run` calls.
+   ```
+   # manifest.json: [{"name": "bugs", "task": "/teamwork Review ... write review.md", "inputs": ["src"]},
+   #                 {"name": "acceptance", "task_file": "accept.md", "inputs": ["README.md", "docs"]}]
+   python scripts/agy_task.py --model gemini-4-argon-low batch -m manifest.json -w ./work/review --effort low
+   ```
+   Task keys: `name` (required, unique), `task` or `task_file`, and optionally `inputs`, `workdir`, `model`,
+   `effort`, `timeout`, `verify`, `collect`, `single_agent`, `bare`, `no_schema`, `inlined`, `agent`, `dry_run`.
+   The batch prints `{status: ok|partial|failed, elapsed_sec, tasks: [{name, status, workdir, log, result}]}`
+   and saves it as `<batch dir>/batch_result.json`; each `result` is that task's normal run JSON.
+
 4. **Read the JSON on stdout** and report to the user: `status`, `changes.created/modified/deleted`,
    `structured.summary` / `structured.notes`, `deep_research` (in deep-research mode), `verify.rc` and tail.
    Then review the produced code yourself before handing it over; agy's output is a draft, not a merge.
-   Exit codes: 0 ok, 2 agent status not SUCCESS or verify failed, 3 agy error (also agy could not start,
+   `status: timeout-partial` means agy hit the print timeout: the files listed in `changes` exist but may be
+   incomplete; check them, then `resume` the conversation or re-run with a longer `--timeout`.
+   Exit codes: 0 ok, 2 agent status not SUCCESS, verify failed, timeout-partial, or a batch with some failed
+   tasks, 3 agy error (also agy could not start,
    e.g. a prompt over the Windows command-line limit of 32,767 characters: use a shorter task), 4 preflight,
    5 bad arguments (`--allow-all` without `--no-confine`, `--deep-research` with `--no-confine`, an `--inlined`
    path that is not work-dir-relative, `resume` confined to `~` or a drive root).

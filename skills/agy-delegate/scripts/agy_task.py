@@ -372,6 +372,56 @@ def parse_agy_error(stderr_text: str):
     return None
 
 
+# --------------------------------------------------------------------------- timeout / status
+# Measured 2026-11-06 on Windows: three Argon-low /teamwork review runs each needed more than 15 minutes
+# (906 s, ~930 s and 909 s, all cut off by a 15m limit). Defaults are therefore generous and scale with the run.
+TIMEOUT_BASE_MIN = {"single": 20, "teamwork": 60, "deep_research": 90}
+EFFORT_FACTOR = {None: 1.0, "low": 1.0, "medium": 1.5, "high": 2.0}
+INPUT_MIN_PER_BYTES = 50_000      # +1 minute per 50 KB staged into the work directory
+INPUT_EXTRA_CAP_MIN = 30
+
+
+def resolve_timeout(a, teamwork: bool, input_bytes: int) -> tuple[str, str]:
+    """Return (agy --print-timeout value, source). 'auto' (default) adapts to mode, effort and input size."""
+    val = getattr(a, "timeout", None)
+    if val and str(val).strip().lower() != "auto":
+        return str(val).strip(), "explicit"
+    mode = "deep_research" if getattr(a, "deep_research", False) else ("teamwork" if teamwork else "single")
+    minutes = TIMEOUT_BASE_MIN[mode] * EFFORT_FACTOR.get(getattr(a, "effort", None), 1.0)
+    minutes += min(INPUT_EXTRA_CAP_MIN, input_bytes // INPUT_MIN_PER_BYTES)
+    return f"{int(minutes)}m", "auto"
+
+
+def timeout_minutes(val: str) -> float | None:
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([smh]?)\s*", str(val))
+    if not m:
+        return None
+    n, unit = float(m.group(1)), m.group(2) or "s"
+    return n / 60 if unit == "s" else (n if unit == "m" else n * 60)
+
+
+def classify_status(rc: int, agent_status: str | None, agy_error) -> str:
+    raw = (agy_error or {}).get("raw", "") if isinstance(agy_error, dict) else str(agy_error or "")
+    if "print timeout" in raw:
+        return "timeout-partial"
+    if rc == 0 and agent_status == "SUCCESS":
+        return "ok"
+    return "agent-" + agent_status.lower() if agent_status else "error"
+
+
+def dir_bytes(p: Path) -> int:
+    if p.is_file():
+        return p.stat().st_size
+    return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+
+
+def use_utf8_stdio() -> None:
+    """Windows consoles default to cp949/cp1252; JSON with e.g. U+2013 must not crash the run after agy finished."""
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(Exception):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 # --------------------------------------------------------------------------- agy invocation
 def agy_cmd(agy: str, prompt: str, workdir: Path, a, extra=None, stream: bool = True) -> list:
     """Build the agy argv. Same on every OS: argv list, no shell."""
@@ -532,11 +582,13 @@ def cmd_run(a) -> int:
 
     # stage input files
     staged = []
+    input_bytes = 0
     for item in a.input or []:
         p = Path(item).resolve()
         if not p.exists():
             die(f"--input not found: {p}", 5)
         staged.append(p.name)
+        input_bytes += dir_bytes(p)
         if a.dry_run:
             continue
         workdir.mkdir(parents=True, exist_ok=True)
@@ -570,13 +622,19 @@ def cmd_run(a) -> int:
                     "and tests over running them. If you must verify, say what command to run in `notes`.")
         prompt = PROMPT_FRAME.format(workdir=workdir, task=task.strip(), inputs=inputs, cmd_rule=cmd_rule)
 
+    teamwork = prompt.lstrip().startswith("/teamwork")
+    a.timeout, timeout_src = resolve_timeout(a, teamwork, input_bytes)
+    tmin = timeout_minutes(a.timeout)
+    if teamwork and timeout_src == "explicit" and tmin and tmin < 30:
+        log(f"WARNING: --timeout {a.timeout} is short for /teamwork (measured runs needed >15m); "
+            f"omit --timeout to use the adaptive default")
     schema_file = meta_dir / "schema.json"
     extra = [] if a.no_schema else ["--json-schema", str(schema_file)]
     if a.dry_run:
         plan = {"status": "dry-run", "workdir": str(workdir), "would_stage": staged, "confined": a.confine,
                 "inlined": a.inlined or [], "bare": a.bare,
                 "command": agy_cmd(agy, "<prompt>", workdir, a, extra, stream=True), "prompt": prompt,
-                "schema": chosen_schema}
+                "schema": chosen_schema, "timeout": {"value": a.timeout, "source": timeout_src}}
         if is_dr:
             plan["deep_research"] = True
             plan["dr_skill_dir"] = str(dr_dir)
@@ -606,8 +664,9 @@ def cmd_run(a) -> int:
         (meta_dir / "stderr.txt").write_text(err, encoding="utf-8")
 
     status = (res or {}).get("status")
+    agy_error = parse_agy_error(err) or (res or {}).get("error")
     summary = {
-        "status": "ok" if rc == 0 and status == "SUCCESS" else ("agent-" + status.lower() if status else "error"),
+        "status": classify_status(rc, status, agy_error),
         "agy_exit_code": rc,
         "agent_status": status,
         "conversation_id": (res or {}).get("conversation_id"),
@@ -619,10 +678,14 @@ def cmd_run(a) -> int:
         "num_turns": (res or {}).get("num_turns"),
         "elapsed_sec": elapsed,
         "meta_dir": str(meta_dir),
-        "agy_error": parse_agy_error(err) or (res or {}).get("error"),
+        "agy_error": agy_error,
+        "timeout": {"value": a.timeout, "source": timeout_src},
         "confinement": confine.report(events, any(changes[k] for k in ("created", "modified", "deleted")))
         if confine else {"enabled": False},
     }
+    if summary["status"] == "timeout-partial":
+        log(f"agy hit the {a.timeout} print timeout; files written so far are listed in changes. "
+            f"Re-run with a longer --timeout or continue with `resume {summary['conversation_id']}`")
     if is_dr:
         dr_info = None
         result_file = workdir / "relay" / "result.json"
@@ -674,7 +737,7 @@ def cmd_run(a) -> int:
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     if summary["status"] == "ok":
         return 0
-    if summary["status"] == "verify-failed" or summary["status"].startswith("agent-"):
+    if summary["status"] in ("verify-failed", "timeout-partial") or summary["status"].startswith("agent-"):
         return 2
     return 3
 
@@ -692,6 +755,7 @@ def cmd_resume(a) -> int:
     before = snapshot(workdir, hook_files=a.confine)
     stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     is_dr = getattr(a, "deep_research", False)
+    a.timeout, _src = resolve_timeout(a, is_argon_model(a.model) and not getattr(a, "single_agent", False), 0)
     dr_dir = Path(getattr(a, "dr_skill_dir", None) or os.environ.get("AGY_CONFINE_DR_DIR") or DEFAULT_DR_SKILL_DIR).resolve()
     confine_mode = "deep-research" if is_dr else "default"
     confine = Confinement(workdir, workdir / ".agy_task" / f"resume-{stamp}" / "confine.jsonl", mode=confine_mode, dr_dir=dr_dir) if a.confine else None
@@ -719,6 +783,104 @@ def cmd_resume(a) -> int:
     return 0 if out["status"] == "ok" else 2
 
 
+# --------------------------------------------------------------------------- batch (parallel independent tasks)
+BATCH_KEYS = {"name", "task", "task_file", "inputs", "workdir", "model", "effort", "timeout", "verify", "collect",
+              "single_agent", "bare", "no_schema", "inlined", "agent", "dry_run"}
+
+
+def _batch_argv(a, t: dict, wd: Path) -> list:
+    argv = [sys.executable, str(Path(__file__).resolve())]
+    if a.agy_bin:
+        argv += ["--agy-bin", a.agy_bin]
+    model = t.get("model") or a.model
+    if model:
+        argv += ["--model", model]
+    argv += ["run", "-w", str(wd)]
+    argv += ["-f", str(Path(t["task_file"]).resolve())] if t.get("task_file") else ["-t", t["task"]]
+    for item in t.get("inputs") or []:
+        argv += ["-i", str(item)]
+    for rel in t.get("inlined") or []:
+        argv += ["--inlined", rel]
+    effort = t.get("effort") or getattr(a, "effort", None)
+    if effort:
+        argv += ["--effort", effort]
+    for key in ("timeout", "verify", "collect", "agent"):
+        if t.get(key):
+            argv += ["--" + key, str(t[key])]
+    for key in ("single_agent", "bare", "no_schema", "dry_run"):
+        if t.get(key):
+            argv.append("--" + key.replace("_", "-"))
+    return argv
+
+
+def cmd_batch(a) -> int:
+    """Run independent tasks as separate, concurrently running agy sessions (one work directory each)."""
+    import concurrent.futures as cf
+    try:
+        data = json.loads(Path(a.manifest).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        die(f"cannot read manifest {a.manifest}: {e}", 5)
+    tasks = data.get("tasks") if isinstance(data, dict) else data
+    if not isinstance(tasks, list) or not tasks:
+        die("manifest must be a list of tasks or {\"tasks\": [...]}", 5)
+    names = [t.get("name") for t in tasks]
+    if any(not n or not re.fullmatch(r"[A-Za-z0-9._-]+", str(n)) for n in names):
+        die("every task needs a 'name' made of letters, digits, '.', '_' or '-'", 5)
+    dup = sorted({n for n in names if names.count(n) > 1})
+    if dup:
+        die(f"duplicate task names: {', '.join(dup)}", 5)
+    for t in tasks:
+        unknown = set(t) - BATCH_KEYS
+        if unknown:
+            die(f"task {t['name']}: unknown keys {sorted(unknown)}", 5)
+        if not t.get("task") and not t.get("task_file"):
+            die(f"task {t['name']}: needs 'task' or 'task_file'", 5)
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    batch_dir = Path(a.workdir).resolve() if a.workdir else (Path.cwd() / "agy_tasks" / f"batch-{stamp}")
+    if batch_dir == Path.home() or batch_dir.parent == batch_dir:
+        die(f"refusing to use {batch_dir} as batch directory (too broad)", 5)
+    wds = [Path(t["workdir"]).resolve() if t.get("workdir") else batch_dir / t["name"] for t in tasks]
+    for i, w in enumerate(wds):
+        for j, o in enumerate(wds):
+            if i != j and (w == o or o in w.parents):
+                die(f"work directories must be distinct and not nested: {w} vs {o}", 5)
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    parallel = max(1, min(a.parallel, len(tasks)))
+    log(f"batch: {len(tasks)} task(s), parallel={parallel}, dir={batch_dir}")
+
+    def one(i: int) -> dict:
+        t, wd = tasks[i], wds[i]
+        time.sleep(i % parallel * a.stagger)  # spread the first wave of logins/session starts
+        started = _dt.datetime.now().isoformat(timespec="seconds")
+        t0 = time.time()
+        env = dict(os.environ, PYTHONIOENCODING="utf-8")
+        cp = subprocess.run(_batch_argv(a, t, wd), capture_output=True, env=env)
+        out_text = cp.stdout.decode("utf-8", errors="replace")
+        (batch_dir / f"{t['name']}.log").write_bytes(cp.stderr)
+        try:
+            result = json.loads(out_text)
+        except json.JSONDecodeError:
+            result = {"status": "error", "message": out_text[-2000:]}
+        status = result.get("status", "error")
+        if status == "dry-run":
+            status = "ok"
+        log(f"batch: {t['name']} -> {status} ({round(time.time() - t0, 1)}s)")
+        return {"name": t["name"], "status": status, "exit_code": cp.returncode, "workdir": str(wd),
+                "started_at": started, "elapsed_sec": round(time.time() - t0, 1),
+                "log": str(batch_dir / f"{t['name']}.log"), "result": result}
+
+    t0 = time.time()
+    with cf.ThreadPoolExecutor(max_workers=parallel) as ex:
+        results = list(ex.map(one, range(len(tasks))))
+    ok = sum(r["status"] == "ok" for r in results)
+    summary = {"status": "ok" if ok == len(results) else ("failed" if ok == 0 else "partial"),
+               "parallel": parallel, "elapsed_sec": round(time.time() - t0, 1), "batch_dir": str(batch_dir),
+               "tasks": results}
+    (batch_dir / "batch_result.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0 if summary["status"] == "ok" else (2 if summary["status"] == "partial" else 3)
+
+
 # --------------------------------------------------------------------------- CLI
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="agy_task.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -737,7 +899,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--input", "-i", action="append", help="file/dir to copy into the work directory first (repeatable)")
     r.add_argument("--effort", choices=["low", "medium", "high"], default=argparse.SUPPRESS)
     r.add_argument("--agent", help="agy agent name (see `agy agents`)")
-    r.add_argument("--timeout", default=os.environ.get("AGY_TASK_TIMEOUT", "30m"), help="agy --print-timeout, e.g. 10m, 1h (0 = unlimited)")
+    r.add_argument("--timeout", default=os.environ.get("AGY_TASK_TIMEOUT", "auto"),
+                   help="agy --print-timeout: 'auto' (default: single 20m, /teamwork 60m, deep-research 90m; x1.5 medium, "
+                        "x2 high effort; +1m per 50 KB of --input, max +30m) or an explicit value like 45m, 2h (0 = unlimited)")
     r.add_argument("--verify", help="shell command to run in the work directory afterwards, e.g. 'python -m pytest -q'")
     r.add_argument("--verify-timeout", type=int, default=600)
     r.add_argument("--collect", help="copy created/modified files into this directory")
@@ -760,13 +924,22 @@ def build_parser() -> argparse.ArgumentParser:
                    help="override default /teamwork execution when using Argon model")
     r.add_argument("--dry-run", action="store_true", help="print the agy command and the framed prompt; do not run")
 
+    b = sub.add_parser("batch", help="run independent tasks as parallel agy sessions (one work dir each)")
+    b.add_argument("--manifest", "-m", required=True,
+                   help="JSON: [{name, task|task_file, inputs?, effort?, timeout?, verify?, ...}] or {\"tasks\": [...]}")
+    b.add_argument("--workdir", "-w", help="batch directory; each task runs in <batch dir>/<name> (default: ./agy_tasks/batch-<stamp>)")
+    b.add_argument("--parallel", "-p", type=int, default=int(os.environ.get("AGY_TASK_PARALLEL", "3")),
+                   help="max concurrent agy sessions (default 3, env AGY_TASK_PARALLEL)")
+    b.add_argument("--stagger", type=float, default=5.0, help="seconds between session starts in the first wave")
+    b.add_argument("--effort", choices=["low", "medium", "high"], default=argparse.SUPPRESS)
+
     rs = sub.add_parser("resume", help="follow-up prompt on a previous conversation")
     rs.add_argument("conversation_id")
     rs.add_argument("--task", "-t", required=True)
     rs.add_argument("--workdir", "-w")
     rs.add_argument("--effort", choices=["low", "medium", "high"], default=argparse.SUPPRESS)
     rs.add_argument("--agent")
-    rs.add_argument("--timeout", default="30m")
+    rs.add_argument("--timeout", default=os.environ.get("AGY_TASK_TIMEOUT", "auto"))
     rs.add_argument("--allow-all", action="store_true")
     rs.add_argument("--no-confine", dest="confine", action="store_false")
     rs.add_argument("--deep-research", action="store_true",
@@ -780,6 +953,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    use_utf8_stdio()
     a = build_parser().parse_args(argv)
     if a.cmd == "preflight":
         res = preflight(a)
@@ -789,6 +963,8 @@ def main(argv=None) -> int:
         return cmd_run(a)
     if a.cmd == "resume":
         return cmd_resume(a)
+    if a.cmd == "batch":
+        return cmd_batch(a)
     return 5
 
 

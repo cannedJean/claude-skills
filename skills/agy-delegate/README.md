@@ -69,7 +69,8 @@ Per-run artifacts are kept under `<workdir>/.agy_task/<stamp>/`.
 | `-i/--input PATH` | copy file/dir into the work directory first (repeatable) |
 | `--verify CMD` | run a local command afterwards; non-zero → `verify-failed` |
 | `--collect DIR` | copy created/modified files to DIR |
-| `--effort`, `--agent`, `--timeout` | forwarded to agy (`agy agents`) |
+| `--effort`, `--agent` | forwarded to agy (`agy agents`) |
+| `--timeout` | agy `--print-timeout`. Default `auto`: single 20m, `/teamwork` 60m, deep research 90m; ×1.5 medium, ×2 high effort; +1m per 50 KB of `--input` (max +30m). An explicit value (`45m`, `2h`, `0` = unlimited) is used as is; under 30m for `/teamwork` prints a warning |
 | `--no-confine` | do not confine the agent's tool calls to the work directory (confined by default) |
 | `--allow-all` | let the agent run any shell command (`--dangerously-skip-permissions`); off by default, needs `--no-confine` |
 | `--deep-research` | run in deep-research confinement profile: enables `--dangerously-skip-permissions` for headless relay execution while strictly confining shell commands to `relay_step.py --job <workdir>` and `patch_gemini_app.py`, protecting caller control files, and merging `relay/result.json` into summary |
@@ -84,9 +85,24 @@ Per-run artifacts are kept under `<workdir>/.agy_task/<stamp>/`.
 `--model SLUG` (default `AGY_TASK_MODEL`; `agy models` lists slugs; aliases `argon`, `아르곤`, `gemini-4-argon` normalize to `gemini-4-argon-high`) and `--agy-bin PATH` are global options and go
 before the subcommand: `python scripts/agy_task.py --model <slug> run -w ... -t ...`.
 
-Exit codes: 0 ok, 2 agent status not SUCCESS or verify failed, 3 agy error, 4 preflight, 5 bad arguments.
+## Parallel batch
 
-Env: `AGY_BIN`, `AGY_TASK_MODEL`, `AGY_TASK_TIMEOUT`.
+`batch -m manifest.json [-w DIR] [--parallel N] [--stagger SEC]` runs independent tasks as separate agy sessions,
+each in `<DIR>/<name>`, at most N (default 3, env `AGY_TASK_PARALLEL`) at a time; session starts in the first wave
+are spread by `--stagger` seconds (default 5). Manifest: a list (or `{"tasks": [...]}`) of objects with `name`
+(unique; letters, digits, `.`, `_`, `-`), `task` or `task_file`, and optionally `inputs`, `workdir`, `model`,
+`effort`, `timeout`, `verify`, `collect`, `single_agent`, `bare`, `no_schema`, `inlined`, `agent`, `dry_run`.
+Output: `{status: ok|partial|failed, parallel, elapsed_sec, batch_dir, tasks: [{name, status, exit_code, workdir,
+started_at, elapsed_sec, log, result}]}`, also saved as `<DIR>/batch_result.json`; per-task stderr goes to
+`<DIR>/<name>.log`. Use it only for parts that do not consume each other's output.
+
+Exit codes: 0 ok, 2 agent status not SUCCESS, verify failed, `timeout-partial` (agy print timeout; files so far are
+in `changes`) or batch `partial`, 3 agy error or batch `failed`, 4 preflight, 5 bad arguments.
+
+stdout/stderr are written as UTF-8 regardless of the console code page (Windows cp949/cp1252 consoles used to
+crash on characters such as U+2013 after agy had finished).
+
+Env: `AGY_BIN`, `AGY_TASK_MODEL`, `AGY_TASK_TIMEOUT`, `AGY_TASK_PARALLEL`.
 
 ## Permissions model
 
