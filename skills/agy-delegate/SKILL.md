@@ -1,6 +1,6 @@
 ---
 name: agy-delegate
-description: Delegate a small, self-contained coding task to the Antigravity CLI (`agy`, Google's terminal coding agent) in headless mode and collect the files it produced, or run the confined `--deep-research` execution profile for headless Gemini Deep Research relay tasks. Use when the user says things like "이건 agy한테 시켜", "Antigravity로 만들어와", "delegate this to agy", or wants a bounded coding chore done by a second agent and the outputs brought back. Not for tasks that need interactive approval, credentials, or multi-repo changes.
+description: Delegate a coding task to the Antigravity CLI (`agy`, Google's terminal coding agent) in headless mode (single-agent or multi-agent `/teamwork`) and collect the files it produced, or run the confined `--deep-research` execution profile for headless Gemini Deep Research relay tasks. When using the Argon model, delegate runs proceed via `/teamwork` by default. Use when the user says things like "이건 agy한테 시켜", "Antigravity로 만들어와", "delegate this to agy", "아르곤으로 팀워크 돌려줘", or wants a coding chore done by a second agent and the outputs brought back. Not for tasks that need interactive approval, credentials, or multi-repo changes.
 ---
 
 # agy-delegate
@@ -24,16 +24,36 @@ Commands below are relative to this skill's directory (`scripts/agy_task.py`).
    function signatures or interfaces, acceptance criteria, and what NOT to do. Vague prompts give
    vague files. Put long specs in a file and pass `--task-file`.
 
+   **Multi-Agent Delegation via `/teamwork`**:
+   Antigravity CLI provides the `/teamwork` slash command, which dispatches an autonomous team of subagents
+   (orchestrator, workers, qa) to plan, execute, and verify complex multi-file projects.
+   - **Slash command mechanics**: In Antigravity (`agy -p`), slash commands must appear at **index 0** (the leading token)
+     of the prompt payload. If preceded by conversational text or wrapper prose, `agy` treats the input as a regular LLM prompt
+     instead of intercepting the slash command.
+   - **How Claude instructs `/teamwork`**: Prefix the task string or task file with `/teamwork <spec>` (e.g.
+     `-t "/teamwork Create utils.py with slugify ..."`). `scripts/agy_task.py` automatically detects leading slash
+     commands and preserves them at index 0 without prepending standard wrapper text. Alternatively, pass `--bare`.
+   - **Argon model tiers & aliases**:
+     - Slugs: `gemini-4-argon-high` (recommended for complex tasks), `gemini-4-argon-medium`, `gemini-4-argon-low`.
+     - Aliases: `argon`, `아르곤`, `gemini-4-argon` (automatically normalize to `gemini-4-argon-high`, or map to `--effort`).
+   - **Argon Default Rule**: When using Argon, execution proceeds via `/teamwork` by default. `agy_task.py` automatically
+     prepends `/teamwork` if omitted. If the user explicitly asks for direct single-agent execution, pass `--single-agent`.
+
 3. **Run** in a fresh or existing work directory. Provide inputs explicitly.
    ```
+   # Single-agent delegation
    python scripts/agy_task.py run -w ./work/slugify -t "Create utils.py with slugify(text) ... and test_utils.py with 3 pytest tests" --verify "python -m pytest -q"
+
+   # Multi-agent /teamwork delegation with Argon (default for Argon)
+   python scripts/agy_task.py --model gemini-4-argon-high run -w ./work/feature -t "/teamwork Build auth service with JWT RS256 token verification" --verify "python -m pytest -q"
    ```
    - `-w DIR` work directory (default: `./agy_tasks/<stamp>`). Use the project subfolder the change belongs to.
    - `-i PATH` (repeatable) copies files/dirs into the work directory before the run.
    - `--verify CMD` runs locally afterwards (tests, a smoke command); a non-zero rc marks the run `verify-failed`.
    - `--collect DIR` copies created/modified files into another directory.
    - `--effort low|medium|high`, `--timeout 10m` as needed. The model is a global option and goes before the
-     subcommand: `python scripts/agy_task.py --model <slug> run ...` (`agy models` lists slugs).
+     subcommand: `python scripts/agy_task.py --model <slug> run ...` (`agy models` lists slugs; aliases `argon`, `아르곤` supported).
+   - `--single-agent` overrides the Argon default to `/teamwork`, running as a single agent.
    - `--dry-run` shows the exact agy command and framed prompt without running (use it to check a spec).
    - Use `python3` on macOS/Linux, `python` on Windows. `--verify` runs in the platform shell.
    - `--allow-all` lets the agent run shell commands (agy's `--dangerously-skip-permissions`). A program it
@@ -62,6 +82,16 @@ Commands below are relative to this skill's directory (`scripts/agy_task.py`).
 
 ## Rules
 
+- **Argon /teamwork Default Rule**: When delegating with the Argon model (canonical slugs `gemini-4-argon-high`,
+  `gemini-4-argon-medium`, `gemini-4-argon-low`, or aliases `argon`, `아르곤`, `gemini-4-argon`), delegation MUST
+  proceed via `/teamwork` by default. Claude must structure the task with `/teamwork <objective and instructions>`
+  (e.g. `python scripts/agy_task.py --model gemini-4-argon-high run -w ... -t "/teamwork <objective>"`), unless the user
+  explicitly requests direct single-agent execution (e.g. "single-agent only", "팀워크 없이 단일 에이전트로", or passes
+  `--single-agent`).
+- **Slash Command Leading Token Requirement**: Antigravity's slash command processor strictly requires `/teamwork` (or
+  any slash command) to appear as the very first token (index 0) of the prompt payload. Do not prepend conversational text,
+  greetings, or wrapper prose before `/teamwork`. `scripts/agy_task.py` automatically ensures leading slash commands
+  remain at index 0.
 - One task per run, one work directory per task. Never point `-w` at `~`, a drive root, or an
   unrelated repo; the agent gets write access to the whole directory.
 - Do not pass `--allow-all` on the user's real project tree unless they asked for it.

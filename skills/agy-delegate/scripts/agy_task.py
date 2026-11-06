@@ -61,6 +61,28 @@ INSTALL_HINT = (
 )
 DEFAULT_DR_SKILL_DIR = Path.home() / ".gemini" / "config" / "skills" / "local-gemini-deep-research"
 
+ARGON_CANONICAL_DEFAULT = "gemini-4-argon-high"
+ARGON_ALIASES = {"argon", "아르곤", "gemini-4-argon"}
+
+
+def is_argon_model(model: str | None) -> bool:
+    if not model:
+        return False
+    m = model.strip().lower()
+    return m in ARGON_ALIASES or m.startswith("gemini-4-argon-")
+
+
+def normalize_model(model: str | None, effort: str | None = None) -> str | None:
+    if not model:
+        return model
+    m = model.strip().lower()
+    if m in ARGON_ALIASES:
+        eff = (effort or "").strip().lower()
+        if eff in ("low", "medium", "high"):
+            return f"gemini-4-argon-{eff}"
+        return ARGON_CANONICAL_DEFAULT
+    return model
+
 RESULT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -484,6 +506,7 @@ def check_confine_args(a) -> None:
 
 
 def cmd_run(a) -> int:
+    a.model = normalize_model(a.model, getattr(a, "effort", None))
     try:
         agy = find_agy(a.agy_bin)
     except FileNotFoundError as e:
@@ -494,6 +517,12 @@ def cmd_run(a) -> int:
     if not task or not task.strip():
         die("provide --task TEXT or --task-file FILE", 5)
     check_confine_args(a)
+
+    is_dr = getattr(a, "deep_research", False)
+    single_agent = getattr(a, "single_agent", False)
+    if is_argon_model(a.model) and not single_agent and not is_dr:
+        if not task.strip().startswith("/"):
+            task = f"/teamwork {task.strip()}"
 
     stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     workdir = Path(a.workdir).resolve() if a.workdir else (Path.cwd() / "agy_tasks" / stamp)
@@ -528,7 +557,7 @@ def cmd_run(a) -> int:
         dr_dir_str = str(dr_dir).replace("\\", "/")
         workdir_str = str(workdir).replace("\\", "/")
         prompt = DEEP_RESEARCH_FRAME.format(workdir=workdir_str, dr_dir=dr_dir_str, task=task.strip(), inputs=inputs)
-    elif a.bare:
+    elif a.bare or task.strip().startswith("/"):
         prompt = task.strip() + "\n" + inputs
     else:
         cmd_rule = ("- You MAY run shell commands (tests, builds) inside the directory."
@@ -651,6 +680,7 @@ def cmd_run(a) -> int:
 
 
 def cmd_resume(a) -> int:
+    a.model = normalize_model(a.model, getattr(a, "effort", None))
     try:
         agy = find_agy(a.agy_bin)
     except FileNotFoundError as e:
@@ -726,6 +756,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--bare", action="store_true",
                    help="send the task as is, without the rules/report frame (for callers whose task text already "
                         "states the rules and the delivery format, e.g. agy-outsource work orders)")
+    r.add_argument("--single-agent", action="store_true",
+                   help="override default /teamwork execution when using Argon model")
     r.add_argument("--dry-run", action="store_true", help="print the agy command and the framed prompt; do not run")
 
     rs = sub.add_parser("resume", help="follow-up prompt on a previous conversation")
@@ -742,6 +774,8 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--dr-skill-dir", default=os.environ.get("AGY_CONFINE_DR_DIR"),
                     help="path to local-gemini-deep-research skill directory (default: ~/.gemini/config/skills/local-gemini-deep-research)")
     rs.add_argument("--sandbox", action="store_true")
+    rs.add_argument("--single-agent", action="store_true",
+                    help="override default /teamwork execution when using Argon model")
     return p
 
 

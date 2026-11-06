@@ -318,7 +318,7 @@ class Hook(unittest.TestCase):
             f'python "{DR}" --job "{R}"',
             f'python relay_step.py --job "{R}" --worker',
             f'python -u relay_step.py --job "{R}"',
-            f'{sys.executable} relay_step.py --job "{R}"',
+            f'"{sys.executable}" relay_step.py --job "{R}"',
         ]
         for cmd in commands:
             with self.subTest(cmd=cmd):
@@ -776,6 +776,124 @@ class Installer(unittest.TestCase):
                             capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(cp.returncode, 5, f"Expected returncode 5, got {cp.returncode}: {cp.stdout} {cp.stderr}")
         self.assertIn("cannot be combined with --deep-research", cp.stderr or cp.stdout)
+
+
+class TeamworkAndArgon(unittest.TestCase):
+    def setUp(self):
+        self.work = Path(tempfile.mkdtemp(prefix="cf_tw_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.work, ignore_errors=True)
+
+    def test_teamwork_prompt_framing_index_zero(self):
+        cp = subprocess.run([sys.executable, str(SCRIPTS / "agy_task.py"), "--agy-bin", "agy", "run",
+                             "-w", str(self.work), "-t", "/teamwork build a markdown parser", "--dry-run"],
+                            capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        plan = json.loads(cp.stdout)
+        prompt = plan["prompt"]
+        self.assertTrue(prompt.startswith("/teamwork build a markdown parser"), f"Prompt did not start with /teamwork: {prompt[:100]}")
+        self.assertEqual(prompt[0], "/")
+        self.assertNotIn("When finished, report", prompt)
+        self.assertFalse(plan["bare"])
+
+    def test_teamwork_prompt_framing_with_leading_whitespace(self):
+        cp = subprocess.run([sys.executable, str(SCRIPTS / "agy_task.py"), "--agy-bin", "agy", "run",
+                             "-w", str(self.work), "-t", "   /teamwork indented task", "--dry-run"],
+                            capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        plan = json.loads(cp.stdout)
+        prompt = plan["prompt"]
+        self.assertTrue(prompt.startswith("/teamwork indented task"), f"Prompt did not start with /teamwork: {prompt[:100]}")
+        self.assertEqual(prompt[0], "/")
+
+    def test_teamwork_with_bare_flag(self):
+        cp = subprocess.run([sys.executable, str(SCRIPTS / "agy_task.py"), "--agy-bin", "agy", "run",
+                             "-w", str(self.work), "-t", "/teamwork bare task", "--bare", "--dry-run"],
+                            capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        plan = json.loads(cp.stdout)
+        prompt = plan["prompt"]
+        self.assertTrue(prompt.startswith("/teamwork bare task"), f"Prompt did not start with /teamwork: {prompt[:100]}")
+        self.assertTrue(plan["bare"])
+
+    def test_argon_model_normalization_cli(self):
+        cases = [
+            ("argon", "gemini-4-argon-high"),
+            ("아르곤", "gemini-4-argon-high"),
+            ("gemini-4-argon", "gemini-4-argon-high"),
+            ("ARGON", "gemini-4-argon-high"),
+            ("gemini-4-argon-low", "gemini-4-argon-low"),
+            ("gemini-4-argon-medium", "gemini-4-argon-medium"),
+            ("claude-sonnet-5-5-high", "claude-sonnet-5-5-high"),
+        ]
+        for model_arg, expected_model in cases:
+            with self.subTest(model_arg=model_arg, expected_model=expected_model):
+                cp = subprocess.run([sys.executable, str(SCRIPTS / "agy_task.py"), "--model", model_arg,
+                                     "--agy-bin", "agy", "run", "-w", str(self.work), "-t", "/teamwork x", "--dry-run"],
+                                    capture_output=True, text=True, encoding="utf-8")
+                self.assertEqual(cp.returncode, 0, cp.stderr)
+                plan = json.loads(cp.stdout)
+                cmd = plan["command"]
+                self.assertIn("--model", cmd)
+                idx = cmd.index("--model")
+                self.assertEqual(cmd[idx + 1], expected_model)
+
+    def test_argon_effort_level_mapping(self):
+        cp = subprocess.run([sys.executable, str(SCRIPTS / "agy_task.py"), "--model", "argon", "--effort", "medium",
+                             "--agy-bin", "agy", "run", "-w", str(self.work), "-t", "/teamwork x", "--dry-run"],
+                            capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        plan = json.loads(cp.stdout)
+        cmd = plan["command"]
+        idx = cmd.index("--model")
+        self.assertEqual(cmd[idx + 1], "gemini-4-argon-medium")
+
+    def test_argon_defaults_to_teamwork(self):
+        cp = subprocess.run([sys.executable, str(SCRIPTS / "agy_task.py"), "--model", "argon",
+                             "--agy-bin", "agy", "run", "-w", str(self.work), "-t", "implement feature without prefix", "--dry-run"],
+                            capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        plan = json.loads(cp.stdout)
+        prompt = plan["prompt"]
+        self.assertTrue(prompt.startswith("/teamwork implement feature without prefix"), f"Expected /teamwork prefix: {prompt[:100]}")
+        cmd = plan["command"]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "gemini-4-argon-high")
+
+    def test_argon_single_agent_override(self):
+        cp = subprocess.run([sys.executable, str(SCRIPTS / "agy_task.py"), "--model", "argon",
+                             "--agy-bin", "agy", "run", "--single-agent", "-w", str(self.work),
+                             "-t", "implement feature in single agent", "--dry-run"],
+                            capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        plan = json.loads(cp.stdout)
+        prompt = plan["prompt"]
+        self.assertFalse(prompt.startswith("/teamwork"), "Expected single-agent framing without /teamwork prefix")
+        self.assertTrue(prompt.startswith("You are completing a delegated coding task non-interactively."))
+        self.assertIn("implement feature in single agent", prompt)
+        cmd = plan["command"]
+        self.assertEqual(cmd[cmd.index("--model") + 1], "gemini-4-argon-high")
+
+    def test_helper_functions_unit(self):
+        self.assertTrue(agy_task.is_argon_model("argon"))
+        self.assertTrue(agy_task.is_argon_model("아르곤"))
+        self.assertTrue(agy_task.is_argon_model("gemini-4-argon"))
+        self.assertTrue(agy_task.is_argon_model("gemini-4-argon-high"))
+        self.assertTrue(agy_task.is_argon_model("gemini-4-argon-low"))
+        self.assertFalse(agy_task.is_argon_model(None))
+        self.assertFalse(agy_task.is_argon_model(""))
+        self.assertFalse(agy_task.is_argon_model("claude-sonnet-5-5-high"))
+
+        self.assertEqual(agy_task.normalize_model("argon"), "gemini-4-argon-high")
+        self.assertEqual(agy_task.normalize_model("아르곤"), "gemini-4-argon-high")
+        self.assertEqual(agy_task.normalize_model("gemini-4-argon"), "gemini-4-argon-high")
+        self.assertEqual(agy_task.normalize_model("argon", "medium"), "gemini-4-argon-medium")
+        self.assertEqual(agy_task.normalize_model("argon", "low"), "gemini-4-argon-low")
+        self.assertEqual(agy_task.normalize_model("argon", "high"), "gemini-4-argon-high")
+        self.assertEqual(agy_task.normalize_model("gemini-4-argon-low"), "gemini-4-argon-low")
+        self.assertEqual(agy_task.normalize_model(None), None)
+        self.assertEqual(agy_task.normalize_model("claude-sonnet-5-5-high"), "claude-sonnet-5-5-high")
 
 
 if __name__ == "__main__":
