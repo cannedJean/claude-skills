@@ -89,8 +89,11 @@ Commands below are relative to this skill's directory (`scripts/agy_task.py`).
 4. **Read the JSON on stdout** and report to the user: `status`, `changes.created/modified/deleted`,
    `structured.summary` / `structured.notes`, `deep_research` (in deep-research mode), `verify.rc` and tail.
    Then review the produced code yourself before handing it over; agy's output is a draft, not a merge.
-   `status: timeout-partial` means agy hit the print timeout: the files listed in `changes` exist but may be
-   incomplete; check them, then `resume` the conversation or re-run with a longer `--timeout`.
+   `status: timeout-partial` means agy hit the print timeout and the files in `changes` may be incomplete.
+   Next steps, in this order:
+   1. Open every file in `changes.created` / `changes.modified` and tell the user what is finished and what is missing.
+   2. `resume <conversation_id> -w <same workdir> -t "Finish <the missing parts> in <file>"`.
+   3. Only if the resume also times out, re-run with a longer `--timeout` (e.g. `2h`).
    Exit codes: 0 ok, 2 agent status not SUCCESS, verify failed, timeout-partial, or a batch with some failed
    tasks, 3 agy error (also agy could not start,
    e.g. a prompt over the Windows command-line limit of 32,767 characters: use a shorter task), 4 preflight,
