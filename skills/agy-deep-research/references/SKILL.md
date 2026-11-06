@@ -36,9 +36,64 @@ This skill automates the locally installed **Google Gemini Windows Desktop App**
 | Option | Behavior |
 | :--- | :--- |
 | `--raw-prompt` | **Exact Prompt Preservation**: Enters the exact prompt string provided at invocation time without any agent rewriting, expansion, or modification. When the user or calling agent requests exact prompt execution, **DO NOT alter the prompt text** and pass `--raw-prompt`. |
+| `--compose-xml` | **5-Block XML Prompt Composition**: Automatically wraps an unstructured plain-text prompt into the required 5-block XML architecture (`<research_objective>`, `<context_and_scope>`, `<investigation_axes>`, `<source_governance>`, `<output_format>`) using `--context-scope`, `--axes`, `--sources-policy`, `--output-spec`, and `--workspace-sources`. |
 | `--review-plan` | **Interactive Stdin Plan Review Hook Loop**: Pauses when the plan is generated, emits `[PLAN_REVIEW_HOOK_START] ... [PLAN_REVIEW_HOOK_END]`, and waits on stdin for the calling agent to send `EDIT: <modification instructions>` (loops until satisfied) or `APPROVE` (starts research). |
 | `--step plan \| edit \| approve` | **Step-by-Step Agent Loop Control**: Stateless CLI commands for calling agents to generate a plan (`--step plan`), iteratively modify and re-verify the plan (`--step edit --edit-prompt "..."`), and finally approve and execute Deep Research (`--step approve`). |
 | `--plan-hook <cmd>` | **External Hook Script Loop**: Executes `<cmd>` whenever a plan is generated/revised, passing the plan JSON on `stdin` and reading `APPROVE` or `EDIT: <instructions>` from `stdout`. |
+| `--allow-questions` | Bypass interrogative feedback validation in `--step edit` when a literal question mark is intentionally required. |
+
+---
+
+## Deep Research Prompt Engineering Architecture (5-Block XML Specification)
+
+Unless the user explicitly requires `--raw-prompt` verbatim preservation, **always structure Deep Research prompts using the 5-Block XML Architecture** (either manually or by passing `--compose-xml` to `run_deep_research.py`). This prevents conversational fallback (`PLAN_TIMEOUT`), hallucinated fills, and structure gate failures.
+
+### 1. The 5 Required XML Blocks
+
+```xml
+<research_objective>
+Compare, analyze, and synthesize [core subject] across [dimensions] to determine [decision/outcome].
+</research_objective>
+
+<context_and_scope>
+- Temporal Anchor: Prioritize primary evidence from 2025-2026; flag pre-2025 sources as legacy context.
+- System / Code Context (Inline): [Paste relevant local schemas, structs, or architectural constraints directly here. Never reference local file paths like ./src/foo.rs because Gemini.exe cannot read the local filesystem.]
+- Google Workspace Context (if applicable): Search connected Google Drive folders/documents (e.g., '[Folder/Doc Name]') and Gmail threads using the logged-in Google Workspace account permissions, and cross-reference against external web sources.
+- Scope Exclusions: Exclude introductory tutorials and generic marketing overviews.
+</context_and_scope>
+
+<investigation_axes>
+1. [Axis 1]: Quantitative benchmarks, architecture internals, and trade-offs.
+2. [Axis 2]: Edge cases, failure modes, and security/operational bottlenecks.
+3. Conditional Depth-First Trigger: If empirical data on [X] shows [condition Y], expand a dedicated sub-investigation into [root cause Z]; otherwise summarize standard baselines.
+</investigation_axes>
+
+<source_governance>
+- Preferred Sources: Peer-reviewed papers (arXiv, ACM, IEEE), official engineering docs, RFCs, primary GitHub repositories, and authorized Google Workspace documents.
+- Excluded Sources: SEO content farms, unverified medium/blog aggregators, and AI-generated summaries.
+- Epistemic Calibration: Every quantitative claim must carry an inline citation. If verified data for a specific metric or sub-question is unavailable after multi-hop search, explicitly state `검증 가능한 공개 근거 불충분 (Insufficient verified evidence)` — never extrapolate or fabricate numbers.
+</source_governance>
+
+<output_format>
+- Format: GitHub-Flavored Markdown (GFM) using explicit `#` (H1) and `##` (H2) section headings.
+- Minimum Depth: Comprehensive technical report (>= 2,500 characters; strict gate minimum >= 400 characters).
+- Structured Data Rule: Never output raw JSON alone (causes `REPORT_STRUCTURE_INVALID`). Embed any required JSON payload inside a fenced ```json code block under a dedicated `##` Markdown section.
+</output_format>
+```
+
+### 2. Imperative Delta Directives for `--step edit` (`--edit-prompt`)
+
+When modifying a research plan via `--step edit --edit-prompt "..."`, **never submit conversational questions (`?`, `Why did you...?`, `왜 ... 인가요?`)**. Asking questions in the plan editor causes `Gemini.exe` to reply in the chat thread instead of rendering a new plan card, triggering `PLAN_CHANGED` / `UI_SELECTOR_TIMEOUT`.
+- `run_deep_research.py` enforces `validate_edit_instructions()` and rejects interrogative edit prompts (`FEEDBACK_INTERROGATIVE_DENIED`) unless `--allow-questions` is passed.
+- Always formulate `--edit-prompt` as **imperative delta directives**:
+  - `"1. Add a step comparing DiskANN and IVF-PQ memory overhead under 128-dim vectors. 2. Remove the introductory history section. 3. Pin primary sources to 2025-2026 benchmarks."`
+
+### 3. Model Selection & Quota Governance (`GEMINI_DR_MODE`)
+
+`run_deep_research.py` reads `GEMINI_DR_MODE` (`Pro` default, `Flash`, or `Argon`) and `GEMINI_DR_THINKING` (`high` default):
+- **`Pro` (`3.8 Pro`)**: Default balanced mode for standard multi-hop web & Workspace synthesis.
+- **`Flash`**: Fast survey mode for broad scouting.
+- **`Argon` (`Gemini 4 Argon`)**: Frontier 1M-context reasoning & strongest indirect prompt injection defense. Consumes **35% of the daily Google AI Pro quota per single execution** and requires longer planning (`--deadline 600`) and execution (`--timeout 1800`) budgets. Always use the supervised plan review loop (`--step plan` → `edit` → `approve`) rather than unattended auto mode when running `Argon`.
 
 ---
 

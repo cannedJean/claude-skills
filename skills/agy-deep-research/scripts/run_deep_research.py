@@ -4,7 +4,10 @@ import os
 import subprocess
 import sys
 import time
-from playwright.sync_api import sync_playwright
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    sync_playwright = None
 
 # Ensure UTF-8 output on Windows consoles
 if hasattr(sys.stdout, "reconfigure"):
@@ -160,6 +163,144 @@ HTML_TO_MARKDOWN_JS = r"""
 def log(msg):
     ts = time.strftime("%H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
+
+
+REQUIRED_XML_TAGS = (
+    "research_objective",
+    "context_and_scope",
+    "investigation_axes",
+    "source_governance",
+    "output_format",
+)
+
+
+def has_full_xml_prompt_structure(text: str) -> bool:
+    import re
+    clean = (text or "").strip()
+    return all(
+        re.search(rf"<{tag}\b[^>]*>.*?</{tag}>", clean, re.S | re.I)
+        for tag in REQUIRED_XML_TAGS
+    )
+
+
+def build_structured_xml_prompt(
+    objective: str,
+    context_scope: str | None = None,
+    axes: list[str] | None = None,
+    sources_policy: str | None = None,
+    output_spec: str | None = None,
+    workspace_sources: str | None = None,
+) -> str:
+    """Wrap a topic/objective into the 5-block XML Deep Research architecture."""
+    import re
+    obj_clean = (objective or "").strip()
+    if not re.match(
+        r"^(?:compare|analyze|synthesize|evaluate|investigate|conduct|design|benchmark|분석|비교|종합|평가|조사|검증)",
+        obj_clean,
+        re.I,
+    ):
+        obj_block = (
+            "Conduct a comprehensive, multi-dimensional technical analysis and comparative synthesis on the following topic:\n"
+            f"{obj_clean}"
+        )
+    else:
+        obj_block = obj_clean
+
+    ctx_lines = []
+    if context_scope and str(context_scope).strip():
+        ctx_lines.append(str(context_scope).strip())
+    else:
+        ctx_lines.append(
+            "- Scope: Self-contained multi-source investigation covering 2022–2026 production architectures, peer-reviewed literature, and empirical benchmarks.\n"
+            "- Exclusions: Skip introductory textbook definitions and superficial marketing overview pages. Do not ask clarifying questions; execute the investigation directly under these declared scope bounds."
+        )
+    if workspace_sources and str(workspace_sources).strip():
+        ctx_lines.append(
+            f"- Google Workspace Data Layer Integration: Cross-reference authenticated Google Workspace entities (Drive documents/folders, Gmail threads, Google Chat) matching: {str(workspace_sources).strip()}"
+        )
+    ctx_block = "\n".join(ctx_lines)
+
+    if axes:
+        axes_items = [str(x).strip() for x in axes if str(x).strip()]
+    else:
+        axes_items = [
+            "1. Core Architecture & Algorithmic Mechanics: Analyze underlying data structures, system invariants, and implementation trade-offs.",
+            "2. Empirical Performance & Resource Benchmarks: Compare throughput, tail latency (p50/p95/p99), compute/memory footprint, and scalability limits.",
+            "3. Operational Resilience & Edge Cases: Evaluate failure modes, recovery protocols, security/compliance implications, and production bottlenecks.",
+        ]
+    axes_numbered = []
+    for idx, item in enumerate(axes_items, 1):
+        if re.match(r"^\d+[\.)]\s+", item):
+            axes_numbered.append(item)
+        else:
+            axes_numbered.append(f"{idx}. {item}")
+    axes_numbered.append(
+        "Conditional Depth-First Trigger: When primary sources or benchmarks report conflicting quantitative metrics, trace the underlying hardware specifications, dataset distributions, and measurement methodologies in the primary text to explain the discrepancy."
+    )
+    axes_block = "\n".join(axes_numbered)
+
+    if sources_policy and str(sources_policy).strip():
+        custom_src = str(sources_policy).strip()
+        if "검증 가능한 공개 근거 불충분" not in custom_src:
+            src_block = (
+                f"{custom_src}\n"
+                "- Epistemic Calibration: Strictly separate confirmed empirical facts from architectural hypotheses. If verified public evidence is unavailable for any metric or claim, explicitly state '검증 가능한 공개 근거 불충분 (Insufficient verified evidence)' rather than extrapolating or fabricating numbers."
+            )
+        else:
+            src_block = custom_src
+    else:
+        src_block = (
+            "- Prioritize Tier-1 primary sources: peer-reviewed papers (with DOI/arXiv links), official engineering specifications, standard bodies, and reproducible benchmark repositories.\n"
+            "- Do not rely on unverified secondary blogs or vendor marketing claims as sole evidence.\n"
+            "- Provide numbered inline citations with publication/verification dates and direct URLs.\n"
+            "- Epistemic Calibration: Strictly separate confirmed empirical facts from architectural hypotheses. If verified public evidence is unavailable for any metric or claim, explicitly state '검증 가능한 공개 근거 불충분 (Insufficient verified evidence)' rather than extrapolating or fabricating numbers."
+        )
+
+    if output_spec and str(output_spec).strip():
+        out_block = (
+            f"{str(output_spec).strip()}\n"
+            "- Mandatory Gate Invariant: Output MUST be valid GitHub-Flavored Markdown (GFM) of at least 2,500 characters (strictly >= 400 characters) with explicit top-level `#` and section `##` Markdown headings. If structured JSON is requested, embed it inside a fenced ```json code block under a dedicated `##` Markdown section."
+        )
+    else:
+        out_block = (
+            "- Format: Comprehensive GitHub-Flavored Markdown (GFM) technical report (>= 2,500 characters; strictly >= 400 characters).\n"
+            "- Mandatory Heading Hierarchy:\n"
+            "  # [Report Title]\n"
+            "  ## 1. Executive Summary & Architectural Verdict\n"
+            "  ## 2. Deep-Dive Technical Analysis by Investigation Axis\n"
+            "  ## 3. Quantitative Comparison Matrix (Markdown Table with fixed metric columns)\n"
+            "  ## 4. Risk Analysis, Edge Cases & Production Recommendations\n"
+            "  ## 참고 출처 (Sources)"
+        )
+
+    return (
+        f"<research_objective>\n{obj_block}\n</research_objective>\n\n"
+        f"<context_and_scope>\n{ctx_block}\n</context_and_scope>\n\n"
+        f"<investigation_axes>\n{axes_block}\n</investigation_axes>\n\n"
+        f"<source_governance>\n{src_block}\n</source_governance>\n\n"
+        f"<output_format>\n{out_block}\n</output_format>"
+    )
+
+
+def validate_edit_instructions(edit_prompt: str, allow_questions: bool = False) -> str:
+    import re
+    clean = (edit_prompt or "").strip()
+    if not clean:
+        raise ValueError("--edit-prompt cannot be empty.")
+    if not allow_questions:
+        patterns = (
+            re.compile(r"\?\s*$", re.M),
+            re.compile(r"^\s*(?:why|how\s+come|what\s+is\s+the\s+reason|can\s+you\s+explain|could\s+you\s+explain)\b", re.I | re.M),
+            re.compile(r"(?:왜\s+[^\n]*?(?:인가요|입니까|했나요|선택했나요|포함했나요)|이유가\s+무엇|설명해\s*주세|답변해\s*주세)", re.M),
+        )
+        for pat in patterns:
+            if pat.search(clean):
+                raise ValueError(
+                    "Edit feedback contains conversational questions (e.g. '?'). Asking questions during plan editing "
+                    "causes Gemini to reply with prose instead of generating a revised Research Plan card (PLAN_CHANGED / PLAN_TIMEOUT). "
+                    "Use imperative delta instructions only (Add, Remove, Reorder, Pin)."
+                )
+    return clean
 
 
 def get_gemini_page(browser, timeout_sec=15):
@@ -755,6 +896,17 @@ def main():
         action="store_true",
         help="Use the exact prompt string provided at invocation time without any modification.",
     )
+    parser.add_argument(
+        "--compose-xml",
+        action="store_true",
+        help="Automatically wrap a plain topic/prompt into the 5-block XML Deep Research architecture (<research_objective>, <context_and_scope>, <investigation_axes>, <source_governance>, <output_format>).",
+    )
+    parser.add_argument("--context-scope", type=str, help="Custom <context_and_scope> content when --compose-xml is used.")
+    parser.add_argument("--axes", action="append", help="Investigation axis item(s) for <investigation_axes> (repeatable).")
+    parser.add_argument("--sources-policy", type=str, help="Custom <source_governance> rules when --compose-xml is used.")
+    parser.add_argument("--output-spec", type=str, help="Custom <output_format> rules when --compose-xml is used.")
+    parser.add_argument("--workspace-sources", type=str, help="Google Workspace (Drive/Gmail/Chat) entities to include in <context_and_scope>.")
+    parser.add_argument("--allow-questions", action="store_true", help="Bypass interrogative question check in --edit-prompt.")
     parser.add_argument("--output", type=str, help="Optional file path to save the resulting Markdown report.")
     parser.add_argument(
         "--review-plan",
@@ -807,11 +959,29 @@ def main():
 
     if args.step == "edit" and not args.edit_prompt:
         parser.error("--edit-prompt is required when --step edit is used.")
+    if args.step == "edit" and args.edit_prompt:
+        try:
+            args.edit_prompt = validate_edit_instructions(args.edit_prompt, allow_questions=bool(args.allow_questions))
+        except ValueError as e:
+            parser.error(str(e))
     if args.step in ("auto", "plan") and not args.prompt and not args.resume_url:
         parser.error("Either --prompt or --resume-url must be provided.")
+    if args.prompt and args.compose_xml and not args.raw_prompt and not has_full_xml_prompt_structure(args.prompt):
+        args.prompt = build_structured_xml_prompt(
+            objective=args.prompt,
+            context_scope=args.context_scope,
+            axes=args.axes,
+            sources_policy=args.sources_policy,
+            output_spec=args.output_spec,
+            workspace_sources=args.workspace_sources,
+        )
+        log("Composed 5-block XML Deep Research prompt.")
 
     app_info = ensure_gemini_running_with_cdp(port=CDP_PORT, hide=not args.show)
     log(f"Local Gemini app ready via CDP ({app_info['cdp_url']}, status={app_info['status']})")
+
+    if sync_playwright is None:
+        raise RuntimeError("Playwright is not installed. Run: pip install playwright")
 
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(app_info["cdp_url"])

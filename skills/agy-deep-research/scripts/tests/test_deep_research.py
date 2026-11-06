@@ -1036,5 +1036,175 @@ class ModelAndEffortPersistenceAndPropagationTestCase(DeepResearchTestBase):
         self.assertIn("--deep-research", argv)
 
 
+class PromptEngineeringAndGatesTestCase(DeepResearchTestBase):
+    """Verify Dual-File Separation, 5-Block XML Composition, Imperative Edit Feedback, and Argon Timeouts."""
+
+    def test_compose_prompt_subcommand_generates_5_xml_blocks_and_goal_rubric(self) -> None:
+        prompt_out = self.out_dir / "composed_prompt.md"
+        goal_out = self.out_dir / "composed_goal.md"
+
+        rc, res, _ = self.run_dr([
+            "compose-prompt",
+            "--objective", "Compare HNSW, DiskANN, and IVF-PQ indexing architectures for 1B-scale vector search.",
+            "--goal", "Verify coverage of recall@10 vs memory footprint and NVMe IOPS bottlenecks.",
+            "--context-scope", "Rust storage engine (`struct VectorSegment { dim: u32, max_Degree: u16 }`).",
+            "--axes", "1. Memory overhead per vector.\n2. NVMe SSD I/O amplification under DiskANN.",
+            "--sources-policy", "Prefer VLDB/SIGMOD 2025-2026 papers and official Rust implementations.",
+            "--output-spec", "Include a Markdown comparison table and a fenced ```json benchmark summary block.",
+            "--workspace-sources", "Google Drive folder 'VectorEngine-2026'",
+            "--entities", "HNSW, DiskANN, IVF-PQ",
+            "--metrics", "Recall@10, QPS, Memory MB/1M vectors",
+            "--prompt-out", str(prompt_out),
+            "--goal-out", str(goal_out),
+        ])
+        self.assertEqual(rc, 0)
+        self.assertEqual(res["status"], "ok")
+        self.assertTrue(res["xml_structured"])
+        self.assertTrue(prompt_out.is_file())
+        self.assertTrue(goal_out.is_file())
+
+        prompt_text = prompt_out.read_text(encoding="utf-8")
+        for tag in (
+            "research_objective",
+            "context_and_scope",
+            "investigation_axes",
+            "source_governance",
+            "output_format",
+        ):
+            self.assertIn(f"<{tag}>", prompt_text)
+            self.assertIn(f"</{tag}>", prompt_text)
+        self.assertIn("VectorEngine-2026", prompt_text)
+        self.assertIn("검증 가능한 공개 근거 불충분", prompt_text)
+
+        goal_text = goal_out.read_text(encoding="utf-8")
+        self.assertIn("# Fixed Acceptance Criteria & Plan Review Rubric (goal.md)", goal_text)
+        self.assertIn("HNSW, DiskANN, IVF-PQ", goal_text)
+        self.assertIn("Recall@10, QPS, Memory MB/1M vectors", goal_text)
+        self.assertNotEqual(prompt_text.strip(), goal_text.strip())
+
+    def test_identical_prompt_and_goal_rejected_with_exit_code_5(self) -> None:
+        same_text = "Analyze distributed vector database indexing trade-offs."
+        rc, res, _ = self.run_dr([
+            "init",
+            "--job", "identical_job",
+            "--prompt", same_text,
+            "--goal", same_text,
+        ])
+        self.assertEqual(rc, 5)
+        self.assertEqual(res.get("code"), "IDENTICAL_PROMPT_AND_GOAL")
+
+    def test_strict_xml_rejects_unstructured_prompt_and_accepts_composed_xml(self) -> None:
+        # 1. Unstructured prompt with --strict-xml -> rejected (exit 5)
+        rc_bad, res_bad, _ = self.run_dr([
+            "init",
+            "--job", "strict_xml_bad",
+            "--prompt", "Plain unstructured prompt about vector search.",
+            "--goal", "Must compare HNSW and DiskANN latency.",
+            "--strict-xml",
+        ])
+        self.assertEqual(rc_bad, 5)
+        self.assertEqual(res_bad.get("code"), "PROMPT_XML_STRUCTURE_INVALID")
+        self.assertEqual(len(res_bad.get("missing_xml_tags", [])), 5)
+
+        # 2. --compose-xml + --strict-xml -> auto-wraps and succeeds (exit 0)
+        rc_ok, res_ok, _ = self.run_dr([
+            "init",
+            "--job", "strict_xml_ok",
+            "--prompt", "Compare HNSW and DiskANN indexing architectures.",
+            "--goal", "Verify HNSW vs DiskANN memory footprint and p99 latency.",
+            "--compose-xml",
+            "--strict-xml",
+            "--workspace-sources", "Drive folder 'ArchSpecs'",
+        ])
+        self.assertEqual(rc_ok, 0)
+        self.assertTrue(res_ok["xml_structured"])
+        self.assertEqual(res_ok["missing_xml_tags"], [])
+
+        saved_prompt = (self.jobs_dir / "strict_xml_ok" / "prompt.md").read_text(encoding="utf-8")
+        self.assertIn("<research_objective>", saved_prompt)
+        self.assertIn("ArchSpecs", saved_prompt)
+
+    def test_edit_feedback_interrogative_rejected_and_allow_questions_override(self) -> None:
+        self.run_dr([
+            "init",
+            "--job", "edit_gate_job",
+            "--prompt", "Analyze LSM-tree compaction strategies.",
+            "--goal", "Compare leveled vs universal compaction write amplification.",
+            "--compose-xml",
+        ])
+        rc_plan, _, _ = self.run_dr(["plan", "--job", "edit_gate_job"])
+        self.assertEqual(rc_plan, 0)
+
+        # 1. Conversational English question -> rejected (exit 5)
+        rc_q1, res_q1, _ = self.run_dr([
+            "edit",
+            "--job", "edit_gate_job",
+            "--feedback", "Why did you exclude FIFO compaction from step 2?",
+        ])
+        self.assertEqual(rc_q1, 5)
+        self.assertEqual(res_q1.get("code"), "FEEDBACK_INTERROGATIVE_DENIED")
+
+        # 2. Conversational Korean question -> rejected (exit 5)
+        rc_q2, res_q2, _ = self.run_dr([
+            "edit",
+            "--job", "edit_gate_job",
+            "--feedback", "왜 RocksDB의 Universal Compaction 분석이 빠졌나요?",
+        ])
+        self.assertEqual(rc_q2, 5)
+        self.assertEqual(res_q2.get("code"), "FEEDBACK_INTERROGATIVE_DENIED")
+
+        # 3. Imperative delta directive -> succeeds (exit 0)
+        rc_imp, res_imp, _ = self.run_dr([
+            "edit",
+            "--job", "edit_gate_job",
+            "--feedback", "1. Add a dedicated step comparing RocksDB Universal and FIFO compaction. 2. Pin metrics to write amplification factor (WAF).",
+        ])
+        self.assertEqual(rc_imp, 0)
+        self.assertEqual(res_imp["status"], "plan_revised")
+
+        # 4. Question with --allow-questions override -> succeeds (exit 0)
+        rc_ovr, res_ovr, _ = self.run_dr([
+            "edit",
+            "--job", "edit_gate_job",
+            "--feedback", "Add sub-question: Does partitioned index block cache pin L0 files?",
+            "--allow-questions",
+        ])
+        self.assertEqual(rc_ovr, 0)
+        self.assertEqual(res_ovr["status"], "plan_revised")
+
+    def test_architecture_warnings_and_argon_timeout_auto_extension(self) -> None:
+        # 1. Prompt referencing local ./src/... path and raw JSON output -> emits architecture_warnings
+        rc_init, res_init, _ = self.run_dr([
+            "init",
+            "--job", "argon_warn_job",
+            "--prompt", "Read ./src/storage/engine.rs and output pure JSON only.",
+            "--goal", "Verify storage engine analysis and benchmark numbers.",
+            "--gemini-model", "argon",
+        ])
+        self.assertEqual(rc_init, 0)
+        warnings = res_init.get("architecture_warnings", [])
+        self.assertGreaterEqual(len(warnings), 2)
+        self.assertTrue(any("LOCAL_PATH_REFERENCE" in w for w in warnings))
+        self.assertTrue(any("JSON_ONLY_OUTPUT_TRAP" in w for w in warnings))
+
+        # 2. Plan with Argon automatically extends default 180s deadline to 600s
+        rc_plan, _, _ = self.run_dr(["plan", "--job", "argon_warn_job"])
+        self.assertEqual(rc_plan, 0)
+        req_plan = json.loads((self.jobs_dir / "argon_warn_job" / "relay" / "request.json").read_text(encoding="utf-8"))
+        self.assertEqual(req_plan["deadline"], 600)
+
+        # 3. Approve with Argon automatically extends default 900s timeout to 1800s
+        report_out = self.out_dir / "argon_report.md"
+        rc_app, _, _ = self.run_dr([
+            "approve",
+            "--job", "argon_warn_job",
+            "--reason", "Plan thoroughly covers storage engine internals and benchmark metrics.",
+            "--out", str(report_out),
+        ])
+        self.assertEqual(rc_app, 0)
+        req_app = json.loads((self.jobs_dir / "argon_warn_job" / "relay" / "request.json").read_text(encoding="utf-8"))
+        self.assertEqual(req_app["timeout"], 1800)
+
+
 if __name__ == "__main__":
     unittest.main()

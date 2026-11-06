@@ -89,11 +89,12 @@ Claude Code (Lead Orchestrator & Plan Reviewer)
 |---|---|---|
 | `preflight` | `[--target-dir DIR]` | Verify `agy`, `playwright`, Gemini app installation, CDP port 9223 liveness, and script synchronization. |
 | `setup` | `[--target-dir DIR]` | Synchronize bundled scripts (`relay_step.py`, `run_deep_research.py`, `patch_gemini_app.py`) and `SKILL.md` to target skill. |
-| `init` | `--prompt <text>` `--goal <text>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` | Create isolated job directory outside git tree; write `prompt.md` and `goal.md`; lock initial model/effort settings. |
-| `plan` | `--job <id_or_path>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--deadline <sec>]` `[--show]` | Execute `plan` relay step; intercept fuse; save `plan_v1.md`. |
-| `edit` | `--job <id_or_path>` `--feedback <text>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` | Submit plan refinement feedback (`edit` relay step); save `plan_vN.md`. |
-| `approve` | `--job <id_or_path>` `--reason <text>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` | Enforce Plan Approval Gate (`>=20` chars); start detached research; stream progress; enforce Report Quality Gate; save report. |
-| `auto` | `--prompt <text>` `--goal <text>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` | Unattended end-to-end execution (`init` + `auto` relay step + live streaming + Quality Gate). |
+| `compose-prompt` | `--objective <text>` `[--goal <text>]` `[--context-scope <text>]` `[--axes <item>...]` `[--workspace-sources <text>]` `[--entities <e>...]` `[--metrics <m>...]` `[--prompt-out <path>]` `[--goal-out <path>]` | Generate a gate-safe 5-block XML `prompt.md` and distinct `goal.md` review rubric. |
+| `init` | `--prompt <text>` `--goal <text>` `[--compose-xml]` `[--strict-xml]` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` | Create isolated job directory outside git tree; validate & write `prompt.md` and `goal.md` (rejects identical text via `IDENTICAL_PROMPT_AND_GOAL`); lock model settings. |
+| `plan` | `--job <id_or_path>` `[--strict-xml]` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--deadline <sec>]` `[--show]` | Execute `plan` relay step (default deadline 420s; auto-extended to 600s for Argon); intercept fuse; save `plan_v1.md`. |
+| `edit` | `--job <id_or_path>` `--feedback <text>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` | Validate imperative delta feedback (rejects questions via `FEEDBACK_INTERROGATIVE_DENIED`); submit `edit` relay step; save `plan_vN.md`. |
+| `approve` | `--job <id_or_path>` `--reason <text>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` `[--timeout <sec>]` | Enforce Plan Approval Gate (`>=20` chars); start detached research (default timeout 1200s; auto-extended to 1800s for Argon); stream progress; enforce Report Quality Gate; save report. |
+| `auto` | `--prompt <text>` `--goal <text>` `[--compose-xml]` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` | Unattended end-to-end execution (`init` + `auto` relay step + live streaming + Quality Gate). |
 | `status` | `--job <id_or_path>` | Check job state, detached worker PID liveness, and latest progress entry. |
 | `collect` | `--job <id_or_path>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` | Re-attach to detached worker or completed conversation; verify Quality Gate; save report. |
 
@@ -240,6 +241,85 @@ export GEMINI_MODEL="pro"
 # Commands automatically adopt the exported configuration
 python scripts/deep_research.py init --prompt "..." --goal "..."
 ```
+
+## Prompt Engineering Architecture & Dual-File Contract (`prompt.md` vs. `goal.md`)
+
+In headless Deep Research orchestration, the prompt is a **system control specification** that must simultaneously satisfy the post-trained Gemini Deep Research planning loop, DOM countdown fuse interception (`[data-test-id="cancel-fuse-button"]`), confinement boundaries (`confine_hook.py`), and deterministic quality gates.
+
+### 1. Dual-File Separation Principle (`IDENTICAL_PROMPT_AND_GOAL` Prevention)
+
+**Never copy the same text into `--prompt` (`prompt.md`) and `--goal` (`goal.md`).** `deep_research.py` enforces that `prompt.md` and `goal.md` are distinct and rejects identical inputs with exit code `5` (`IDENTICAL_PROMPT_AND_GOAL`).
+
+| File | Consumer | Role & Required Content | Gate / Failure Prevented |
+|---|---|---|---|
+| `prompt.md` (`--prompt`) | `Gemini.exe` Deep Research Agent | **Execution Specification**: 5-block XML structure (`<research_objective>`, `<context_and_scope>`, `<investigation_axes>`, `<source_governance>`, `<output_format>`) guiding plan generation, breadth-to-depth web/Workspace search, and GFM report synthesis. | `PLAN_TIMEOUT`, `SAFETY_BLOCKED`, `REPORT_QUALITY_GATE_FAILED`, `REPORT_STRUCTURE_INVALID` |
+| `goal.md` (`--goal`) | Caller Orchestrator (Claude) | **Fixed Acceptance Criteria**: Checklist of mandatory algorithms/entities, quantitative metrics (e.g., `Recall@10`, `p99 latency`, `DRAM/SSD footprint`), scope exclusions, and Tier-1 source verification used to review `plan_v1.md` before `edit` or `approve`. | `PRE_PLAN_GATE_GOAL_MISSING`, premature approval of shallow plans (wasting 35% Argon quota) |
+| `feedback_N.md` (`--feedback`) | `Gemini.exe` Plan Editor (`edit`) | **Imperative Delta Instructions**: Action verbs only (`Add`, `Remove`, `Reorder`, `Pin`) specifying exact changes to `plan_vN.md`. Never ask conversational questions (`?`), which are rejected with `FEEDBACK_INTERROGATIVE_DENIED` (exit `5`). | `PLAN_CHANGED`, `PLAN_TIMEOUT`, `FEEDBACK_INTERROGATIVE_DENIED` |
+| `approval.md` (`--reason`) | `deep_research.py approve` Gate | **Approval Justification**: `>= 20` characters mapping `plan_vN.md` items to `goal.md` criteria. | `APPROVAL_GATE_REASON_TOO_SHORT` (exit `5`) |
+
+### 2. Required 5-Block XML Specification for `prompt.md`
+
+Always structure `prompt.md` using the 5 XML blocks below (or generate it automatically via `python scripts/deep_research.py compose-prompt` or `init --compose-xml` / `--strict-xml`):
+
+```xml
+<research_objective>
+Compare, analyze, and synthesize [multi-dimensional technical topic] across [target architectures/systems] to produce an evidence-based architectural decision report.
+</research_objective>
+
+<context_and_scope>
+- Self-Contained Context: [Inline any local code bottlenecks, schemas, or constraints here — never reference local repo paths like ./src/... because confine_hook.py blocks outside reads].
+- Google Workspace Data Layer (if applicable): [Specify exact Google Drive folder/document titles, Gmail thread queries, or Google Chat spaces — Gemini.exe inherits the logged-in account's Google Workspace permission graph natively without local file uploads].
+- Temporal & Domain Scope: [e.g., 2022–2026 production systems and peer-reviewed literature].
+- Exclusions: [Skip textbook basics and marketing overviews; do not ask clarifying questions].
+</context_and_scope>
+
+<investigation_axes>
+1. [Axis 1 with High-Entropy Technical Seeds: e.g., HNSW, DiskANN Vamana graph, IVF-PQ, Lucene 10 BM25 quantization, SIMD block-max WAND].
+2. [Axis 2 with Quantitative Metrics: e.g., Recall@10, p99 latency, DRAM vs. NVMe SSD footprint, build throughput].
+3. [Axis 3 with Operational Edge Cases: e.g., tombstone compaction, streaming ingestion, fault recovery].
+Conditional Depth-First Trigger: When primary sources or benchmarks report conflicting quantitative metrics, trace the underlying hardware specifications, dataset distributions, and measurement methodologies in the primary text to explain the discrepancy.
+</investigation_axes>
+
+<source_governance>
+- Prioritize Tier-1 primary sources: peer-reviewed papers (with DOI/arXiv links), official engineering specifications, and reproducible benchmarks.
+- Do not use unverified secondary blogs or vendor marketing pages as sole evidence.
+- Provide numbered inline citations with verification/publication dates and URLs.
+- Epistemic Calibration: Strictly separate confirmed empirical facts from hypotheses. If verified public evidence is unavailable for any metric, explicitly state '검증 가능한 공개 근거 불충분 (Insufficient verified evidence)' rather than fabricating or extrapolating numbers.
+</source_governance>
+
+<output_format>
+- Format: GitHub-Flavored Markdown (GFM) report of at least 2,500 characters (strictly >= 400 characters to pass the Report Quality Gate).
+- Mandatory Markdown Heading Tree:
+  # [Report Title]
+  ## 1. Executive Summary & Architectural Verdict
+  ## 2. Deep-Dive Technical Analysis
+  ## 3. Quantitative Comparison Matrix (Markdown Table with fixed columns)
+  ## 4. Risk Analysis & Production Recommendations
+  ## 참고 출처 (Sources)
+- Downstream Structured Data Rule: Never output raw/pure JSON without `#` Markdown headings (causes `REPORT_STRUCTURE_INVALID`). If JSON is required, embed a fenced ```json code block inside a dedicated `##` section.
+</output_format>
+```
+
+### 3. Model Tiering Strategy & Argon Operational Rules (`Pro` vs. `Flash` vs. `Argon`)
+
+- **Antigravity Orchestrator (`--agy-model "flash 3.8" --agy-effort "high"`)**: Keep pinned to `flash 3.8` (`high`). Because `confine_hook.py` restricts `agy` to running `relay_step.py`, switching `--agy-model` to `pro` adds relay startup latency without improving research quality.
+- **Gemini Desktop Engine (`--gemini-model`)**:
+  - `flash` (`("Flash", "high")`): Fast broad scoping, low quota usage. Decompose sub-steps explicitly in `<investigation_axes>`.
+  - `pro` (`("Pro", "high")`, default): Standard 5–10 min literature reviews and technical comparisons.
+  - `argon` (`("Argon", "high")`, **Gemini 4 Argon**): 1M context window, frontier reasoning & mathematical/legal/code verification, strongest defense against indirect prompt injection, and trained to report negative findings honestly.
+    - **Quota Rule**: Single Argon Deep Research run consumes **~35% of AI Pro usage** (2% weekly limit). **Never run Argon in unattended `auto` mode by default**—always run the supervised `init` → `plan` → `edit` → `approve` loop so you verify `plan_vN.md` against `goal.md` before spending quota.
+    - **Timeout Rule**: Argon generates ratusan-thousand-token reasoning trajectories; `deep_research.py` automatically extends `plan`/`edit` `--deadline` to `600s` (from `420s`) and `approve`/`collect` `--timeout` to `1800s` (from `1200s`), or use `approve --no-wait` + `status` + `collect`.
+
+### 4. Rationalization Counter-Table & Red Flags
+
+| Common Agent Excuse / Rationalization | Architectural Reality & Gate Consequence |
+|---|---|
+| *"I'll pass the same text to `--prompt` and `--goal` to save time."* | Violates dual-file separation; immediately rejected with `IDENTICAL_PROMPT_AND_GOAL` (exit `5`). |
+| *"I'll tell Gemini to read `./src/storage/index.rs` directly."* | `confine_hook.py` blocks reads outside `<job_dir>` (`rule: "path"`) and `Gemini.exe` has no local repo access. Inline the code summary into `<context_and_scope>`. |
+| *"Gemini Deep Research can't access internal Google Drive or Gmail."* | **False.** `Gemini.exe` natively inherits the signed-in user's Google Workspace permission graph (Drive, Gmail, Chat). Specify exact Drive folder/doc names or Gmail thread queries in `<context_and_scope>`. |
+| *"Gemini 4 Argon (`--gemini-model argon`) isn't supported in Deep Research."* | **False.** `run_deep_research.py` (`ensure_pro_mode`) and `deep_research.py` natively support `Pro`, `Flash`, and `Argon` (`--gemini-model argon` / `아르곤`). |
+| *"The downstream script needs JSON, so I'll ask for a pure JSON array only."* | Fails `enforce_report_quality_gate` with `REPORT_STRUCTURE_INVALID` (exit `2`) due to missing `#` headings. Require a full `#` Markdown report with an embedded ```` ```json ```` block under a `##` section. |
+| *"In `edit --feedback`, I'll ask Gemini why it chose DiskANN."* | Asking questions (`?`) causes Gemini to reply with prose instead of a revised plan card (`PLAN_CHANGED` / `PLAN_TIMEOUT`). Rejected by `FEEDBACK_INTERROGATIVE_DENIED` (exit `5`). Use imperative delta verbs (`Add`, `Remove`, `Reorder`, `Pin`). |
 
 ## Step-by-Step Workflow Instructions
 
