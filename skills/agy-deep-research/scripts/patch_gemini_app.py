@@ -77,7 +77,7 @@ def patch_asar(asar_path, port=CDP_PORT):
 
     pattern = re.compile(
         rb'var (\w+)=(\w+)\((\w+)\.app\.isPackaged&&(\w+)!=="dev",process\.argv,process\.execArgv\);'
-        rb'\1\?\(u\.error\("security",(\w+),`\(switch: --\$\{\1\}\)`\),(\w+)\(\),\3\.app\.exit\(1\)\):(\w+)\(\);'
+        rb'\1\?\((?:\w+)\.error\("security",(\w+),`\(switch: --\$\{\1\}\)`\),(\w+)\(\),\3\.app\.exit\(1\)\):(\w+)\(\);'
     )
     match = pattern.search(main_bytes)
     if not match:
@@ -176,7 +176,7 @@ def dry_run_patch(asar_path, port=CDP_PORT):
 
     pattern = re.compile(
         rb'var (\w+)=(\w+)\((\w+)\.app\.isPackaged&&(\w+)!=="dev",process\.argv,process\.execArgv\);'
-        rb'\1\?\(u\.error\("security",(\w+),`\(switch: --\$\{\1\}\)`\),(\w+)\(\),\3\.app\.exit\(1\)\):(\w+)\(\);'
+        rb'\1\?\((?:\w+)\.error\("security",(\w+),`\(switch: --\$\{\1\}\)`\),(\w+)\(\),\3\.app\.exit\(1\)\):(\w+)\(\);'
     )
     match = pattern.search(check_bytes)
     if not match:

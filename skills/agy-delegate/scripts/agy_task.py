@@ -427,7 +427,15 @@ def agy_cmd(agy: str, prompt: str, workdir: Path, a, extra=None, stream: bool = 
     """Build the agy argv. Same on every OS: argv list, no shell."""
     cmd = [agy, "-p", prompt, "--output-format", "stream-json" if stream else "json",
            "--mode", "accept-edits", "--add-dir", str(workdir)]
-    for flag, val in (("--model", a.model), ("--effort", getattr(a, "effort", None)),
+    model_val = getattr(a, "model", None)
+    effort_val = getattr(a, "effort", None)
+    if model_val:
+        m_low = str(model_val).lower().strip()
+        if m_low in ("flash", "flash 3.8", "flash-3.8", "3.8 flash", "gemini 3.8 flash"):
+            model_val = "gemini-3.8-flash"
+        elif m_low in ("pro", "argon", "pro 3.8", "gemini 4 argon", "gemini-4-argon"):
+            model_val = "gemini-4-argon"
+    for flag, val in (("--model", model_val), ("--effort", effort_val),
                       ("--print-timeout", getattr(a, "timeout", None)), ("--agent", getattr(a, "agent", None))):
         if val:
             cmd += [flag, val]

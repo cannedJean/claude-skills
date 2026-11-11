@@ -8,26 +8,50 @@ description: >-
 
 # Local Gemini App Deep Research Skill
 
-This skill automates the locally installed **Google Gemini Windows Desktop App** (`%LOCALAPPDATA%\Google\Gemini\app-*\Gemini.exe`) via Chrome DevTools Protocol (CDP) and Playwright to execute **Gemini Deep Research** using the user's logged-in Google account without requiring an API key.
+This skill automates the locally installed **Google Gemini Windows Desktop App** (`%LOCALAPPDATA%\Google\Gemini\app-*\Gemini.exe`) via Chrome DevTools Protocol (CDP port 9223) and Playwright to execute **Gemini Deep Research** using the user's logged-in Google account without requiring an API key.
+
+## Compatibility & Prerequisites
+
+- **Supported Operating Systems**: Windows 11 / Windows 10 (x64).
+- **Google Gemini Desktop App**: Version **v1.18.0+** (tested on Electron 44.6.0+, Chromium 152.0.7977.130+). Installed at `%LOCALAPPDATA%\Google\Gemini\app-*\Gemini.exe`.
+- **Python Runtime**: Python 3.10+ (tested on Python 3.12).
+- **Runtime Dependency**: `playwright` must be installed:
+  ```powershell
+  python -m pip install --user playwright
+  ```
+  *(Note: Playwright's browser binaries are not required; only the Python client library is needed to connect over CDP).*
+- **Google Account Authentication**: The user must be signed in to their Google account in the Gemini desktop app. The automation inherits the user's logged-in session, active Gemini Advanced / Google AI Pro subscription, and connected Google Workspace connectors (Google Drive, Gmail, Docs) without requiring external API keys.
+
+---
 
 ## Architecture & How It Works
 
-1. **Automatic CDP Enablement ([patch_gemini_app.py](./scripts/patch_gemini_app.py))**:
-   - Locates the latest installed `%LOCALAPPDATA%\Google\Gemini\app-*\resources\app.asar`.
-   - Creates a safe backup (`app.asar.bak`) and patches `src/main.js` (preserving exact byte length and SHA256 header integrity) to enable `--remote-debugging-port=9223` and `--disable-renderer-backgrounding`.
-   - Launches `Gemini.exe --hide` persistently in the background via WMI (`Win32_Process.Create`) so the window stays hidden and does not steal focus.
-2. **Deep Research Execution & Plan Verification Loop ([run_deep_research.py](./scripts/run_deep_research.py))**:
-   - Connects to `http://127.0.0.1:9223` using Playwright (`connect_over_cdp`).
-   - Opens a new chat (`https://gemini.google.com/app`), ensures **Pro** (`3.8 Pro`, instead of `Argon`) mode is selected (`[data-test-id="bard-mode-menu-button"]`), and enables **Deep Research** (`업로드 및 도구` → `도구 더보기` → `Deep Research`).
-   - Submits the prompt using native keyboard input events (`keyboard.insert_text`) — either **verbatim as passed at invocation time (`--raw-prompt`)** or as crafted by the calling agent.
-   - Waits for the **Research Plan (`[data-test-id="research-steps"]`)**, cancels any auto-start countdown timer (`[data-test-id="cancel-fuse-button"]`), and expands all `"더보기"` sections to extract the full plan text.
-   - **Plan Review Hook & Iterative Modification Loop** (optional):
-     - Triggers the `on_plan_generated` hook and returns the full plan JSON to the calling agent.
-     - The calling agent verifies the plan and either requests modifications (`EDIT: <instructions>` / `--step edit`) or approves (`APPROVE` / `--step approve`).
-     - On edit, clicks **`계획 수정` (`[data-test-id="edit-button"]`)**, submits the modification instructions, waits for the revised plan (`on_plan_revised`), and returns the revised plan to the calling agent again in a loop until approved.
-   - Once approved (or immediately if plan review is disabled), clicks **`연구 시작` (`[data-test-id="confirm-button"]`)**.
-   - Monitors live research thoughts (`[data-test-id="thought-header"]` / `[data-test-id="thought-body"]`) until `immersive-entry-chip gem-processing-card.completed` indicates completion.
-   - Extracts the pure report body from `deep-research-immersive-panel message-content` (`[data-test-id="message-content"]`) and citation links into GitHub-Flavored Markdown.
+### 1. Dynamic ASAR Security Argument Patcher ([patch_gemini_app.py](./scripts/patch_gemini_app.py))
+- **Electron Security Bypass**: Packaged Electron applications enforce strict argument validation (`app.isPackaged`) and abort execution if unauthorized command-line switches like `--remote-debugging-port` are detected:
+  ```javascript
+  var Pg=wg(h.app.isPackaged&&P!=="dev",process.argv,process.execArgv);
+  Pg?(c.error("security",_g,`(switch: --${Pg})`),Dt(),h.app.exit(1)):Rb();
+  ```
+- **Dynamic Minification Regex**: `patch_gemini_app.py` uses a flexible non-capturing regex pattern `(?:\w+)\.error("security", ...)` that accommodates single-letter minified logger names across Electron releases (`c.error` in v1.18.0, `u.error` in earlier releases) while dynamically resolving the application instance variable (e.g., `h`) and continuation function (e.g., `Rb`).
+- **Byte-Length Parity Preservation**: Electron ASAR archive headers rely on precise 64-bit byte offsets. Rather than altering file offsets (which would corrupt the ASAR index), the patch replaces the exit call with:
+  ```javascript
+  h.app.commandLine.appendSwitch("remote-debugging-port","9223");h.app.commandLine.appendSwitch("disable-renderer-backgrounding");Rb();/*    */
+  ```
+  Trailing comment padding (`/* ... */`) ensures that the replacement string matches the exact character count and byte length of the original target block.
+- **Backup & Rollback**: Automatically creates `app.asar.bak` prior to modification. Supports `--dry-run`, `--check`, and `--restore` operations.
+
+### 2. WMI Detached Process Launcher & Background Throttling Bypass
+- **Non-Focus-Stealing Hidden Execution**: Launches `Gemini.exe --hide` via WMI `Win32_Process.Create`. The application process runs detached in the background without stealing window focus, showing a taskbar window, or interrupting user workflows.
+- **Port 9223 Standardization**: Unified default CDP port `9223` (`http://127.0.0.1:9223`) prevents collisions with default Chrome debugging sessions.
+- **Background Throttling Bypass**: Chromium normally throttles timers and CPU budgets in background windows. The combination of command-line switch `--disable-renderer-backgrounding` and CDP protocol commands `Page.setWebLifecycleState(state="active")` and `Emulation.setFocusEmulationEnabled(enabled=True)` ensures continuous, unthrottled deep research execution.
+
+### 3. Playwright CDP Driver & Live E2E Automation ([run_deep_research.py](./scripts/run_deep_research.py))
+- **CDP Connection**: Connects to `http://127.0.0.1:9223` via `playwright.sync_api.connect_over_cdp`.
+- **Pro Model & Deep Research Toggle**: Automatically selects **Pro** mode (`[data-test-id="bard-mode-menu-button"]`) and activates the Deep Research tool toggle (`button:is(:has-text("Deep Research"), :has-text("심층 리서치"), :has-text("딥리서치"))`).
+- **Angular / Quill Event Dispatch**: Submits prompts using native `send_btn.click(force=True)` with automatic fallback to focused keyboard `Enter` dispatch, ensuring reliable event firing in Angular Material Design Components.
+- **Countdown Fuse Cancellation**: Intercepts the Research Plan card (`[data-test-id="research-steps"]`) and clicks `[data-test-id="cancel-fuse-button"]` to disarm the auto-start countdown timer, preventing premature unreviewed execution.
+- **Supervised Plan Review & Revision Loop**: Emits structured JSON hook payloads (`[PLAN_REVIEW_HOOK_START]`). On revision (`--step edit`), clicks `계획 수정` (`[data-test-id="edit-button"]`), handles the intermediate turn (`"This is the current plan. What changes do you want to make?"`), submits imperative delta instructions, and extracts the revised plan.
+- **Approval & Report Extraction**: Clicks `연구 시작` (`[data-test-id="confirm-button"]`), monitors live thought streaming (`thought-header` / `thought-body`), tracks completion (`immersive-entry-chip gem-processing-card.completed`), and extracts a complete GitHub-Flavored Markdown report with numbered citations and sources (verified live: 97+ sources, 56 KB report, 139 cited sources).
 
 ---
 
@@ -126,7 +150,7 @@ flowchart TD
      --step plan `
      --prompt "<PROMPT>"
    ```
-   - Reads the emitted `[PLAN_REVIEW_HOOK_START] ... [PLAN_REVIEW_HOOK_END]` JSON (`plan_text`, `iteration`, `url`).
+   - Connects over CDP port 9223, switches to Pro mode, enables Deep Research, submits prompt, clicks `[data-test-id="cancel-fuse-button"]` to disarm the countdown fuse, and emits `[PLAN_REVIEW_HOOK_START] ... [PLAN_REVIEW_HOOK_END]` JSON (`plan_text`, `iteration`, `url`).
 
 2. **Step 2 — Verify & Iteratively Modify Plan (`--step edit`, repeat as needed)**:
    - Inspect `plan_text`. If any required subtopics, methodology, or constraints are missing, call `--step edit` with modification instructions:
@@ -151,6 +175,7 @@ flowchart TD
      --resume-url "current" `
      --output "<OUTPUT_MARKDOWN_FILE_PATH>"
    ```
+   - Clicks **`연구 시작` (`[data-test-id="confirm-button"]`)**, tracks live thought progress streaming across dozens of websites, detects completion (`gem-processing-card.completed`), and writes the final Markdown report to disk.
 
 #### Method 2: Single-Process Interactive Hook Loop (`--review-plan`)
 
@@ -186,21 +211,6 @@ python "$HOME\.gemini\config\skills\local-gemini-deep-research\scripts\run_deep_
 * Omit `--raw-prompt` if the calling agent was asked to expand/enrich a brief user topic into a comprehensive research prompt.
 * **Prompt Guidelines**: Avoid sensitive political/election keywords (e.g., `민주주의`, `선거`, `정치`) in Korean prompts when possible, as Gemini Web's Korean content filter may block plan generation.
 * When `run_command` backgrounds the task, **do not poll in a loop**. End your turn and wait for the system notification when the background task finishes.
-
----
-
-### Troubleshooting & Maintenance
-
-* **Check / Start Local Gemini App with CDP only**:
-  ```powershell
-  python "$HOME\.gemini\config\skills\local-gemini-deep-research\scripts\patch_gemini_app.py"
-  ```
-* **Show the Local Gemini App Window** (if the user wants to watch visually or re-authenticate):
-  Add `--show` to either `patch_gemini_app.py` or `run_deep_research.py`.
-* **Restore Original Unpatched `app.asar`**:
-  ```powershell
-  python "$HOME\.gemini\config\skills\local-gemini-deep-research\scripts\patch_gemini_app.py" --restore
-  ```
 
 ---
 
@@ -264,3 +274,17 @@ once on its own when the Tools menu fails to open right after a new chat (`retri
 `message`, `hint`, `rc`, `event`, `url`, `plan`, `plan_count`, `edit_button_clicked`, `confirm_clicked`, `prompt_sent`,
 `app_status`, `navigated`, `retried`, `probe`, `report_file`, `report_chars`, `sources_count`, `elapsed_s`,
 `stdout_log`, `stderr_log`, `pid`, `launcher`, `seq`.
+
+---
+
+## Troubleshooting & Runtime Diagnostics
+
+| Issue / Symptom | Root Cause | Resolution |
+| :--- | :--- | :--- |
+| **Premature Page Reload During Deep Thinking** | When Gemini 2.0 Pro / Flash takes >60s to think (`has-thoughts`), a generic page reload would cancel the generation. | `run_deep_research.py` incorporates `is_generation_in_progress(page)` to inspect for active stop buttons (`button[aria-label*="중지"]`, `button[aria-label*="Stop"]`, `[data-mat-icon-name="stop"]`) and `thinking-overlay`. Page reloads are strictly suppressed while reasoning is active, and timeout is extended to 300s. |
+| **Angular / Quill Prompt Unsubmitted** | DOM `.click()` sometimes bypasses Angular MDC event listeners in new chat interfaces. | `submit_prompt` dispatches native pointer events via `send_btn.click(force=True)` with automatic fallback to focusing the Quill `textbox` and dispatching keyboard `Enter`. |
+| **New Chat Navigation Stalls** | Page navigation in single-page apps can stall if a previous conversation state persists. | `run_deep_research.py` uses a top-level `new_chat_clicked` selector checking for visible `'새 채팅'` buttons before falling back to `page.goto("https://gemini.google.com/app")`. |
+| **CDP Port Connection Refused (`CDP_NOT_READY`)** | `Gemini.exe` is not running or CDP port 9223 is not listening. | Run `python scripts/patch_gemini_app.py --check` or start the patched app via `python scripts/patch_gemini_app.py`. Test endpoint: `Invoke-RestMethod -Uri 'http://127.0.0.1:9223/json/version'`. |
+| **App Authentication Required** | User is not logged into Google in the desktop application. | Launch the app visibly once via `python scripts/patch_gemini_app.py --show`, log into your Google account, and close the window. |
+| **ASAR Pattern Mismatch** | Gemini desktop app was updated and the startup JS minification pattern changed. | Run `python scripts/patch_gemini_app.py --dry-run` to inspect matching snippets. The regex pattern `(?:\w+)\.error("security", ...)` accommodates single-letter identifier variance. |
+| **Restore Original Desktop App** | Need to revert Electron ASAR to stock state. | Run `python scripts/patch_gemini_app.py --restore` to restore `app.asar.bak`. |

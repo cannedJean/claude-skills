@@ -14,9 +14,20 @@ Commands below are relative to this skill's directory (`scripts/deep_research.py
 ## Overview
 
 Automate long-form multi-source web research via the local Windows Gemini desktop app by combining:
-1. **Dynamic ASAR Patching & WMI Hidden Launch**: Unlocks Chrome DevTools Protocol (CDP port 9223) in `Gemini.exe` and spawns a non-focus-stealing background process.
+1. **Dynamic ASAR Patching & WMI Hidden Launch**: Unlocks Chrome DevTools Protocol (CDP port 9223) in `Gemini.exe` (v1.18.0+, Electron 44.6.0+) and spawns a non-focus-stealing background process.
 2. **Playwright CDP Driver with Countdown Interception**: Controls the web renderer, selects the Pro model, intercepts the automatic countdown fuse (`[data-test-id="cancel-fuse-button"]`) to prevent unreviewed execution, and extracts DOM to Markdown.
 3. **Claude-Owned Review Loop & Deterministic Gates**: Requires pre-locking acceptance criteria (`goal.md`), enforces an explicit >=20-character approval reason, streams live thoughts from `progress.jsonl`, and validates report quality (>=400 chars, structured `#` headings).
+
+## Compatibility & Prerequisites
+
+- **Supported Operating Systems**: Windows 11 / Windows 10 (x64).
+- **Google Gemini Desktop App**: Version **v1.18.0+** (tested on Electron 44.6.0+, Chromium 152.0.7977.130+). Installed at `%LOCALAPPDATA%\Google\Gemini\app-*\Gemini.exe`.
+- **Python Runtime**: Python 3.10+ (tested on Python 3.12).
+- **Runtime Dependency**: `playwright` must be installed:
+  ```powershell
+  python -m pip install --user playwright
+  ```
+- **Google Account Authentication**: Active signed-in session in the Gemini desktop app (inherits Gemini Advanced / Google AI Pro subscription and Google Workspace connectors without API keys).
 
 ## When to Use
 
@@ -37,7 +48,8 @@ Claude Code (Lead Orchestrator & Plan Reviewer)
   │
   ├─ 1. Orchestration Layer (scripts/deep_research.py — stdlib only)
   │     • Subcommands: preflight, setup, init, plan, edit, approve, auto, status, collect
-  │     • Pins & normalizes models: --agy-model, --agy-effort, --gemini-model (default: flash 3.8 high, Pro high)
+  │     • CLI ergonomics: full support for --job-dir <dir> alongside --job <id_or_path>
+  │     • Model normalization: maps "flash 3.8" to canonical binary slug "gemini-3.8-flash"
   │     • Enforces 5 deterministic quality, provenance, and isolation gates
   │
   ├─ 2. Operator Relay Layer (skills/agy-delegate / scripts/relay_step.py)
@@ -53,21 +65,27 @@ Claude Code (Lead Orchestrator & Plan Reviewer)
   │     • Background throttling prevention: Page.setWebLifecycleState("active"), Emulation.setFocusEmulationEnabled
   │     • Pro model verification & Deep Research tool activation (multilingual EN/KO selectors)
   │     • Immediate countdown fuse cancellation ([data-test-id="cancel-fuse-button"])
+  │     • Deep thinking protection (is_generation_in_progress checks active stop button before reload)
+  │     • Angular/Quill event dispatch (send_btn.click(force=True) with keyboard Enter fallback)
   │     • Plan extraction, revision injection, thought monitoring, DOM-to-GFM Markdown conversion
   │
   └─ 4. Desktop Electron Launcher (scripts/patch_gemini_app.py)
         • Locates %LOCALAPPDATA%\Google\Gemini\app-*\resources\app.asar
-        • Dynamic minification regex patching ((\w+)\.app.isPackaged) supporting app-1.16.x, app-1.17.x+
-        • Byte-preserving replacement with SHA-256 header hash recalculation
+        • Dynamic minification regex patching ((?:\w+)\.error("security", ...)) supporting app-1.16.x through app-1.18.0+
+        • Byte-preserving replacement with comment padding (/* ... */) preserving ASAR header integrity
         • Spawns hidden background process via WMI (Invoke-CimMethod Win32_Process.Create --hide)
 ```
 
 ### Modern Gemini Desktop App Automation Details
 
 1. **ASAR Dynamic Minification Patching**:
-   - Packaged Electron apps verify `app.isPackaged` and exit on unauthorized command-line switches.
-   - `patch_gemini_app.py` backs up `app.asar` to `app.asar.bak`, dynamically matches the minified app identifier (e.g., `m.app` in 1.16.0, `h.app` in 1.17.0) via regex `var (\w+)=(\w+)\((\w+)\.app\.isPackaged...`, and injects `--remote-debugging-port=9223` and `--disable-renderer-backgrounding`.
-   - Modifies the ASAR header JSON with the updated SHA-256 hash while keeping exact byte offsets intact.
+   - Packaged Electron apps verify `app.isPackaged` and exit on unauthorized command-line switches:
+     ```javascript
+     var Pg=wg(h.app.isPackaged&&P!=="dev",process.argv,process.execArgv);
+     Pg?(c.error("security",_g,`(switch: --${Pg})`),Dt(),h.app.exit(1)):Rb();
+     ```
+   - `patch_gemini_app.py` backs up `app.asar` to `app.asar.bak`, dynamically matches the minified app identifier (`h.app` in 1.18.0, `m.app` in 1.16.0) via non-capturing regex `(?:\w+)\.error("security", ...)`, and injects `--remote-debugging-port=9223` and `--disable-renderer-backgrounding`.
+   - Modifies the target string while preserving exact byte length and character count with trailing comment padding (`/*    */`), ensuring ASAR header index offsets remain untouched.
 
 2. **WMI Hidden Background Launch**:
    - `Gemini.exe --hide` is launched through WMI `Win32_Process.Create`.
@@ -85,18 +103,20 @@ Claude Code (Lead Orchestrator & Plan Reviewer)
 
 ### Orchestrator Subcommands (`deep_research.py`)
 
+All job subcommands support both `--job <id_or_path>` and `--job-dir <dir>` interchangeably:
+
 | Subcommand | Key Options | Description |
 |---|---|---|
 | `preflight` | `[--target-dir DIR]` | Verify `agy`, `playwright`, Gemini app installation, CDP port 9223 liveness, and script synchronization. |
-| `setup` | `[--target-dir DIR]` | Synchronize bundled scripts (`relay_step.py`, `run_deep_research.py`, `patch_gemini_app.py`) and `SKILL.md` to target skill. |
+| `setup` | `[--target-dir DIR]` | Synchronize bundled scripts (`relay_step.py`, `run_deep_research.py`, `patch_gemini_app.py`) and `references/SKILL.md` to target skill. |
 | `compose-prompt` | `--objective <text>` `[--goal <text>]` `[--context-scope <text>]` `[--axes <item>...]` `[--workspace-sources <text>]` `[--entities <e>...]` `[--metrics <m>...]` `[--prompt-out <path>]` `[--goal-out <path>]` | Generate a gate-safe 5-block XML `prompt.md` and distinct `goal.md` review rubric. |
-| `init` | `--prompt <text>` `--goal <text>` `[--compose-xml]` `[--strict-xml]` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` | Create isolated job directory outside git tree; validate & write `prompt.md` and `goal.md` (rejects identical text via `IDENTICAL_PROMPT_AND_GOAL`); lock model settings. |
-| `plan` | `--job <id_or_path>` `[--strict-xml]` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--deadline <sec>]` `[--show]` | Execute `plan` relay step (default deadline 420s; auto-extended to 600s for Argon); intercept fuse; save `plan_v1.md`. |
-| `edit` | `--job <id_or_path>` `--feedback <text>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` | Validate imperative delta feedback (rejects questions via `FEEDBACK_INTERROGATIVE_DENIED`); submit `edit` relay step; save `plan_vN.md`. |
-| `approve` | `--job <id_or_path>` `--reason <text>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` `[--timeout <sec>]` | Enforce Plan Approval Gate (`>=20` chars); start detached research (default timeout 1200s; auto-extended to 1800s for Argon); stream progress; enforce Report Quality Gate; save report. |
-| `auto` | `--prompt <text>` `--goal <text>` `[--compose-xml]` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` | Unattended end-to-end execution (`init` + `auto` relay step + live streaming + Quality Gate). |
-| `status` | `--job <id_or_path>` | Check job state, detached worker PID liveness, and latest progress entry. |
-| `collect` | `--job <id_or_path>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` | Re-attach to detached worker or completed conversation; verify Quality Gate; save report. |
+| `init` | `--prompt <text>` `--goal <text>` `[--job-dir DIR]` `[--compose-xml]` `[--strict-xml]` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` | Create isolated job directory outside git tree; validate & write `prompt.md` and `goal.md` (rejects identical text via `IDENTICAL_PROMPT_AND_GOAL`); lock model settings. |
+| `plan` | `--job-dir DIR` `[--strict-xml]` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--deadline <sec>]` `[--show]` | Execute `plan` relay step (default deadline 420s; auto-extended to 600s for Argon); intercept fuse; save `plan_v1.md`. |
+| `edit` | `--job-dir DIR` `--feedback <text>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` | Validate imperative delta feedback (rejects questions via `FEEDBACK_INTERROGATIVE_DENIED`); submit `edit` relay step; save `plan_vN.md`. |
+| `approve` | `--job-dir DIR` `--reason <text>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` `[--timeout <sec>]` | Enforce Plan Approval Gate (`>=20` chars); start detached research (default timeout 1200s; auto-extended to 1800s for Argon); stream progress; enforce Report Quality Gate; save report. |
+| `auto` | `--prompt <text>` `--goal <text>` `[--job-dir DIR]` `[--compose-xml]` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` | Unattended end-to-end execution (`init` + `auto` relay step + live streaming + Quality Gate). |
+| `status` | `--job-dir DIR` | Check job state, detached worker PID liveness, and latest progress entry. |
+| `collect` | `--job-dir DIR` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` | Re-attach to detached worker or completed conversation; verify Quality Gate; save report. |
 
 ### Supporting Script CLIs
 
@@ -117,11 +137,19 @@ Claude Code can explicitly pin the Antigravity model, Antigravity reasoning effo
 ### Default Behavior
 
 When model and effort flags are omitted (and corresponding environment variables are unset), `deep_research.py` automatically applies optimal defaults:
-- **Antigravity CLI Model (`--agy-model`)**: `flash 3.8`
+- **Antigravity CLI Model (`--agy-model`)**: `flash 3.8` (mapped to binary slug `gemini-3.8-flash`)
 - **Antigravity Reasoning Effort (`--agy-effort`)**: `high`
 - **Google Gemini Desktop Model (`--gemini-model`)**: `Pro` with thinking level `높음` (`high`)
 
 These default settings ensure balanced, high-depth synthesis with thorough chain-of-thought analysis in both Antigravity orchestration and the Gemini desktop application.
+
+### Antigravity Model Slug Normalization (`--agy-model`)
+
+The Antigravity CLI executable (`agy.exe` v1.5.5) enforces strict model identifier validation when combined with `--effort`. Specifying raw `"flash 3.8"` with `--effort` causes `agy.exe` to fail:
+```
+--effort is not supported for model "flash 3.8"
+```
+To eliminate this failure mode while preserving friendly CLI ergonomics, `deep_research.py` records `"flash 3.8"` in `job.json`, and `agy_task.py` automatically translates `"flash 3.8"` (and aliases `"flash"`, `"3.8 flash"`, `"플래시"`) into the valid binary slug **`"gemini-3.8-flash"`**. This allows full reasoning effort control (`--effort high`) without CLI syntax errors.
 
 ### CLI Option Parameters
 
@@ -138,11 +166,11 @@ The following options are available across `init`, `plan`, `edit`, `approve`, `a
 Input values are automatically normalized to canonical slugs and settings. Both English and Korean aliases are supported:
 
 #### Antigravity Model (`--agy-model`)
-| Canonical Model | Recognized Aliases |
-|---|---|
-| `flash 3.8` | `flash`, `flash 3.8`, `flash-3.8`, `flash3.8`, `3.8 flash`, `3.8-flash`, `플래시` |
-| `pro` | `pro`, `pro 3.8`, `pro-3.8`, `pro3.8`, `3.8 pro`, `프로` |
-| *Custom Slugs* | Any custom slug (e.g., `gemini-2.5-flash`, `claude-3-5-sonnet`) is preserved verbatim. |
+| Canonical Model | Normalized agy Slug | Recognized Aliases |
+|---|---|---|
+| `flash 3.8` | `gemini-3.8-flash` | `flash`, `flash 3.8`, `flash-3.8`, `flash3.8`, `3.8 flash`, `3.8-flash`, `플래시` |
+| `pro` | `gemini-3.8-pro` | `pro`, `pro 3.8`, `pro-3.8`, `pro3.8`, `3.8 pro`, `프로` |
+| *Custom Slugs* | *Verbatim* | Any custom slug (e.g., `gemini-2.5-flash`, `claude-3-5-sonnet`) is preserved verbatim. |
 
 #### Antigravity Reasoning Effort (`--agy-effort`)
 | Canonical Effort | Recognized Aliases |
@@ -181,7 +209,7 @@ Settings can also be configured via environment variables. The configuration res
 ### Execution Chain Propagation & Provenance
 
 When model options are resolved:
-1. **Antigravity CLI (`agy_task.py`)**: `deep_research.py` invokes `agy_task.py --model <agy_model> run --effort <agy_effort> --deep-research ...`.
+1. **Antigravity CLI (`agy_task.py`)**: `deep_research.py` invokes `agy_task.py --model <slug> run --effort <agy_effort> --deep-research ...`.
 2. **Relay Protocol (`relay/request.json`)**: Injects `"gemini_model"`, `"gemini_thinking"`, and `"env": {"GEMINI_DR_MODE": ..., "GEMINI_DR_THINKING": ...}` into the step request.
 3. **Desktop Driver (`run_deep_research.py`)**: `ensure_pro_mode` reads the environment variables and selects the target model and thinking controls in the Gemini desktop app UI.
 4. **Metadata & Provenance (`.meta.json`)**: On completion, resolved models and effort levels are stored in `<job_dir>/job.json` and recorded in the report metadata deliverable `<out>.md.meta.json` under `"agy_model"`, `"agy_effort"`, `"gemini_model"`, and `"gemini_thinking"`.
@@ -191,6 +219,7 @@ When model options are resolved:
 #### 1. Initializing Research with Custom Models and Korean Aliases
 ```bash
 python scripts/deep_research.py init \
+  --job-dir ./jobs/vector_db_job \
   --prompt "Evaluate vector databases for 100M embeddings." \
   --goal "Compare throughput, p99 latency, and DRAM/SSD footprint." \
   --agy-model "플래시" \
@@ -202,11 +231,11 @@ python scripts/deep_research.py init \
 #### 2. Overriding Effort During Plan Review and Revision
 ```bash
 # Generate plan with high effort
-python scripts/deep_research.py plan --job <job_id> --agy-effort "high"
+python scripts/deep_research.py plan --job-dir ./jobs/vector_db_job --agy-effort "high"
 
 # Revise plan with updated instructions and model
 python scripts/deep_research.py edit \
-  --job <job_id> \
+  --job-dir ./jobs/vector_db_job \
   --feedback "Add GPU memory footprint comparison for IVF-PQ." \
   --agy-model "pro" \
   --agy-effort "medium"
@@ -215,7 +244,7 @@ python scripts/deep_research.py edit \
 #### 3. Approving Research Plan with Explicit Gemini Model
 ```bash
 python scripts/deep_research.py approve \
-  --job <job_id> \
+  --job-dir ./jobs/vector_db_job \
   --reason "The plan thoroughly addresses all evaluation criteria in goal.md including throughput and memory footprint." \
   --gemini-model "pro"
 ```
@@ -223,6 +252,7 @@ python scripts/deep_research.py approve \
 #### 4. Unattended End-to-End Execution (`auto`) with Pinned Models
 ```bash
 python scripts/deep_research.py auto \
+  --job-dir ./jobs/hybrid_job \
   --prompt "Analyze state-of-the-art sparse-dense hybrid retrieval in Lucene 10." \
   --goal "Cover block-max WAND, BM25 quantization, and cite primary benchmarks." \
   --agy-model "flash 3.8" \
@@ -239,7 +269,7 @@ export AGY_EFFORT="high"
 export GEMINI_MODEL="pro"
 
 # Commands automatically adopt the exported configuration
-python scripts/deep_research.py init --prompt "..." --goal "..."
+python scripts/deep_research.py init --job-dir ./jobs/session_job --prompt "..." --goal "..."
 ```
 
 ## Prompt Engineering Architecture & Dual-File Contract (`prompt.md` vs. `goal.md`)
@@ -347,6 +377,7 @@ Pre-lock acceptance criteria and initialize an isolated job directory outside an
 
 ```bash
 python scripts/deep_research.py init \
+  --job-dir ./jobs/vector_indexing_job \
   --prompt "Compare HNSW, DiskANN, and IVF-PQ for cloud-native vector search at 50M vectors." \
   --goal "1. Compare Recall@10, p99 latency, and DRAM/SSD footprint. 2. Cover streaming ingestion & recovery. 3. Cite primary benchmarks and papers." \
   --agy-model "flash 3.8" \
@@ -356,7 +387,8 @@ python scripts/deep_research.py init \
 ```
 
 - **Pre-Plan Gate**: Non-empty `--prompt` and `--goal` are required (exit code 2 if omitted).
-- **Model & Effort Defaults**: When `--agy-model`, `--agy-effort`, or `--gemini-model` are omitted, `deep_research.py` automatically initializes with defaults: Antigravity model `flash 3.8` (effort `high`), and Gemini desktop model `Pro` (thinking `높음`/`high`). Friendly aliases (e.g. `플래시`, `높음`, `프로`) are recognized. Resolved settings persist in `job.json` and are inherited by downstream steps unless overridden.
+- **CLI Ergonomics**: Accepts `--job-dir <dir>` as an alias for `--job <id_or_path>`.
+- **Model & Effort Defaults**: When `--agy-model`, `--agy-effort`, or `--gemini-model` are omitted, `deep_research.py` automatically initializes with defaults: Antigravity model `flash 3.8` (mapped to binary slug `gemini-3.8-flash` with effort `high`), and Gemini desktop model `Pro` (thinking `높음`/`high`). Friendly aliases (e.g. `플래시`, `높음`, `프로`) are recognized. Resolved settings persist in `job.json` and are inherited by downstream steps unless overridden.
 - **Job Isolation Gate**: Job directory is created under `%LOCALAPPDATA%\agy-deep-research\jobs\<id>` (or `$AGY_DR_JOBS`). Any path inside a git repository is rejected with exit code 5 (`GIT_REPO_ESCAPE`).
 - **Korean Safety Check**: Prompts are scanned for sensitive political/election keywords that cause safety refusal.
 
@@ -365,7 +397,7 @@ python scripts/deep_research.py init \
 Generate the initial research plan without allowing Gemini to start research unreviewed:
 
 ```bash
-python scripts/deep_research.py plan --job <job_id>
+python scripts/deep_research.py plan --job-dir ./jobs/vector_indexing_job
 ```
 
 - Spawns the confined relay runner (`agy_task.py run --deep-research`).
@@ -384,11 +416,12 @@ If gaps are found, submit targeted modification instructions:
 
 ```bash
 python scripts/deep_research.py edit \
-  --job <job_id> \
+  --job-dir ./jobs/vector_indexing_job \
   --feedback "Add a dedicated section comparing IVF-PQ GPU memory footprint and roaring bitmap pre-filtering."
 ```
 
-- Clicks `계획 수정` (`[data-test-id="edit-button"]`), submits feedback, and extracts `<job_dir>/plan_v2.md`.
+- Clicks `계획 수정` (`[data-test-id="edit-button"]`), navigates the intermediate prompt turn, submits feedback, and extracts `<job_dir>/plan_v2.md`.
+- Deep thinking protection (`is_generation_in_progress`) guarantees that active reasoning (`has-thoughts`) is never interrupted by premature timeouts or page reloads.
 - Updates job status to `plan_revised`. Repeat `edit` if necessary (typically 1–2 iterations).
 
 ### Phase 5: Approve Plan & Stream Progress (`approve`)
@@ -397,7 +430,7 @@ Once the plan satisfies all criteria in `goal.md`, approve the plan with an expl
 
 ```bash
 python scripts/deep_research.py approve \
-  --job <job_id> \
+  --job-dir ./jobs/vector_indexing_job \
   --reason "The v2 plan comprehensively covers HNSW, DiskANN, IVF-PQ recall@10, latency, memory footprint, and streaming ingestion per goal.md." \
   --out ./reports/vector_indexing_report.md
 ```
@@ -415,13 +448,13 @@ For long-running research jobs (5–15 minutes), detach without blocking the ses
 
 ```bash
 # 1. Approve with --no-wait
-python scripts/deep_research.py approve --job <job_id> --reason "Plan meets all goal.md criteria." --no-wait
+python scripts/deep_research.py approve --job-dir ./jobs/vector_indexing_job --reason "Plan meets all goal.md criteria." --no-wait
 
 # 2. Check execution status periodically
-python scripts/deep_research.py status --job <job_id>
+python scripts/deep_research.py status --job-dir ./jobs/vector_indexing_job
 
 # 3. Collect completed report when done
-python scripts/deep_research.py collect --job <job_id> --out ./reports/report.md
+python scripts/deep_research.py collect --job-dir ./jobs/vector_indexing_job --out ./reports/report.md
 ```
 
 - `collect` performs a read-only page probe first. If the research has not started yet, it refuses with `COLLECT_WOULD_START` to prevent unreviewed execution.
@@ -432,6 +465,7 @@ When the user explicitly instructs to run without interactive plan review:
 
 ```bash
 python scripts/deep_research.py auto \
+  --job-dir ./jobs/hybrid_job \
   --prompt "Analyze state-of-the-art sparse-dense hybrid retrieval in Lucene 10." \
   --goal "Cover block-max WAND, BM25 quantization, SIMD optimizations, and cite Apache Lucene JIRAs." \
   --agy-model "flash 3.8" \
@@ -475,10 +509,13 @@ When `deep_research.py` invokes `agy_task.py run --deep-research -w <job_dir>`, 
 
 | Symptom / Error | Root Cause | Resolution |
 |---|---|---|
-| `ASAR_PATTERN_MISMATCH` | Gemini desktop app updated and variable names changed | Ensure `patch_gemini_app.py` uses dynamic regex `(\w+)\.app` matching both 1.16.x and 1.17.x+. |
+| `ASAR_PATTERN_MISMATCH` | Gemini desktop app updated and variable names changed | Ensure `patch_gemini_app.py` uses dynamic regex `(?:\w+)\.error("security", ...)` matching 1.16.x through 1.18.0+. |
 | `CDP_NOT_READY` / `CDP_CONNECT_FAILED` | Gemini desktop app not running or CDP port 9223 unbound | Run `python scripts/patch_gemini_app.py --check` or launch manually with `patch_gemini_app.py`. |
 | `GEMINI_PAGE_NOT_FOUND` / `UI_SELECTOR_TIMEOUT` | User is not logged into Google account in the desktop app | Launch `Gemini.exe` visibly once with `python scripts/patch_gemini_app.py --show` and sign in. |
+| `Premature Page Reload During Thinking` | Deep thinking (>60s) triggered page reload | `run_deep_research.py` uses `is_generation_in_progress(page)` to detect active stop buttons/overlays and prevent reload during reasoning. |
+| `Angular / Quill Click Unregistered` | Synthetic pointer event ignored by Angular MDC | `run_deep_research.py` uses `send_btn.click(force=True)` with automatic keyboard `Enter` fallback. |
+| `--effort is not supported for model` | Raw string `"flash 3.8"` passed to `agy.exe` | `agy_task.py` automatically normalizes `"flash 3.8"` to `"gemini-3.8-flash"`. |
 | `SAFETY_BLOCKED` | Prompt triggered Korean political/election content filter | Rephrase prompt removing sensitive terms (`민주주의`, `선거`, `정치`, `대통령`). |
-| `GIT_REPO_ESCAPE` (Exit 5) | `--job` directory located inside a git repository | Use the default isolation path under `%LOCALAPPDATA%\agy-deep-research\jobs` outside git trees. |
+| `GIT_REPO_ESCAPE` (Exit 5) | `--job` or `--job-dir` directory located inside a git repository | Use the default isolation path under `%LOCALAPPDATA%\agy-deep-research\jobs` outside git trees. |
 | `APPROVAL_GATE_REASON_TOO_SHORT` (Exit 5) | `--reason` was omitted or shorter than 20 characters | Provide a detailed justification explaining how `plan_vN.md` addresses `goal.md` criteria. |
 | Port conflict on CDP port | Default debugging port claimed by another browser or proxy | The skill defaults to port 9223. Ensure all configs use port 9223 or set `GEMINI_CDP_PORT`. |

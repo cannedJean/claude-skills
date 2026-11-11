@@ -1837,7 +1837,7 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--goal-out", help="optional file path to write composed goal.md")
 
     ini = sub.add_parser("init", help="initialize an isolated job directory with prompt.md and goal.md")
-    ini.add_argument("--job", "-j", help="optional job ID or path outside any git repository")
+    ini.add_argument("--job", "--job-dir", "-j", dest="job", help="optional job ID or path outside any git repository")
     ini.add_argument("--prompt", "-p", help="research prompt text")
     ini.add_argument("--prompt-file", help="UTF-8 file containing the research prompt")
     ini.add_argument("--goal", "-g", help="acceptance criteria / review rubric text (goal.md)")
@@ -1847,14 +1847,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_prompt_composer_options(ini)
 
     pl = sub.add_parser("plan", help="generate initial research plan via agy-delegate --deep-research")
-    pl.add_argument("--job", "-j", required=True, help="job ID or directory path")
+    pl.add_argument("--job", "--job-dir", "-j", dest="job", required=True, help="job ID or directory path")
     pl.add_argument("--deadline", type=int, default=None, help="plan timeout in seconds (default: 420, or 600 for Argon)")
     pl.add_argument("--strict-xml", action="store_true", help="require all 5 XML blocks in prompt.md before running plan")
     pl.add_argument("--dr-skill-dir", help="override local-gemini-deep-research skill directory")
     pl.add_argument("--show", action="store_true", help="show Gemini desktop app window")
 
     ed = sub.add_parser("edit", help="modify existing research plan with feedback")
-    ed.add_argument("--job", "-j", required=True, help="job ID or directory path")
+    ed.add_argument("--job", "--job-dir", "-j", dest="job", required=True, help="job ID or directory path")
     ed.add_argument("--feedback", "-f", help="plan modification instructions (imperative delta only)")
     ed.add_argument("--feedback-file", help="UTF-8 file with plan modification instructions")
     ed.add_argument("--allow-questions", action="store_true", help="bypass interrogative feedback check")
@@ -1863,7 +1863,7 @@ def build_parser() -> argparse.ArgumentParser:
     ed.add_argument("--show", action="store_true", help="show Gemini desktop app window")
 
     ap = sub.add_parser("approve", help="verify Plan Approval Gate, start detached research, stream progress, and collect report")
-    ap.add_argument("--job", "-j", required=True, help="job ID or directory path")
+    ap.add_argument("--job", "--job-dir", "-j", dest="job", required=True, help="job ID or directory path")
     ap.add_argument("--reason", "-r", required=True, help=">=20 char explanation of how the plan satisfies goal.md")
     ap.add_argument("--out", "-o", help="output Markdown report path")
     ap.add_argument("--no-wait", action="store_true", help="return immediately after detached worker starts")
@@ -1873,7 +1873,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--show", action="store_true", help="show Gemini desktop app window")
 
     au = sub.add_parser("auto", help="unattended end-to-end execution (init + auto step + stream + report gate)")
-    au.add_argument("--job", "-j", help="optional job ID or directory path")
+    au.add_argument("--job", "--job-dir", "-j", dest="job", help="optional job ID or directory path")
     au.add_argument("--prompt", "-p", help="research prompt text")
     au.add_argument("--prompt-file", help="UTF-8 file containing the research prompt")
     au.add_argument("--goal", "-g", help="acceptance criteria / review rubric text (goal.md)")
@@ -1889,10 +1889,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_prompt_composer_options(au)
 
     ss = sub.add_parser("status", help="check job status, detached worker PID liveness, and latest progress")
-    ss.add_argument("--job", "-j", required=True, help="job ID or directory path")
+    ss.add_argument("--job", "--job-dir", "-j", dest="job", required=True, help="job ID or directory path")
 
     co = sub.add_parser("collect", help="re-attach to running or completed research and collect report + .meta.json")
-    co.add_argument("--job", "-j", required=True, help="job ID or directory path")
+    co.add_argument("--job", "--job-dir", "-j", dest="job", required=True, help="job ID or directory path")
     co.add_argument("--out", "-o", help="output Markdown report path")
     co.add_argument("--no-wait", action="store_true", help="do not block if worker is still running")
     co.add_argument("--detach", action="store_true", help="if starting a collect relay step, run in detach mode")

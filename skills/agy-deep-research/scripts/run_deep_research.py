@@ -460,7 +460,7 @@ def activate_deep_research_mode(page):
         '[data-test-id="deselect-drawer-item-gem-button"], button[aria-label*="Deep Research 선택 해제"], button[aria-label*="Deselect Deep Research"]'
     )
     dr_enabled_btn = page.locator(
-        'button:has-text("Deep Research"):not([aria-label*="선택 해제"]):not([aria-label*="Deselect"]):not([disabled]):not([aria-disabled="true"])'
+        'button:is(:has-text("Deep Research"), :has-text("심층 리서치"), :has-text("딥리서치")):not([aria-label*="선택 해제"]):not([aria-label*="Deselect"]):not([disabled]):not([aria-disabled="true"])'
     )
     if deselect_btn.count() == 0 or not deselect_btn.first.is_visible():
         log("Activating Deep Research mode...")
@@ -513,11 +513,26 @@ def submit_prompt(page, prompt_text, raw_prompt=False):
     page.keyboard.insert_text(prompt_text)
     time.sleep(0.6)
 
-    send_btn = page.locator('button[aria-label="메시지 보내기"], button[aria-label*="Send"]').first
-    if send_btn.count() > 0:
-        send_btn.evaluate("el => el.click()")
-    else:
-        textbox.press("Enter")
+    send_btn = page.locator(
+        'button[aria-label="메시지 보내기"], button[aria-label*="Send"], '
+        'button[aria-label*="보내기"], [data-test-id*="send"], '
+        'button:has(mat-icon[fonticon="send"]), button:has(mat-icon[data-mat-icon-name="send"]), '
+        'button:has(mat-icon[data-mat-icon-name="arrow_upward"])'
+    ).first
+    submitted = False
+    if send_btn.count() > 0 and send_btn.is_visible():
+        try:
+            send_btn.click(force=True)
+            time.sleep(0.5)
+            submitted = True
+        except Exception:
+            pass
+
+    # Ensure Angular/Quill form submission fires if real click failed or input remains
+    uq = page.locator("user-query")
+    if not submitted or uq.count() == 0 or (textbox.count() > 0 and (textbox.inner_text() or "").strip()):
+        textbox.focus()
+        page.keyboard.press("Enter")
     log("Prompt submitted.")
 
 
@@ -566,7 +581,23 @@ def wait_for_response_complete(page, expected_min_responses, timeout_sec=60):
     return False
 
 
-def wait_for_new_plan(page, prev_plan_count=0, timeout_sec=180):
+def is_generation_in_progress(page):
+    try:
+        stop_btn = page.locator(
+            'button[aria-label*="중지"], button[aria-label*="Stop"], '
+            'button[aria-label*="대답 생성 중지"], [data-mat-icon-name="stop"]'
+        ).first
+        if stop_btn.count() > 0 and stop_btn.is_visible():
+            return True
+        thinking = page.locator('thinking-overlay, [data-test-id="thinking"]')
+        if thinking.count() > 0 and thinking.first.is_visible():
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def wait_for_new_plan(page, prev_plan_count=0, timeout_sec=300):
     """Wait until a new Research Plan card with an active confirm button appears."""
     start_time = time.time()
     last_reload_at = 0
@@ -604,17 +635,18 @@ def wait_for_new_plan(page, prev_plan_count=0, timeout_sec=180):
 
         # When Gemini.exe runs hidden (--hide), revised Research Plan widgets on follow-up turns
         # may stay visually on '조사 계획 생성 중' until the conversation page is reloaded.
-        # Wait at least 60s before reloading so we never abort an in-flight StreamGenerate request.
-        if elapsed - last_reload_at >= 60 and "/app/" in page.url:
+        # Do not reload while generation/thinking is actively in progress!
+        generating = is_generation_in_progress(page)
+        if not generating and elapsed >= 30 and elapsed - last_reload_at >= 45 and "/app/" in page.url:
             last_reload_at = elapsed
-            log(f"Refreshing conversation state ({int(elapsed)}s elapsed)...")
+            log(f"Refreshing conversation state ({int(elapsed)}s elapsed, generation idle)...")
             try:
                 page.reload(wait_until="domcontentloaded")
                 prevent_background_throttling(page)
                 page.wait_for_selector("model-response", timeout=15000)
+                time.sleep(4.0)
             except Exception as e:
                 log(f"Reload recovery notice: {e}")
-            time.sleep(3.0)
             continue
 
         time.sleep(1.5)
@@ -622,7 +654,7 @@ def wait_for_new_plan(page, prev_plan_count=0, timeout_sec=180):
     raise TimeoutError(f"Research Plan confirmation button did not appear within {timeout_sec}s.")
 
 
-def apply_plan_edit(page, edit_feedback, timeout_sec=180):
+def apply_plan_edit(page, edit_feedback, timeout_sec=300):
     """Click '계획 수정' (edit-button), wait for edit prompt readiness, submit modification instructions, and wait for the revised plan."""
     ensure_pro_mode(page)
     prev_plan_count = page.locator('[data-test-id="research-steps"], .research-steps').count()
@@ -1031,7 +1063,21 @@ def main():
                     confirm_current_plan(page)
         else:
             # Start a new Deep Research chat
-            if page.url.rstrip("/") != "https://gemini.google.com/app":
+            new_chat_clicked = False
+            new_chat_loc = page.locator('button[aria-label*="새 채팅"], button[aria-label*="New chat"], a[aria-label*="새 채팅"], a[aria-label*="New chat"]')
+            for i in range(new_chat_loc.count()):
+                el = new_chat_loc.nth(i)
+                try:
+                    if el.is_visible():
+                        log("Clicking '새 채팅' (New chat)...")
+                        el.click()
+                        time.sleep(2.0)
+                        new_chat_clicked = True
+                        break
+                except Exception:
+                    pass
+
+            if not new_chat_clicked and page.url.rstrip("/") != "https://gemini.google.com/app":
                 log("Opening new chat in local Gemini app...")
                 page.goto("https://gemini.google.com/app", wait_until="domcontentloaded")
                 time.sleep(3.0)
