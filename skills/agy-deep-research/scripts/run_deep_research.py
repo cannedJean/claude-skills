@@ -324,6 +324,41 @@ def prevent_background_throttling(page):
         log(f"Note: CDP focus emulation setup warning (non-fatal): {e}")
 
 
+_SHOW_THINKING_MARKERS = ("과정 표시", "생각 표시", "show thinking", "hide thinking", "과정 숨기기")
+
+
+def is_thinking_level_control(label):
+    """True only for the composer's thinking-level picker, never for the per-response
+    'show thinking' toggle, which shares 'thinking'/'생각' in its label."""
+    low = (label or "").strip().lower()
+    if not low or any(m in low for m in _SHOW_THINKING_MARKERS):
+        return False
+    return any(k in low for k in ("thinking level", "사고 수준", "high", "medium", "low", "높음", "중간", "보통", "낮음"))
+
+
+def log_current_model_mode(page):
+    """Read-only: report the model shown in an existing conversation. Never clicks.
+    The model was locked when the chat was created (plan/auto); a reload may display the
+    app default (e.g. 'Flash'), and switching it now would alter the conversation."""
+    want = os.environ.get("GEMINI_DR_MODE", "Pro").strip() or "Pro"
+    shown = ""
+    try:
+        for sel in ('[data-test-id*="mode-menu"]', 'button[aria-label*="Model selector"]',
+                    'button[aria-label*="모델 선택"]', '[data-test-id="bard-mode-menu-button"]',
+                    'bard-mode-switcher button', 'gem-menu-button button'):
+            loc = page.locator(sel).first
+            if loc.count() > 0 and loc.is_visible():
+                shown = str(loc.inner_text() or loc.get_attribute("aria-label") or "").strip()
+                break
+    except Exception as e:
+        log(f"Notice: model mode read skipped ({e})")
+    log(f"[MODEL_OBSERVED] shown='{shown}' locked_target='{want}' (read-only; menu not touched)")
+    if shown and want.lower() not in shown.lower():
+        log(f"Warning: composer shows '{shown}' but job was locked to '{want}' at plan time. "
+            "Not switching mid-conversation; verify the conversation's model in the app.")
+    return shown
+
+
 def ensure_pro_mode(page):
     """Ensure the wanted model mode and thinking level are selected. Default 'Pro' / 'high';
     GEMINI_DR_MODE selects model, GEMINI_DR_THINKING selects reasoning intensity."""
@@ -406,6 +441,9 @@ def ensure_pro_mode(page):
             loc = page.locator(sel).first
             try:
                 if loc.count() > 0 and loc.is_visible():
+                    label = str(loc.inner_text() or loc.get_attribute("aria-label") or "")
+                    if not is_thinking_level_control(label):
+                        continue  # e.g. the '생각하는 과정 표시' toggle on a response
                     thinking_btn = loc
                     break
             except Exception:
@@ -656,7 +694,7 @@ def wait_for_new_plan(page, prev_plan_count=0, timeout_sec=300):
 
 def apply_plan_edit(page, edit_feedback, timeout_sec=300):
     """Click '계획 수정' (edit-button), wait for edit prompt readiness, submit modification instructions, and wait for the revised plan."""
-    ensure_pro_mode(page)
+    log_current_model_mode(page)  # model is locked at plan time; never switch mid-conversation
     prev_plan_count = page.locator('[data-test-id="research-steps"], .research-steps').count()
     prev_resp_count = page.locator("model-response").count()
 
@@ -804,6 +842,27 @@ def run_plan_review_hook_loop(page, initial_plan_info, plan_hook_cmd=None, timeo
         iteration += 1
 
 
+_NAVIGATION_ERROR_MARKERS = ("Execution context was destroyed", "most likely because of a navigation",
+                             "Cannot find context with specified id", "Target page, context or browser has been closed")
+
+
+def evaluate_with_navigation_retry(page, script, arg=None, attempts=5):
+    """page.evaluate that tolerates the transient error raised when a poll lands while the
+    page is reloading/navigating (our own 60s freeze-recovery reload or Gemini's own)."""
+    for i in range(attempts):
+        try:
+            return page.evaluate(script, arg) if arg is not None else page.evaluate(script)
+        except Exception as e:
+            if not any(m in str(e) for m in _NAVIGATION_ERROR_MARKERS) or i == attempts - 1:
+                raise
+            log(f"Page navigating during evaluate; retrying ({i + 1}/{attempts - 1})...")
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=15000)
+            except Exception:
+                pass
+            time.sleep(2.0)
+
+
 def wait_for_report_completion(page, timeout_sec=1200):
     log("Deep Research is running in the background. Monitoring progress...")
     start_time = time.time()
@@ -813,7 +872,7 @@ def wait_for_report_completion(page, timeout_sec=1200):
     last_reload_time = time.time()
 
     while time.time() - start_time < timeout_sec:
-        state = page.evaluate(r"""() => {
+        state = evaluate_with_navigation_retry(page, r"""() => {
             const isCardCompleted = !!document.querySelector('immersive-entry-chip gem-processing-card.completed');
             const workingEl = document.querySelector('[data-test-id="remy-processing-state-agent-working"], remy-processing-state');
 
@@ -902,7 +961,7 @@ def wait_for_report_completion(page, timeout_sec=1200):
     else:
         raise TimeoutError(f"Deep Research did not finish within {timeout_sec} seconds.")
 
-    extracted = page.evaluate(HTML_TO_MARKDOWN_JS, None)
+    extracted = evaluate_with_navigation_retry(page, HTML_TO_MARKDOWN_JS)
     markdown = extracted.get("markdown", "").strip()
     sources = extracted.get("sources", [])
 
@@ -1025,7 +1084,11 @@ def main():
             page.goto(args.resume_url, wait_until="domcontentloaded")
             time.sleep(2.5)
 
-        ensure_pro_mode(page)
+        # Model lock: the model/thinking level is selected exactly once, in the new chat
+        # (activate_deep_research_mode -> ensure_pro_mode) before the prompt is sent.
+        # On an existing conversation (approve / collect / edit) only observe it.
+        if args.resume_url:
+            log_current_model_mode(page)
 
         # Step mode 1: Edit an existing plan and return the revised plan to the caller agent
         if args.step == "edit":
