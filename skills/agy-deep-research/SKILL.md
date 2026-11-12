@@ -84,7 +84,7 @@ Claude Code (Lead Orchestrator & Plan Reviewer)
      var Pg=wg(h.app.isPackaged&&P!=="dev",process.argv,process.execArgv);
      Pg?(c.error("security",_g,`(switch: --${Pg})`),Dt(),h.app.exit(1)):Rb();
      ```
-   - `patch_gemini_app.py` backs up `app.asar` to `app.asar.bak`, dynamically matches the minified app identifier (`h.app` in 1.18.0, `m.app` in 1.16.0) via non-capturing regex `(?:\w+)\.error("security", ...)`, and injects `--remote-debugging-port=9223` and `--disable-renderer-backgrounding`.
+   - `patch_gemini_app.py` backs up `app.asar` to `app.asar.bak`, dynamically matches the minified app identifier (`h.app` in 1.18.0+, `m.app` in 1.16.0; `$m` logger argument in 1.19.0) via `SECURITY_GUARD_RE`, whose identifier groups are all `[\w$]+` (e.g. `(?:[\w$]+)\.error("security", ...)`) because minified names may contain `$`, and injects `--remote-debugging-port=9223` and `--disable-renderer-backgrounding`.
    - Modifies the target string while preserving exact byte length and character count with trailing comment padding (`/*    */`), ensuring ASAR header index offsets remain untouched.
 
 2. **WMI Hidden Background Launch**:
@@ -509,7 +509,7 @@ When `deep_research.py` invokes `agy_task.py run --deep-research -w <job_dir>`, 
 
 | Symptom / Error | Root Cause | Resolution |
 |---|---|---|
-| `ASAR_PATTERN_MISMATCH` | Gemini desktop app updated and variable names changed | Ensure `patch_gemini_app.py` uses dynamic regex `(?:\w+)\.error("security", ...)` matching 1.16.x through 1.18.0+. |
+| `ASAR_PATTERN_MISMATCH` | Gemini desktop app updated and variable names changed | Run `python scripts/patch_gemini_app.py --dry-run`. `SECURITY_GUARD_RE` (`[\w$]+` identifiers) matches 1.16.x through 1.19.0+; if the guard statement itself changed shape, update `SECURITY_GUARD_RE` and `scripts/tests/test_patch_pattern.py`. |
 | `CDP_NOT_READY` / `CDP_CONNECT_FAILED` | Gemini desktop app not running or CDP port 9223 unbound | Run `python scripts/patch_gemini_app.py --check` or launch manually with `patch_gemini_app.py`. |
 | `GEMINI_PAGE_NOT_FOUND` / `UI_SELECTOR_TIMEOUT` | User is not logged into Google account in the desktop app | Launch `Gemini.exe` visibly once with `python scripts/patch_gemini_app.py --show` and sign in. |
 | `Premature Page Reload During Thinking` | Deep thinking (>60s) triggered page reload | `run_deep_research.py` uses `is_generation_in_progress(page)` to detect active stop buttons/overlays and prevent reload during reasoning. |
