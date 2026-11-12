@@ -15,6 +15,13 @@ GEMINI_BASE_DIR = os.path.expandvars(r"%LOCALAPPDATA%\Google\Gemini")
 CDP_PORT = int(os.environ.get("GEMINI_CDP_PORT", 9223))
 CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
 
+# Startup guard in src/main.js that exits when a blocked switch (e.g. --remote-debugging-port) is present.
+# Identifiers use [\w$]+ because minified names may contain `$` (Gemini 1.19.0 emits `$m`).
+SECURITY_GUARD_RE = re.compile(
+    rb'var ([\w$]+)=([\w$]+)\(([\w$]+)\.app\.isPackaged&&([\w$]+)!=="dev",process\.argv,process\.execArgv\);'
+    rb'\1\?\((?:[\w$]+)\.error\("security",([\w$]+),`\(switch: --\$\{\1\}\)`\),([\w$]+)\(\),\3\.app\.exit\(1\)\):([\w$]+)\(\);'
+)
+
 
 def find_latest_app_dir():
     pattern = os.path.join(GEMINI_BASE_DIR, "app-*")
@@ -75,11 +82,7 @@ def patch_asar(asar_path, port=CDP_PORT):
             data = bytearray(f.read())
         main_bytes = bytes(data[off : off + sz])
 
-    pattern = re.compile(
-        rb'var (\w+)=(\w+)\((\w+)\.app\.isPackaged&&(\w+)!=="dev",process\.argv,process\.execArgv\);'
-        rb'\1\?\((?:\w+)\.error\("security",(\w+),`\(switch: --\$\{\1\}\)`\),(\w+)\(\),\3\.app\.exit\(1\)\):(\w+)\(\);'
-    )
-    match = pattern.search(main_bytes)
+    match = SECURITY_GUARD_RE.search(main_bytes)
     if not match:
         raise RuntimeError("Target pattern not found in main.js; app version structure may have changed.")
     target = match.group(0)
@@ -174,11 +177,7 @@ def dry_run_patch(asar_path, port=CDP_PORT):
         except Exception:
             pass
 
-    pattern = re.compile(
-        rb'var (\w+)=(\w+)\((\w+)\.app\.isPackaged&&(\w+)!=="dev",process\.argv,process\.execArgv\);'
-        rb'\1\?\((?:\w+)\.error\("security",(\w+),`\(switch: --\$\{\1\}\)`\),(\w+)\(\),\3\.app\.exit\(1\)\):(\w+)\(\);'
-    )
-    match = pattern.search(check_bytes)
+    match = SECURITY_GUARD_RE.search(check_bytes)
     if not match:
         return {
             "status": "dry_run_pattern_mismatch",

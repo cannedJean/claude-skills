@@ -25,7 +25,7 @@ The system is structured into four decoupled layers:
 
 4. **Desktop Electron Launcher & Patcher (`scripts/patch_gemini_app.py`)**:
    - Dynamically patches packaged Electron security checks in `%LOCALAPPDATA%\Google\Gemini\app-*\resources\app.asar`.
-   - Resilient against minifier variable renaming across versions (e.g. `m.app` in `1.16.x`, `h.app` in `1.17.x+`) via generalized regex `(\w+)\.app\.isPackaged`.
+   - Resilient against minifier variable renaming across versions (e.g. `m.app` in `1.16.x`, `h.app` in `1.17.x+`, `$m` as the logger argument in `1.19.0`) via generalized regex `([\w$]+)\.app\.isPackaged` (`$` is allowed because minified names may contain it).
    - Preserves exact byte length and recalculates ASAR header SHA-256 integrity hash.
    - Launches `Gemini.exe --hide` in the background via WMI (`Win32_Process.Create`) to prevent window focus stealing.
 

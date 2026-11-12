@@ -21,7 +21,7 @@ Automate long-form multi-source web research via the local Windows Gemini deskto
 ## Compatibility & Prerequisites
 
 - **Supported Operating Systems**: Windows 11 / Windows 10 (x64).
-- **Google Gemini Desktop App**: Version **v1.18.0+** (tested on Electron 44.6.0+, Chromium 152.0.7977.130+). Installed at `%LOCALAPPDATA%\Google\Gemini\app-*\Gemini.exe`.
+- **Google Gemini Desktop App**: Version **v1.18.0+** (patch verified on v1.19.0; tested on Electron 44.6.0+, Chromium 152.0.7977.130+). Installed at `%LOCALAPPDATA%\Google\Gemini\app-*\Gemini.exe`.
 - **Python Runtime**: Python 3.10+ (tested on Python 3.12).
 - **Runtime Dependency**: `playwright` must be installed:
   ```powershell
@@ -71,7 +71,7 @@ Claude Code (Lead Orchestrator & Plan Reviewer)
   │
   └─ 4. Desktop Electron Launcher (scripts/patch_gemini_app.py)
         • Locates %LOCALAPPDATA%\Google\Gemini\app-*\resources\app.asar
-        • Dynamic minification regex patching ((?:\w+)\.error("security", ...)) supporting app-1.16.x through app-1.18.0+
+        • Dynamic minification regex patching ((?:[\w$]+)\.error("security", ...)) supporting app-1.16.x through app-1.19.0+
         • Byte-preserving replacement with comment padding (/* ... */) preserving ASAR header integrity
         • Spawns hidden background process via WMI (Invoke-CimMethod Win32_Process.Create --hide)
 ```

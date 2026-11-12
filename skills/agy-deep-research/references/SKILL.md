@@ -13,7 +13,7 @@ This skill automates the locally installed **Google Gemini Windows Desktop App**
 ## Compatibility & Prerequisites
 
 - **Supported Operating Systems**: Windows 11 / Windows 10 (x64).
-- **Google Gemini Desktop App**: Version **v1.18.0+** (tested on Electron 44.6.0+, Chromium 152.0.7977.130+). Installed at `%LOCALAPPDATA%\Google\Gemini\app-*\Gemini.exe`.
+- **Google Gemini Desktop App**: Version **v1.18.0+** (patch verified on v1.19.0; tested on Electron 44.6.0+, Chromium 152.0.7977.130+). Installed at `%LOCALAPPDATA%\Google\Gemini\app-*\Gemini.exe`.
 - **Python Runtime**: Python 3.10+ (tested on Python 3.12).
 - **Runtime Dependency**: `playwright` must be installed:
   ```powershell
@@ -32,7 +32,7 @@ This skill automates the locally installed **Google Gemini Windows Desktop App**
   var Pg=wg(h.app.isPackaged&&P!=="dev",process.argv,process.execArgv);
   Pg?(c.error("security",_g,`(switch: --${Pg})`),Dt(),h.app.exit(1)):Rb();
   ```
-- **Dynamic Minification Regex**: `patch_gemini_app.py` uses a flexible non-capturing regex pattern `(?:\w+)\.error("security", ...)` that accommodates single-letter minified logger names across Electron releases (`c.error` in v1.18.0, `u.error` in earlier releases) while dynamically resolving the application instance variable (e.g., `h`) and continuation function (e.g., `Rb`).
+- **Dynamic Minification Regex**: `patch_gemini_app.py` uses a flexible regex pattern `(?:[\w$]+)\.error("security", ...)` (`SECURITY_GUARD_RE`; every identifier is `[\w$]+` because minified names may contain `$`, e.g. `$m` in v1.19.0) that accommodates minified logger names across Electron releases (`c.error` in v1.18.0+, `u.error` in earlier releases) while dynamically resolving the application instance variable (e.g., `h`) and continuation function (e.g., `Rb`).
 - **Byte-Length Parity Preservation**: Electron ASAR archive headers rely on precise 64-bit byte offsets. Rather than altering file offsets (which would corrupt the ASAR index), the patch replaces the exit call with:
   ```javascript
   h.app.commandLine.appendSwitch("remote-debugging-port","9223");h.app.commandLine.appendSwitch("disable-renderer-backgrounding");Rb();/*    */
@@ -286,5 +286,5 @@ once on its own when the Tools menu fails to open right after a new chat (`retri
 | **New Chat Navigation Stalls** | Page navigation in single-page apps can stall if a previous conversation state persists. | `run_deep_research.py` uses a top-level `new_chat_clicked` selector checking for visible `'새 채팅'` buttons before falling back to `page.goto("https://gemini.google.com/app")`. |
 | **CDP Port Connection Refused (`CDP_NOT_READY`)** | `Gemini.exe` is not running or CDP port 9223 is not listening. | Run `python scripts/patch_gemini_app.py --check` or start the patched app via `python scripts/patch_gemini_app.py`. Test endpoint: `Invoke-RestMethod -Uri 'http://127.0.0.1:9223/json/version'`. |
 | **App Authentication Required** | User is not logged into Google in the desktop application. | Launch the app visibly once via `python scripts/patch_gemini_app.py --show`, log into your Google account, and close the window. |
-| **ASAR Pattern Mismatch** | Gemini desktop app was updated and the startup JS minification pattern changed. | Run `python scripts/patch_gemini_app.py --dry-run` to inspect matching snippets. The regex pattern `(?:\w+)\.error("security", ...)` accommodates single-letter identifier variance. |
+| **ASAR Pattern Mismatch** | Gemini desktop app was updated and the startup JS minification pattern changed. | Run `python scripts/patch_gemini_app.py --dry-run` to inspect matching snippets. `SECURITY_GUARD_RE` uses `[\w$]+` for every identifier, so minifier renames (including `$` names) still match; if the guard statement itself changed shape, update `SECURITY_GUARD_RE` and `scripts/tests/test_patch_pattern.py`. |
 | **Restore Original Desktop App** | Need to revert Electron ASAR to stock state. | Run `python scripts/patch_gemini_app.py --restore` to restore `app.asar.bak`. |
