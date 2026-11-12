@@ -30,12 +30,19 @@ request.json fields
 
 `collect` never starts a research: before running the driver it probes the page (read-only, through the driver's
 Python and playwright) and refuses with COLLECT_WOULD_START when the plan card still has an active start button.
-`probe` only runs that read-only probe and writes it to result.json. `auto` records the conversation URL after the run.
+`probe` only runs that read-only probe and writes it to result.json.
   allow_missing_confirm   approve: keep going when the plan card has no active start button (collect: always)
 
+Conversation identity: the Gemini app has one page that every driver shares. approve/collect refuse with
+CONVERSATION_MISMATCH when the probe could not settle the page on resume_url's conversation, and a report counts as
+completed only when the same driver run printed its `[REPORT_PROVENANCE]` line (the conversation the report was
+extracted from) and that conversation is resume_url's (auto: the new chat the driver pinned). No provenance ->
+REPORT_PROVENANCE_MISSING; a report file left over from an earlier run is never accepted on its own.
+
 result.json: status (plan_ready | plan_revised | completed | started | error), code, message, hint, rc, event, url,
-plan, plan_count, edit_button_clicked, confirm_clicked, app_status, navigated, report_file, report_chars,
-sources_count, elapsed_s, stdout_log, stderr_log, pid.
+conversation_id, report_title, plan, plan_count, edit_button_clicked, confirm_clicked, app_status, navigated,
+report_file, report_chars, sources_count, elapsed_s, stdout_log, stderr_log, pid. For a completed report `url` /
+`conversation_id` are the driver's provenance (where the report came from), never a later look at the page.
 
 Exit codes: 0 ok | 2 research-level failure (no usable plan / report) | 3 driver or environment error |
 5 bad request. Python 3.9+, stdlib only (the driver itself needs playwright).
@@ -48,6 +55,7 @@ import subprocess
 import sys
 import threading
 import time
+from urllib.parse import urlsplit
 
 for _s in (sys.stdout, sys.stderr):
     if hasattr(_s, "reconfigure"):
@@ -72,6 +80,15 @@ LINE_NAVIGATE = "Navigating to conversation:"
 LINE_PROMPT_SENT = "Prompt submitted."
 PROGRESS_RE = re.compile(r"\[(\d+)s\] Progress: (.*)$")
 APP_STATUS_RE = re.compile(r"status=([a-z_]+)")
+PROVENANCE_PREFIX = "[REPORT_PROVENANCE] "      # printed by the driver right before the report block
+CONVERSATION_PREFIX = "[CONVERSATION] "          # printed by the driver as soon as the step's conversation is bound
+_CONVERSATION_PATH_RE = re.compile(r"(?:^|/)app/([A-Za-z0-9_-]+)(?:/|$)", re.IGNORECASE)   # same parser as the driver
+_GEMINI_HOSTS = ("gemini.google.com",)
+MISMATCH_HINT = ("nothing was accepted from it. The research keeps running in its own conversation: when no other job "
+                 "is driving the Gemini app, the caller collects this job again (one job drives the app at a time)")
+PLAN_MISMATCH_HINT = ("the shared Gemini page moved to another conversation during this step; nothing from it was used. "
+                      "The caller repeats the step once no other job is driving the Gemini app (plan: the job has no reviewed "
+                      "plan yet; edit: the reviewed plan is unchanged unless prompt_sent is true)")
 PLAN_DEADLINE = 420
 REPORT_TIMEOUT = 1200
 PROMPT_ARGV_CAP = 28000
@@ -80,6 +97,7 @@ RETRY_ONCE = ("DEEP_RESEARCH_TOGGLE_NOT_FOUND",)   # transient right after the d
 
 # (substring of the driver's stderr/stdout, code, exit code, hint) - first match wins
 FAILURES = [
+    ("Conversation mismatch", "CONVERSATION_MISMATCH", 2, "the shared Gemini page showed another conversation or another research's report; " + MISMATCH_HINT),
     ("No module named 'playwright'", "PLAYWRIGHT_MISSING", 3, "install playwright into the Python that runs the driver (python -m pip install playwright)"),
     ("No Gemini app-* directory", "APP_NOT_INSTALLED", 3, "install the Google Gemini desktop app for Windows and sign in once"),
     ("Target pattern not found in main.js", "ASAR_PATTERN_MISMATCH", 3,
@@ -109,6 +127,38 @@ class Fail(Exception):
 
 def now_iso():
     return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def conversation_id_from_url(url):
+    """'https://gemini.google.com/app/<id>' (also /u/<n>/app/<id>, ?query, #fragment, trailing /) -> '<id>', else None.
+    Only the Gemini app's own host counts."""
+    if not isinstance(url, str) or not url.strip():
+        return None
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in ("http", "https") or (parts.hostname or "") not in _GEMINI_HOSTS:
+        return None
+    m = _CONVERSATION_PATH_RE.search(parts.path)
+    return m.group(1).lower() if m else None
+
+
+def parse_conversation_line(line):
+    """A driver '[CONVERSATION] {...}' line -> {"conversation_id", "url"} or None."""
+    s = line.strip()
+    if not s.startswith(CONVERSATION_PREFIX):
+        return None
+    try:
+        data = json.loads(s[len(CONVERSATION_PREFIX):])
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    cid = conversation_id_from_url(data.get("url")) or None
+    if not cid or (data.get("conversation_id") and str(data["conversation_id"]).lower() != cid):
+        return None
+    return {"conversation_id": cid, "url": data["url"]}
 
 
 def read_text(path):
@@ -267,6 +317,9 @@ class Run:
         self.app_status = None
         self.progress = None
         self.guard_trip = None
+        self.conversation = None   # {"conversation_id", "url"} from the driver's [CONVERSATION] line
+        self.in_report = False
+        self.started_at = None
 
     @property
     def stdout(self):
@@ -277,13 +330,15 @@ class Run:
         return "".join(self.err)
 
 
-def run_driver(argv, cwd, out_path, err_path, deadline, allow_missing_confirm, progress_path=None, extra_env=None):
+def run_driver(argv, cwd, out_path, err_path, deadline, allow_missing_confirm, progress_path=None, extra_env=None,
+               conversation_path=None, conversation_meta=None):
     env = dict(os.environ)
     env.update({"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", "NO_COLOR": "1"})
     env.update({str(k): str(v) for k, v in (extra_env or {}).items()})
     kw = {"start_new_session": True} if os.name != "nt" else {}
     run = Run()
     t0 = time.time()
+    run.started_at = t0
     try:
         proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, encoding="utf-8", errors="replace", bufsize=1, **kw)
@@ -301,6 +356,18 @@ def run_driver(argv, cwd, out_path, err_path, deadline, allow_missing_confirm, p
                 with lock:
                     lines.append(line)
                 if not is_out:
+                    continue
+                if REPORT_START in line:
+                    run.in_report = True   # the report may quote anything: no control line counts after this
+                if not run.in_report and run.conversation is None and line.lstrip().startswith(CONVERSATION_PREFIX):
+                    conv = parse_conversation_line(line)
+                    if conv:
+                        run.conversation = conv
+                        if conversation_path:   # persisted at once: survives a worker that dies later
+                            try:
+                                write_json_atomic(conversation_path, {**(conversation_meta or {}), **conv, "ts": now_iso()})
+                            except OSError:
+                                pass
                     continue
                 if LINE_CONFIRM in line:
                     run.confirm_clicked = True
@@ -363,6 +430,8 @@ def classify(run, step):
                     "the countdown may have started the research, or the tab is on another conversation; the caller decides (collect or a new plan)")
     for needle, code, exit_code, hint in FAILURES:
         if needle in text:
+            if code == "CONVERSATION_MISMATCH" and step in ("plan", "edit"):
+                hint = PLAN_MISMATCH_HINT   # there is no research to collect after a plan or edit step
             tail = [ln.rstrip() for ln in run.stderr.splitlines() if ln.strip()][-3:]
             if code == "UI_SELECTOR_TIMEOUT" and run.prompt_sent:
                 return Fail("PAGE_TIMEOUT_AFTER_SEND", (tail[-1] if tail else needle), 2,
@@ -409,6 +478,51 @@ def parse_plan_block(stdout):
 def parse_report(run):
     body, complete = extract_block(run.stdout, REPORT_START, REPORT_END)
     return body.strip() if body and complete else None
+
+
+def before_report(stdout):
+    """The driver's own log: everything before the first report marker (the report body may quote anything)."""
+    cut = stdout.find(REPORT_START)
+    return stdout if cut < 0 else stdout[:cut]
+
+
+def parse_provenance(stdout):
+    """The driver's [REPORT_PROVENANCE] line from THIS run: it must be the last line the driver printed before the
+    report block (the driver prints it right before the marker), so nothing quoted elsewhere can stand in. -> dict or None"""
+    if stdout.find(REPORT_START) < 0:
+        return None
+    lines = [ln.strip() for ln in before_report(stdout).splitlines() if ln.strip()]
+    if not lines or not lines[-1].startswith(PROVENANCE_PREFIX):
+        return None
+    try:
+        data = json.loads(lines[-1][len(PROVENANCE_PREFIX):])
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def probe_conversation_mismatch(req, probe_info):
+    """None, or why the probe left the page on another conversation than resume_url's ('current' is not judged)."""
+    want = conversation_id_from_url(req.get("resume_url"))
+    got = conversation_id_from_url(probe_info.get("url"))
+    if want and got != want:
+        return f"the page did not settle on this job's conversation {want} (it is on {got or probe_info.get('url') or 'unknown'})"
+    return None
+
+
+def set_aside(path, relay_dir, name, written_since=None):
+    """Move a rejected report out of the job's way, kept as evidence; with written_since only a file written during
+    this run (an older file may be a report accepted earlier). -> new path or None"""
+    try:
+        if path and os.path.isfile(path):
+            if written_since is not None and os.path.getmtime(path) < written_since - 1:
+                return None
+            dest = os.path.join(relay_dir, name)
+            os.replace(path, dest)
+            return dest
+    except OSError:
+        pass
+    return None
 
 
 def count_sources(markdown):
@@ -492,6 +606,14 @@ def do_step(job, req, relay_dir, result_path):
             # settle the tab on the conversation and make sure the card the caller approved is the one on screen
             probe_info = probe_page(req, py)
             if not probe_info.get("error"):
+                why = probe_conversation_mismatch(req, probe_info)
+                if why:   # the start button on screen belongs to another conversation: never click it
+                    res = base_result(req)
+                    res.update({"status": "error", "code": "CONVERSATION_MISMATCH", "exit_code": 2, "probe": probe_info,
+                                "message": why, "hint": "another job or the user is driving the shared Gemini page, or the "
+                                "conversation no longer exists; nothing was clicked. The caller approves again when the app is free"})
+                    write_json_atomic(result_path, res)
+                    return res, 2
                 if not probe_info.get("active_confirm"):
                     res = base_result(req)
                     res.update({"status": "error", "code": "CONFIRM_MISSING", "exit_code": 2, "probe": probe_info,
@@ -517,6 +639,14 @@ def do_step(job, req, relay_dir, result_path):
                             "hint": "fix the environment (the app and CDP must be up; patch_gemini_app.py) and collect again"})
                 write_json_atomic(result_path, res)
                 return res, 3
+            why = probe_conversation_mismatch(req, probe_info) if not probe_info.get("error") else None
+            if why:
+                res = base_result(req)
+                res.update({"status": "error", "code": "CONVERSATION_MISMATCH", "exit_code": 2, "probe": probe_info,
+                            "message": why, "hint": "another job or the user is driving the shared Gemini page, or the "
+                            "conversation no longer exists; " + MISMATCH_HINT})
+                write_json_atomic(result_path, res)
+                return res, 2
             if probe_info.get("active_confirm"):
                 res = base_result(req)
                 res.update({"status": "error", "code": "COLLECT_WOULD_START", "exit_code": 2, "probe": probe_info,
@@ -528,7 +658,8 @@ def do_step(job, req, relay_dir, result_path):
         argv.append("--show")
     write_json_atomic(os.path.join(relay_dir, prefix + ".cmd.json"), {"argv": argv, "cwd": job, "started": now_iso(), "deadline_s": deadline})
     progress = os.path.join(relay_dir, "progress.jsonl") if step in ("approve", "collect", "auto") else None
-    run = run_driver(argv, job, out_log, err_log, deadline, allow_missing, progress_path=progress, extra_env=req.get("env"))
+    conv_kw = {"conversation_path": os.path.join(relay_dir, "conversation.json"), "conversation_meta": {"seq": seq, "step": step}}
+    run = run_driver(argv, job, out_log, err_log, deadline, allow_missing, progress_path=progress, extra_env=req.get("env"), **conv_kw)
     err = classify(run, step)
     retried = False
     if err and err.code in RETRY_ONCE and step in ("plan", "auto") and not run.prompt_sent:
@@ -537,10 +668,13 @@ def do_step(job, req, relay_dir, result_path):
         retried = True
         out_log = os.path.join(relay_dir, prefix + "b.stdout.txt")
         err_log = os.path.join(relay_dir, prefix + "b.stderr.txt")
-        run = run_driver(argv, job, out_log, err_log, deadline, allow_missing, progress_path=progress, extra_env=req.get("env"))
+        run = run_driver(argv, job, out_log, err_log, deadline, allow_missing, progress_path=progress, extra_env=req.get("env"), **conv_kw)
         err = classify(run, step)
     res = base_result(req, run)
     res.update({"stdout_log": out_log, "stderr_log": err_log, "retried": retried})
+    pinned = run.conversation or {}
+    if pinned:   # the conversation this run bound, on every result (errors too), so the caller can collect later
+        res.update({"conversation_id": pinned["conversation_id"], "conversation_url": pinned["url"]})
     if probe_info is not None:
         res["probe"] = {k: probe_info.get(k) for k in ("url", "active_confirm", "active_edit", "plan_cards", "report_len", "navigated", "error")}
     if step == "collect" and run.confirm_clicked:
@@ -566,6 +700,26 @@ def do_step(job, req, relay_dir, result_path):
                     "plan": payload.get("plan"), "plan_count": payload.get("plan_count"), "plan_chars": len(payload.get("plan") or "")})
         write_json_atomic(result_path, res)
         return res, 0
+    # Conversation identity: the report counts only with this run's provenance line, naming the job's conversation
+    prov = parse_provenance(run.stdout) or {}
+    got = str(prov.get("conversation_id") or conversation_id_from_url(prov.get("url")) or "").lower() or None
+    if not got:
+        res.update({"status": "error", "code": "REPORT_PROVENANCE_MISSING", "exit_code": 2,
+                    "rejected_report": set_aside(req["output"], relay_dir, f"rejected_{seq}.report.md", written_since=run.started_at),
+                    "message": "the driver did not say which conversation the report came from; nothing was accepted",
+                    "hint": "a driver older than this relay, or the run ended before a report was extracted: sync the skill "
+                            "(deep_research.py setup) and collect again"})
+        write_json_atomic(result_path, res)
+        return res, 2
+    want = conversation_id_from_url(req.get("resume_url")) or pinned.get("conversation_id")
+    if want and got != want:
+        res.update({"status": "error", "code": "CONVERSATION_MISMATCH", "exit_code": 2, "report_conversation_id": got,
+                    "report_url": prov.get("url"), "report_title": prov.get("report_title"),
+                    "rejected_report": set_aside(req["output"], relay_dir, f"rejected_{seq}.report.md"),
+                    "message": f"the report was extracted from conversation {got}, not this job's {want}",
+                    "hint": MISMATCH_HINT})
+        write_json_atomic(result_path, res)
+        return res, 2
     markdown = None
     if os.path.isfile(req["output"]):
         markdown = read_text(req["output"])
@@ -578,13 +732,12 @@ def do_step(job, req, relay_dir, result_path):
                     "hint": "collect again after a minute; the panel may not have rendered"})
         write_json_atomic(result_path, res)
         return res, 2
-    res.update({"status": "completed", "report_file": os.path.abspath(req["output"]), "report_chars": len(markdown), "sources_count": count_sources(markdown)})
+    res.update({"status": "completed", "report_file": os.path.abspath(req["output"]), "report_chars": len(markdown), "sources_count": count_sources(markdown),
+                "url": prov.get("url") or f"https://gemini.google.com/app/{got}", "conversation_id": got,
+                "report_title": prov.get("report_title") or ""})
     if step == "auto":
-        res["plan"] = parse_plan_block(run.stdout)
+        res["plan"] = parse_plan_block(before_report(run.stdout))
         res["plan_chars"] = len(res["plan"] or "")
-        info = probe_page(dict(req, resume_url=""), py)
-        if info.get("url"):
-            res["url"] = info["url"]
     write_json_atomic(result_path, res)
     return res, 0
 

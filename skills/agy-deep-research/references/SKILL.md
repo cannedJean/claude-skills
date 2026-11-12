@@ -253,13 +253,30 @@ and no-review paths:
   and refuses with `COLLECT_WOULD_START` when the plan card still has an active "연구 시작" button; only then does it run
   `--step approve`, which without an active button falls through to the report wait. Should a click still happen (a
   card rendered in between) the result is `COLLECT_STARTED_RESEARCH`, not `completed`.
-- `approve` probes first too: no active start button → `CONFIRM_MISSING` without running the driver; a different
-  conversation or plan-card count than the caller reviewed (`expected_url`, `expected_plan_count`) → `PLAN_CHANGED`.
-  `edit` probes only to settle the tab on the conversation before the driver runs.
-- `auto` is the caller's explicit no-review mode (`--step auto`); the relay records the conversation URL afterwards.
+- `approve` probes first too: a page that did not settle on `resume_url`'s conversation → `CONVERSATION_MISMATCH`
+  without running the driver (nothing is clicked); no active start button → `CONFIRM_MISSING`; a different plan-card
+  count than the caller reviewed (`expected_plan_count`) → `PLAN_CHANGED`. `collect` refuses the same way with
+  `CONVERSATION_MISMATCH`. `edit` probes only to settle the tab on the conversation before the driver runs.
+- `auto` is the caller's explicit no-review mode (`--step auto`); its conversation is the new chat the driver pinned
+  when the plan appeared, recorded from the report provenance (never from a later look at the page).
 - `probe` only runs the read-only page probe (`active_confirm`, `active_edit`, `plan_cards`, `report_len`, `url`).
 - When the probe itself fails (CDP down, playwright missing) `collect` refuses with `COLLECT_PROBE_FAILED` unless the
   request carries `allow_probe_error` (the caller sets it only when an approve is on record).
+
+**Conversation identity.** The Gemini app has one page that every driver shares, so another job (or the user) can
+move it at any time. The driver binds the step's conversation (a new chat owns only the conversation whose single
+user query is its own prompt; it refuses to type into a page that already shows a conversation), re-checks the page
+url before and after every poll and the extraction, requires the report panel's title to be that conversation's
+research, and fails with `CONVERSATION_MISMATCH` otherwise. As soon as the conversation is bound it prints
+`[CONVERSATION] {"conversation_id", "url"}`; the relay saves that at once to `relay/conversation.json` and copies it
+into every result (`conversation_id`, `conversation_url`, errors included), so the caller can still collect after a
+timeout or a dead worker. Right before the report block the driver prints `[REPORT_PROVENANCE] {"conversation_id",
+"url", "report_title"}`; the relay marks a report `completed` only when that is the last line before the block and it
+names `resume_url`'s conversation (auto: the conversation the run bound). Without it the result is
+`REPORT_PROVENANCE_MISSING`; a report from another conversation is `CONVERSATION_MISMATCH` and the report file is
+moved to `relay/rejected_<seq>.report.md`. `request.json` `output` is a staging file the caller chose; the caller
+copies the report out only after its own checks. Report these codes as they are: do not re-run the relay, navigate
+the app, or touch the moved file.
 
 For `approve` / `collect` / `auto` the request usually sets `mode: "detach"`: the relay then starts a detached worker
 (through WMI, the way `Gemini.exe` is launched) and returns `status: "started"` with the worker's pid in
@@ -271,9 +288,11 @@ once on its own when the Tools menu fails to open right after a new chat (`retri
 `request.json` fields: `step`, `driver` (path of `run_deep_research.py`), `prompt_file`, `feedback_file`, `resume_url`,
 `output`, `timeout`, `deadline`, `mode`, `show`, `allow_missing_confirm`, `seq`, `python`, `env`, `cdp_url`.
 `result.json` fields: `status` (`plan_ready` | `plan_revised` | `completed` | `started` | `probed` | `error`), `code`,
-`message`, `hint`, `rc`, `event`, `url`, `plan`, `plan_count`, `edit_button_clicked`, `confirm_clicked`, `prompt_sent`,
-`app_status`, `navigated`, `retried`, `probe`, `report_file`, `report_chars`, `sources_count`, `elapsed_s`,
-`stdout_log`, `stderr_log`, `pid`, `launcher`, `seq`.
+`message`, `hint`, `rc`, `event`, `url`, `conversation_id`, `conversation_url`, `report_title`, `plan`, `plan_count`, `edit_button_clicked`,
+`confirm_clicked`, `prompt_sent`, `app_status`, `navigated`, `retried`, `probe`, `report_file`, `report_chars`,
+`sources_count`, `elapsed_s`, `stdout_log`, `stderr_log`, `pid`, `launcher`, `seq`, and on a rejected report
+`report_conversation_id`, `report_url`, `rejected_report`. For a completed report `url` / `conversation_id` are the
+driver's provenance: the conversation the report was extracted from.
 
 ---
 

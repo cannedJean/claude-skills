@@ -50,7 +50,7 @@ Claude Code (Lead Orchestrator & Plan Reviewer)
   │     • Subcommands: preflight, setup, init, plan, edit, approve, auto, status, collect
   │     • CLI ergonomics: full support for --job-dir <dir> alongside --job <id_or_path>
   │     • Model normalization: maps "flash 3.8" to canonical binary slug "gemini-3.8-flash"
-  │     • Enforces 5 deterministic quality, provenance, and isolation gates
+  │     • Enforces deterministic quality, provenance, conversation-identity, and isolation gates
   │
   ├─ 2. Operator Relay Layer (skills/agy-delegate / scripts/relay_step.py)
   │     • PreToolUse confinement hook (AGY_CONFINE_MODE="deep-research"):
@@ -68,6 +68,10 @@ Claude Code (Lead Orchestrator & Plan Reviewer)
   │     • Deep thinking protection (is_generation_in_progress checks active stop button before reload)
   │     • Angular/Quill event dispatch (send_btn.click(force=True) with keyboard Enter fallback)
   │     • Plan extraction, revision injection, thought monitoring, DOM-to-GFM Markdown conversion
+  │     • Conversation identity: binds the step's conversation (/app/<id>); a new chat owns only the conversation
+  │       whose single user query is its own prompt; re-checks the page url before/after every poll and the
+  │       extraction; requires the report panel title to match the conversation's research chip; prints
+  │       [CONVERSATION] once bound and [REPORT_PROVENANCE] {conversation_id, url, report_title} before the report
   │
   └─ 4. Desktop Electron Launcher (scripts/patch_gemini_app.py)
         • Locates %LOCALAPPDATA%\Google\Gemini\app-*\resources\app.asar
@@ -116,7 +120,7 @@ All job subcommands support both `--job <id_or_path>` and `--job-dir <dir>` inte
 | `approve` | `--job-dir DIR` `--reason <text>` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` `[--timeout <sec>]` | Enforce Plan Approval Gate (`>=20` chars); start detached research (default timeout 1200s; auto-extended to 1800s for Argon); stream progress; enforce Report Quality Gate; save report. |
 | `auto` | `--prompt <text>` `--goal <text>` `[--job-dir DIR]` `[--compose-xml]` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` | Unattended end-to-end execution (`init` + `auto` relay step + live streaming + Quality Gate). |
 | `status` | `--job-dir DIR` | Check job state, detached worker PID liveness, and latest progress entry. |
-| `collect` | `--job-dir DIR` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` | Re-attach to detached worker or completed conversation; verify Quality Gate; save report. |
+| `collect` | `--job-dir DIR` `[--url <conversation url>]` `[--agy-model <m>]` `[--agy-effort <e>]` `[--gemini-model <m>]` `[--out <path>]` `[--no-wait]` | Re-attach to detached worker or completed conversation; accept the report only from the job's own conversation (Conversation Identity Gate); verify Quality Gate; save report. `--url` binds a job that never recorded its conversation (refused if the job already has another). |
 
 ### Supporting Script CLIs
 
@@ -440,7 +444,8 @@ python scripts/deep_research.py approve \
 - Launches detached worker (`mode: "detach"`), records worker PID in `relay/started.json`.
 - Streams real-time thoughts from `<job_dir>/relay/progress.jsonl` to `stderr` (`[progress <elapsed>s] <text>`) while verifying `pid_alive(pid)`.
 - **Report Quality Gate**: Validates that completed Markdown report contains `>= 400` characters and valid `#` headings.
-- Writes `<out>.md` and provenance metadata `<out>.md.meta.json` (capturing report statistics and resolved `agy_model`, `agy_effort`, `gemini_model`, and `gemini_thinking`).
+- **Conversation Identity Gate**: Accepts the report only when its provenance (the conversation the driver extracted it from) is the job's own conversation in `job.json`. The relay writes the report to the staging file `relay/report_<seq>.md`; only an accepted report is copied to `--out` and `<job_dir>/report.md`, so a refused one never touches the deliverable.
+- Writes `<out>.md` and provenance metadata `<out>.md.meta.json` (capturing report statistics, the source `conversation_id` / `report_title`, and resolved `agy_model`, `agy_effort`, `gemini_model`, and `gemini_thinking`).
 
 ### Phase 6: Asynchronous Detached Execution & Re-attachment
 
@@ -458,6 +463,18 @@ python scripts/deep_research.py collect --job-dir ./jobs/vector_indexing_job --o
 ```
 
 - `collect` performs a read-only page probe first. If the research has not started yet, it refuses with `COLLECT_WOULD_START` to prevent unreviewed execution.
+- **One job drives the Gemini app at a time.** The desktop app has a single page that every driver shares, so another job's `plan` / `approve` / `collect` moves it. The Conversation Identity Gate turns that into a refusal instead of a wrong report; the refused job still needs a later `collect`.
+- On `CONVERSATION_MISMATCH` or `REPORT_PROVENANCE_MISSING`, the recovery is:
+  1. Nothing was saved to the job or to `--out` (an earlier accepted report stays as it was); the refused run's result, staged report and progress are kept under `<job_dir>/relay/rejected_<seq>.*` as evidence and listed in `job.json` `rejections`.
+  2. If another job is driving the app, wait until its `status` shows it finished (for `REPORT_PROVENANCE_MISSING`, run `setup` first).
+  3. Run `collect` again on the same job, without `--url`: it navigates to the job's own conversation and fetches its report.
+  4. An `approve` refused before the start click leaves the plan at `plan_ready` / `plan_revised` (after `approve --no-wait`, the next `collect` reports the refusal and restores the plan): approve again.
+  5. An `edit` refused before the feedback was typed leaves the reviewed plan as it was: edit or approve again. Once feedback was typed (`prompt_sent: true`) the job is `error`: check the conversation in the app and start a new job if the plan changed.
+- A refused re-`collect` of a completed job keeps the job `completed` with its accepted report; the refusal is only recorded in `rejections`.
+- Re-running `init` on an existing job directory moves its old `relay/` to `relay.prev-<time>`, so nothing from the earlier generation (result, worker, bound conversation, progress) passes as the new one's.
+- An `auto` job records its conversation as soon as its new chat is verified (`relay/conversation.json`), so `collect` reaches the research after `REPORT_TIMEOUT`, `STREAM_TIMEOUT` or `WORKER_DIED`.
+- Two jobs never share a conversation: `plan`, `auto` and `collect --url` refuse a conversation another job's `job.json` already names.
+- Limitation: the report panel is matched to the conversation by its research title. Two jobs running researches with the same title at the same time cannot be told apart on the panel (the url checks still apply); running one job at a time avoids it.
 
 ### Unattended End-to-End Mode (`auto`)
 
@@ -483,14 +500,15 @@ python scripts/deep_research.py auto \
 | **Plan Approval Gate** | `approve` | Status must be `plan_ready` or `plan_revised`; `--reason` length must be `>= 20` characters | `2` / `5` | `APPROVAL_GATE_INVALID_STATE` (`2`), `APPROVAL_GATE_REASON_TOO_SHORT` (`5`) |
 | **Worker Liveness Check** | `approve`, `auto`, `collect` | Streaming loop monitors `pid_alive(pid)` while waiting for `relay/result.json` | `3` | `WORKER_DIED` |
 | **Report Quality Gate** | `approve`, `auto`, `collect` | Extracted report must have `>= 400` characters and contain valid `#` section headings | `2` | `REPORT_QUALITY_GATE_FAILED`, `REPORT_STRUCTURE_INVALID` |
+| **Conversation Identity Gate** | `plan`, `edit`, `approve`, `auto`, `collect` | The driver reads, clicks and extracts only on the job's conversation: a new chat must hold this run's prompt as its only user query; the page url is re-checked before/after every poll and the extraction; the report panel's title must be the conversation's research. The relay accepts a report only with the driver's `[REPORT_PROVENANCE]` line printed right before the report block, and `deep_research.py` only when that provenance names `job.json`'s conversation (a staged report is promoted to `--out` only after this). No two jobs share a conversation, and `edit` / `approve` / `collect` never fall back to whatever conversation is open | `2` / `5` | `CONVERSATION_MISMATCH`, `REPORT_PROVENANCE_MISSING`, `NO_CONVERSATION_URL` (`2`); `INVALID_CONVERSATION_URL`, `CONVERSATION_URL_CONFLICT` (`5`) |
 
 ### Standard Exit Codes
 
 - `0`: Success (action completed, all gates passed).
-- `2`: Gate rejection or research failure (`PLAN_TIMEOUT`, `SAFETY_BLOCKED`, `PLAN_CHANGED`, `COLLECT_WOULD_START`, `REPORT_QUALITY_GATE_FAILED`).
+- `2`: Gate rejection or research failure (`PLAN_TIMEOUT`, `SAFETY_BLOCKED`, `PLAN_CHANGED`, `COLLECT_WOULD_START`, `REPORT_QUALITY_GATE_FAILED`, `CONVERSATION_MISMATCH`, `REPORT_PROVENANCE_MISSING`, `NO_CONVERSATION_URL`).
 - `3`: Runtime, driver, or environment error (`PLAYWRIGHT_MISSING`, `CDP_NOT_READY`, `ASAR_PATTERN_MISMATCH`, `WORKER_DIED`).
 - `4`: Preflight or diagnostic failure (`PREFLIGHT_FAILED`, `SYNC_OUT_OF_DATE`).
-- `5`: Bad parameters, validation failure, or security isolation violation (`GIT_REPO_ESCAPE`, `EMPTY_PROMPT`, `APPROVAL_GATE_REASON_TOO_SHORT`).
+- `5`: Bad parameters, validation failure, or security isolation violation (`GIT_REPO_ESCAPE`, `EMPTY_PROMPT`, `APPROVAL_GATE_REASON_TOO_SHORT`, `INVALID_CONVERSATION_URL`, `CONVERSATION_URL_CONFLICT`).
 
 ## Security & Confinement Model
 
@@ -518,5 +536,9 @@ When `deep_research.py` invokes `agy_task.py run --deep-research -w <job_dir>`, 
 | `SAFETY_BLOCKED` | Prompt triggered Korean political/election content filter | Rephrase prompt removing sensitive terms (`민주주의`, `선거`, `정치`, `대통령`). |
 | `GIT_REPO_ESCAPE` (Exit 5) | `--job` or `--job-dir` directory located inside a git repository | Use the default isolation path under `%LOCALAPPDATA%\agy-deep-research\jobs` outside git trees. |
 | `APPROVAL_GATE_REASON_TOO_SHORT` (Exit 5) | `--reason` was omitted or shorter than 20 characters | Provide a detailed justification explaining how `plan_vN.md` addresses `goal.md` criteria. |
+| `CONVERSATION_MISMATCH` (Exit 2) | Another job or the user moved the single shared Gemini page during this step, the report panel showed another research, or the conversation belongs to another job | Follow the recovery steps in Phase 6: nothing was saved, evidence is in `relay/rejected_<seq>.*`. Once no other job is driving the app: after `approve` / `auto` / `collect`, `collect` this job again (an approve refused before the click: approve again); after `plan` / `edit`, repeat that step. |
+| `REPORT_PROVENANCE_MISSING` (Exit 2) | The relay/driver copy that ran is older than `deep_research.py`, so it does not report the report's source conversation | Run `deep_research.py setup` (then `preflight` shows `in_sync`), then `collect` again. |
+| `NO_CONVERSATION_URL` (Exit 2) | The job has no verified conversation: it only ran `init`, or its `plan` failed before a conversation was verified | If the job's research exists in the app (you can see its conversation), `collect --url https://gemini.google.com/app/<id>` binds it once; otherwise run `plan`. |
+| `CONVERSATION_URL_CONFLICT` (Exit 5) | `collect --url` names a different conversation than the job's, or one another job already owns | A job's conversation never changes and two jobs never share one: collect the job that owns it, or start a new job. |
 | Port conflict on CDP port | Default debugging port claimed by another browser or proxy | The skill defaults to port 9223. Ensure all configs use port 9223 or set `GEMINI_CDP_PORT`. |
 | Composer shows `Flash` after approve/collect (`[MODEL_OBSERVED] … Warning`) | A page reload resets the composer to the app default; the model was locked at plan time | **Model lock**: `--gemini-model` is applied only in the new chat during `plan`/`auto`. `approve`/`edit`/`collect` never click the model menu — they log `[MODEL_OBSERVED]` only. To change models, start a new job. Never run `collect` while a detached `approve` worker is alive (concurrent CDP clients can force a navigation → `DRIVER_CRASH`). |

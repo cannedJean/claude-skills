@@ -61,7 +61,7 @@ python skills/agy-deep-research/scripts/deep_research.py preflight
 | `approve` | `--job ID_OR_PATH` `--reason TEXT` (`>=20` chars) `[--agy-model MODEL]` `[--agy-effort EFFORT]` `[--gemini-model MODEL]` `[--out PATH]` `[--no-wait]` `[--timeout SEC]` | Enforce Plan Approval Gate, start detached research (`mode="detach"`, auto-extends timeout to `1800s` for `Argon`), stream `progress.jsonl` to `stderr`, enforce Report Quality Gate, and write `<out>.md` + `<out>.md.meta.json`. |
 | `auto` | `--prompt ...` `--goal ...` `[--compose-xml]` `[--strict-xml]` `[--agy-model MODEL]` `[--agy-effort EFFORT]` `[--gemini-model MODEL]` `[--reason TEXT]` `[--out PATH]` `[--no-wait]` `[--timeout SEC]` | Unattended end-to-end execution (`init` + `auto` detached relay step + live streaming + Quality Gate). |
 | `status` | `--job ID_OR_PATH` | Inspect job status, detached worker `pid_alive(pid)` state, and latest `progress.jsonl` entry. |
-| `collect` | `--job ID_OR_PATH` `[--agy-model MODEL]` `[--agy-effort EFFORT]` `[--gemini-model MODEL]` `[--out PATH]` `[--no-wait]` `[--timeout SEC]` | Re-attach to a running worker or collect finished report from conversation, then run Report Quality Gate. |
+| `collect` | `--job ID_OR_PATH` `[--url URL]` `[--agy-model MODEL]` `[--agy-effort EFFORT]` `[--gemini-model MODEL]` `[--out PATH]` `[--no-wait]` `[--timeout SEC]` | Re-attach to a running worker or collect the finished report from the job's own conversation (Conversation Identity Gate), then run Report Quality Gate. `--url` binds a job that never recorded its conversation. |
 
 ### Supporting Scripts
 
@@ -146,7 +146,10 @@ Jobs are created under `%LOCALAPPDATA%\agy-deep-research\jobs\<job_id>` on Windo
     request.json        # Step request written by deep_research.py (protected from agy writes)
     started.json        # Detached worker PID & timestamp written by relay_step.py
     progress.jsonl      # Live progress stream: {"ts": ..., "elapsed_s": ..., "text": ...}
-    result.json         # Step completion payload written by relay_step.py
+    result.json         # Step completion payload written by relay_step.py (completed: url/conversation_id = report provenance)
+    conversation.json   # The conversation the last relay run bound (written the moment it is verified)
+    report_<seq>.md     # Staged report; copied to --out / report.md only after the Conversation Identity Gate
+    rejected_<seq>.*    # A report/result/progress refused by the Conversation Identity Gate, kept as evidence
 ```
 
 ## Deterministic Quality & Security Gates
@@ -160,14 +163,15 @@ Jobs are created under `%LOCALAPPDATA%\agy-deep-research\jobs\<job_id>` on Windo
 | **Plan Approval Gate** | `approve` | Status must be `plan_ready` or `plan_revised`; `--reason` length must be `>= 20` characters | `2` / `5` | `APPROVAL_GATE_INVALID_STATE` (`2`), `APPROVAL_GATE_REASON_TOO_SHORT` (`5`) |
 | **Worker Liveness Check** | `approve`, `auto`, `collect` | Streaming loop monitors `pid_alive(pid)` while waiting for `relay/result.json` | `3` | `WORKER_DIED` |
 | **Report Quality Gate** | `approve`, `auto`, `collect` | Extracted report must have `>= 400` characters and contain valid `#` section headings | `2` | `REPORT_QUALITY_GATE_FAILED`, `REPORT_STRUCTURE_INVALID` |
+| **Conversation Identity Gate** | `plan`, `edit`, `approve`, `auto`, `collect` | The Gemini app's single page is shared by every job: the driver acts only on the job's conversation (a new chat must hold this run's prompt as its only user query; url re-checked around every poll and the extraction; report panel title = the conversation's research), the relay requires the driver's `[REPORT_PROVENANCE]` line right before the report, and the staged report is promoted only when it names `job.json`'s conversation. Two jobs never share a conversation; no fallback to whatever conversation is open | `2` / `5` | `CONVERSATION_MISMATCH`, `REPORT_PROVENANCE_MISSING`, `NO_CONVERSATION_URL` (`2`); `INVALID_CONVERSATION_URL`, `CONVERSATION_URL_CONFLICT` (`5`) |
 
 ### Standard Exit Codes
 
 - `0`: Success (action completed, all gates passed).
-- `2`: Gate rejection or research failure (`PLAN_TIMEOUT`, `SAFETY_BLOCKED`, `PLAN_CHANGED`, `COLLECT_WOULD_START`, `REPORT_QUALITY_GATE_FAILED`).
+- `2`: Gate rejection or research failure (`PLAN_TIMEOUT`, `SAFETY_BLOCKED`, `PLAN_CHANGED`, `COLLECT_WOULD_START`, `REPORT_QUALITY_GATE_FAILED`, `CONVERSATION_MISMATCH`, `REPORT_PROVENANCE_MISSING`, `NO_CONVERSATION_URL`).
 - `3`: Runtime, driver, or environment error (`PLAYWRIGHT_MISSING`, `CDP_NOT_READY`, `ASAR_PATTERN_MISMATCH`, `WORKER_DIED`).
 - `4`: Preflight or diagnostic failure (`PREFLIGHT_FAILED`, `SYNC_OUT_OF_DATE`).
-- `5`: Bad parameters, validation failure, or security isolation violation (`GIT_REPO_ESCAPE`, `EMPTY_PROMPT`, `APPROVAL_GATE_REASON_TOO_SHORT`).
+- `5`: Bad parameters, validation failure, or security isolation violation (`GIT_REPO_ESCAPE`, `EMPTY_PROMPT`, `APPROVAL_GATE_REASON_TOO_SHORT`, `INVALID_CONVERSATION_URL`, `CONVERSATION_URL_CONFLICT`).
 
 ## Permissions & Confinement Model (`--deep-research`)
 

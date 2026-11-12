@@ -32,6 +32,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 for _s in (sys.stdout, sys.stderr):
     if hasattr(_s, "reconfigure"):
@@ -77,6 +78,26 @@ JSON_ONLY_TRAPS = (
     re.compile(r"\bno\s+markdown\b", re.I),
     re.compile(r"순수\s*JSON만|마크다운\s*(?:헤더\s*)?없이", re.I),
 )
+# Gemini conversation url -> id; the same parser lives in relay_step.py and run_deep_research.py
+_CONVERSATION_PATH_RE = re.compile(r"(?:^|/)app/([A-Za-z0-9_-]+)(?:/|$)", re.IGNORECASE)
+_GEMINI_HOSTS = ("gemini.google.com",)
+PLAN_STATES = ("plan_ready", "plan_revised")
+IDENTITY_CODES = ("CONVERSATION_MISMATCH", "REPORT_PROVENANCE_MISSING")
+MISMATCH_HINT = (
+    "nothing was saved to the job or to --out. The research keeps running in this job's own conversation: "
+    "run `collect` again when no other job is driving the Gemini app (one job drives the app at a time)."
+)
+PROVENANCE_HINT = (
+    "nothing was saved to the job or to --out. The relay/driver copy that ran does not report where a report came from: "
+    "run `deep_research.py setup` (preflight then shows in_sync), then `collect` again."
+)
+APPROVE_AGAIN_HINT = (
+    "nothing was clicked: the plan still awaits approval. Approve again when no other job is driving the Gemini app."
+)
+PLAN_STEP_HINT = (
+    "another job or the user moved the shared Gemini page during this step; nothing from it was used. Repeat the step "
+    "when no other job is driving the Gemini app (one job drives the app at a time)."
+)
 
 
 # --------------------------------------------------------------------------- utilities
@@ -95,6 +116,184 @@ def die(msg: str, exit_code: int, **extra) -> None:
     payload.update(extra)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     sys.exit(exit_code)
+
+
+# --------------------------------------------------------------------------- conversation identity
+# The Gemini desktop app has ONE page that every driver process shares; a report is accepted only when the relay's
+# provenance (the conversation the driver extracted it from) is this job's conversation.
+def conversation_id_from_url(url) -> str | None:
+    """'https://gemini.google.com/app/<id>' (also /u/<n>/app/<id>, ?query, #fragment, trailing /) -> '<id>', else None.
+    Only the Gemini app's own host counts."""
+    if not isinstance(url, str) or not url.strip():
+        return None
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in ("http", "https") or (parts.hostname or "") not in _GEMINI_HOSTS:
+        return None
+    m = _CONVERSATION_PATH_RE.search(parts.path)
+    return m.group(1).lower() if m else None
+
+
+def staged_report_path(job_dir: Path, seq) -> Path:
+    """Where the relay writes a step's report. It reaches --out and <job_dir>/report.md only after the identity gate,
+    so a refused report can never overwrite the job's deliverable."""
+    return job_dir / "relay" / f"report_{seq}.md"
+
+
+def conversation_owner(job_dir: Path, conversation_id: str | None) -> str | None:
+    """The id of ANOTHER job whose job.json is bound to conversation_id (two jobs never share a conversation).
+    Scans the jobs root and this job's sibling directories."""
+    if not conversation_id:
+        return None
+    me = job_dir.resolve()
+    roots = {me.parent}
+    with contextlib.suppress(Exception):
+        roots.add(jobs_root())
+    for root in roots:
+        with contextlib.suppress(OSError):
+            for d in root.iterdir():
+                if not d.is_dir() or d.resolve() == me:
+                    continue
+                other = read_json_safe(d / "job.json")
+                if not other:
+                    continue
+                # a job without a url yet (a running auto) owns the conversation its relay run bound
+                other_url = other.get("url") if conversation_id_from_url(other.get("url")) else pinned_conversation(d)
+                if conversation_id_from_url(other_url) == conversation_id:
+                    return str(other.get("job_id") or d.name)
+    return None
+
+
+def require_conversation_url(job: dict, step: str) -> str:
+    """The job's own conversation url: edit / approve / collect never act on whatever conversation the app shows."""
+    url = job.get("url")
+    if not conversation_id_from_url(url):
+        die(
+            f"{step}: this job has no recorded Gemini conversation (url {url!r}); refusing to act on whatever conversation the app shows",
+            2,
+            code="NO_CONVERSATION_URL",
+            job_id=job.get("job_id"),
+            hint="a plan step records it (an auto run records it as soon as its new chat is verified); for a research "
+                 "started some other way, `collect --url https://gemini.google.com/app/<id>` binds the job once",
+        )
+    return str(url)
+
+
+def pinned_conversation(job_dir: Path, res: dict | None = None) -> str | None:
+    """The conversation a relay run of this job bound (result conversation_url, else relay/conversation.json)."""
+    url = (res or {}).get("conversation_url")
+    if not conversation_id_from_url(url):
+        url = (read_json_safe(job_dir / "relay" / "conversation.json") or {}).get("url")
+    return url if conversation_id_from_url(url) else None
+
+
+def adopt_pinned_conversation(job_dir: Path, job: dict, res: dict | None = None) -> bool:
+    """A job with no conversation yet (auto, a failed plan) takes the one its own relay run bound, unless another job
+    owns it, so a later `collect` still reaches the research after a timeout or a dead worker."""
+    if conversation_id_from_url(job.get("url")):
+        return False
+    url = pinned_conversation(job_dir, res)
+    if not url or conversation_owner(job_dir, conversation_id_from_url(url)):
+        return False
+    job["url"] = url
+    job["url_source"] = f"bound by the {(res or {}).get('step') or 'relay'} step"
+    return True
+
+
+def report_conversation_problem(job_dir: Path, job: dict, res: dict) -> tuple[str, str] | None:
+    """None when a completed relay result names this job's conversation as the report's source, else (code, message).
+    A job without a url yet (auto) compares with the conversation its own run bound, and never takes another job's."""
+    got = str(res.get("conversation_id") or conversation_id_from_url(res.get("url")) or "").lower() or None
+    if not got:
+        return "REPORT_PROVENANCE_MISSING", "the completed result does not say which Gemini conversation the report came from"
+    want = conversation_id_from_url(job.get("url")) or conversation_id_from_url(res.get("conversation_url"))
+    if want and got != want:
+        return "CONVERSATION_MISMATCH", f"the report was extracted from conversation {got}, not this job's {want}"
+    if not conversation_id_from_url(job.get("url")):
+        owner = conversation_owner(job_dir, got)
+        if owner:
+            return "CONVERSATION_MISMATCH", f"the report came from conversation {got}, which belongs to job {owner}"
+    return None
+
+
+def set_aside_rejected(job_dir: Path, res: dict) -> list[str]:
+    """Move a rejected run's relay result, staged report and progress to relay/rejected_<seq>.* so that neither
+    `collect` nor a later meta can pick them up again. Kept as evidence, never deleted."""
+    relay_dir = job_dir / "relay"
+    seq = res.get("seq")
+    moves = [(relay_dir / "result.json", f"rejected_{seq}.result.json"),
+             (relay_dir / "progress.jsonl", f"rejected_{seq}.progress.jsonl"),
+             (staged_report_path(job_dir, seq), f"rejected_{seq}.report.md")]
+    moved = []
+    for src, name in moves:
+        with contextlib.suppress(OSError):
+            if src.is_file():
+                relay_dir.mkdir(parents=True, exist_ok=True)
+                dest = relay_dir / name
+                os.replace(src, dest)
+                moved.append(str(dest))
+    return moved
+
+
+def approve_clicked_nothing(res: dict) -> bool:
+    """An approve refused for conversation identity before anything was clicked leaves the plan awaiting approval."""
+    return res.get("step") == "approve" and res.get("code") == "CONVERSATION_MISMATCH" and not res.get("confirm_clicked")
+
+
+def status_after_failure(job: dict, res: dict, code: str) -> str:
+    status = job.get("status")
+    if status == "completed":
+        return "completed"   # an accepted report stays accepted when a later collect fails
+    if code == "COLLECT_WOULD_START" and status in PLAN_STATES:
+        return status
+    if approve_clicked_nothing(res) and job.get("plan_status_before_approve") in PLAN_STATES:
+        return job["plan_status_before_approve"]   # nothing was clicked: the plan still awaits approval
+    return "error"
+
+
+def failure_hint(res: dict, code: str) -> str | None:
+    if code == "REPORT_PROVENANCE_MISSING":
+        return PROVENANCE_HINT
+    if code == "REPORT_FILE_MISSING":
+        return "nothing was saved; the result was set aside, so the next `collect` fetches the report again"
+    if code != "CONVERSATION_MISMATCH":
+        return None
+    if approve_clicked_nothing(res):
+        return APPROVE_AGAIN_HINT
+    if res.get("step") in ("plan", "edit"):
+        return PLAN_STEP_HINT
+    if res.get("step") == "auto" and not conversation_id_from_url(res.get("conversation_url")):
+        return ("nothing was saved, and the run bound no conversation of its own; run `auto` again (or a new job) "
+                "when no other job is driving the Gemini app")
+    return MISMATCH_HINT
+
+
+def fail_job(job_dir: Path, job: dict, res: dict, code: str, msg: str, exit_code: int,
+             highlights: list[str] | None = None, status: str | None = None, **extra) -> None:
+    """Record a failed step on the job and exit. Identity failures move the rejected run's result, staged report and
+    progress to relay/rejected_<seq>.*, drop its progress highlights and append to job['rejections']. A job without a
+    conversation keeps the one its own run bound, so it stays collectable."""
+    completed = job.get("status") == "completed"
+    if code in IDENTITY_CODES or code == "REPORT_FILE_MISSING":
+        moved = set_aside_rejected(job_dir, res)
+        job.setdefault("rejections", []).append({"seq": res.get("seq"), "step": res.get("step"), "code": code,
+                                                 "message": msg, "files": moved, "at": now_iso()})
+        highlights = None if completed else []
+        extra.setdefault("rejected_files", moved)
+    hint = failure_hint(res, code)
+    if hint:
+        extra.setdefault("hint", hint)
+    adopt_pinned_conversation(job_dir, job, res)
+    job["status"] = status or status_after_failure(job, res, code)
+    if not completed:   # a completed job keeps its accepted report's record; the refusal is in job["rejections"]
+        job["error_code"] = code
+        job["error_message"] = msg
+        if highlights is not None:
+            job["progress_highlights"] = highlights
+    save_job(job_dir, job)
+    die(msg, exit_code, code=code, job_id=job.get("job_id"), relay_result=res, **extra)
 
 
 DEFAULT_AGY_MODEL = "flash 3.8"
@@ -961,6 +1160,7 @@ def stream_progress_and_finalize(
         if time.time() - t0 > timeout_sec:
             job["status"] = "timeout"
             job["progress_highlights"] = highlights
+            adopt_pinned_conversation(job_dir, job)   # auto: keep the new chat's conversation for a later collect
             save_job(job_dir, job)
             die(
                 f"timed out after {timeout_sec}s waiting for detached research worker; "
@@ -983,6 +1183,7 @@ def stream_progress_and_finalize(
                     job["status"] = "error"
                     job["error_code"] = "WORKER_DIED"
                     job["progress_highlights"] = highlights
+                    adopt_pinned_conversation(job_dir, job)   # auto: keep the new chat's conversation for a later collect
                     save_job(job_dir, job)
                     die(
                         f"detached worker process (pid {pid}) exited without writing relay/result.json",
@@ -1009,6 +1210,8 @@ def write_output_meta(
     sources_count: int,
     elapsed_s: float,
     url: str,
+    conversation_id: str = "",
+    report_title: str = "",
 ) -> Path:
     meta_path = Path(str(out_path) + ".meta.json")
     meta = {
@@ -1021,6 +1224,8 @@ def write_output_meta(
         "plan_iterations": int(job.get("plan_iterations") or 0),
         "approval_reason": job.get("approval_reason") or "",
         "url": url,
+        "conversation_id": conversation_id,
+        "report_title": report_title,
         "report_file": str(out_path),
         "meta_file": str(meta_path),
         "report_chars": gate_stats["report_chars"],
@@ -1050,39 +1255,35 @@ def finalize_completed_report(
     if res.get("status") != "completed":
         code = res.get("code") or "RESEARCH_FAILED"
         msg = res.get("message") or f"relay step ended with status {res.get('status')!r}"
-        exit_code = int(res.get("exit_code") or 2)
-        if code == "COLLECT_WOULD_START" and job.get("status") in ("plan_ready", "plan_revised"):
-            pass
-        else:
-            job["status"] = "error"
-        job["error_code"] = code
-        job["error_message"] = msg
-        job["progress_highlights"] = highlights
-        save_job(job_dir, job)
-        die(msg, exit_code, code=code, job_id=job["job_id"], relay_result=res)
+        fail_job(job_dir, job, res, code, msg, int(res.get("exit_code") or 2), highlights)
 
-    report_src = Path(res.get("report_file") or (job_dir / "report.md")).resolve()
+    # Conversation Identity Gate: the report must come from this job's conversation (the app's one page is shared)
+    problem = report_conversation_problem(job_dir, job, res)
+    if problem:
+        code, msg = problem
+        fail_job(job_dir, job, res, code, msg, 2, highlights)
+    conversation_id = str(res.get("conversation_id") or conversation_id_from_url(res.get("url"))).lower()
+
+    # only the staging file this job asked the relay to write; it is promoted to --out / report.md below
+    report_src = staged_report_path(job_dir, res.get("seq"))
     if not report_src.is_file():
-        alt = job_dir / "report.md"
-        if alt.is_file():
-            report_src = alt
-        else:
-            die(f"completed result references missing report file: {report_src}", 2, code="REPORT_FILE_MISSING")
+        fail_job(job_dir, job, res, "REPORT_FILE_MISSING", f"completed result has no staged report at {report_src}", 2, highlights)
 
     markdown = read_text(report_src)
     gate_stats = enforce_report_quality_gate(markdown)
 
     out_path = Path(out_path).expanduser().resolve()
-    if out_path != report_src:
-        write_text_atomic(out_path, markdown.rstrip() + "\n")
+    write_text_atomic(out_path, markdown.rstrip() + "\n")
     job_report = job_dir / "report.md"
-    if job_report.resolve() != report_src.resolve():
+    if job_report.resolve() != out_path:
         write_text_atomic(job_report, markdown.rstrip() + "\n")
 
     completed_at = now_iso()
     sources_count = res.get("sources_count") if res.get("sources_count") is not None else gate_stats["sources_count"]
     elapsed_s = res.get("elapsed_s") or 0.0
-    url = res.get("url") or job.get("url") or ""
+    # the job's own url wins; a job that had none (auto) takes the conversation the report provably came from
+    url = job.get("url") or res.get("url") or f"https://gemini.google.com/app/{conversation_id}"
+    report_title = str(res.get("report_title") or "")
     if res.get("plan") and not job.get("latest_plan"):
         job["latest_plan"] = res["plan"]
 
@@ -1097,12 +1298,16 @@ def finalize_completed_report(
         sources_count=int(sources_count),
         elapsed_s=float(elapsed_s),
         url=url,
+        conversation_id=conversation_id,
+        report_title=report_title,
     )
 
     job.update({
         "status": "completed",
         "completed_at": completed_at,
         "url": url,
+        "conversation_id": conversation_id,
+        "report_title": report_title,
         "report_file": str(out_path),
         "meta_file": str(meta_path),
         "report_chars": gate_stats["report_chars"],
@@ -1114,6 +1319,8 @@ def finalize_completed_report(
         "gemini_model": job.get("gemini_model", DEFAULT_GEMINI_MODEL),
         "gemini_thinking": job.get("gemini_thinking", DEFAULT_GEMINI_THINKING),
     })
+    for stale in ("error_code", "error_message", "rejected_files"):   # earlier refusals stay in job["rejections"]
+        job.pop(stale, None)
     save_job(job_dir, job)
 
     summary = {
@@ -1121,6 +1328,8 @@ def finalize_completed_report(
         "job_id": job["job_id"],
         "job_dir": str(job_dir),
         "url": url,
+        "conversation_id": conversation_id,
+        "report_title": report_title,
         "report_file": str(out_path),
         "meta_file": str(meta_path),
         "report_chars": gate_stats["report_chars"],
@@ -1192,21 +1401,29 @@ def cmd_plan(a) -> int:
     if dr_res.get("status") != "plan_ready":
         code = dr_res.get("code") or "PLAN_FAILED"
         msg = dr_res.get("message") or f"plan step failed with status {dr_res.get('status')!r}"
-        exit_code = int(dr_res.get("exit_code") or 2)
-        job["status"] = "error"
-        job["error_code"] = code
-        job["error_message"] = msg
-        save_job(job_dir, job)
-        die(msg, exit_code, code=code, job_id=job["job_id"], relay_result=dr_res)
+        fail_job(job_dir, job, dr_res, code, msg, int(dr_res.get("exit_code") or 2), status="error")
+
+    # Conversation identity: the plan's conversation becomes the job's for every later step
+    plan_url = dr_res.get("url")
+    plan_conv = conversation_id_from_url(plan_url)
+    if not plan_conv:
+        fail_job(job_dir, job, dr_res, "NO_CONVERSATION_URL", f"the plan's page names no Gemini conversation (url {plan_url!r})", 2,
+                 status="error", hint="nothing was recorded; plan the job again")
+    owner = conversation_owner(job_dir, plan_conv)
+    if owner:
+        fail_job(job_dir, job, dr_res, "CONVERSATION_MISMATCH",
+                 f"the plan came from conversation {plan_conv}, which belongs to job {owner}", 2, status="error")
 
     plan_text = (dr_res.get("plan") or "").strip()
     iteration = int(job.get("plan_iterations") or 0) + 1
     plan_file = job_dir / f"plan_v{iteration}.md"
     write_text_atomic(plan_file, plan_text + "\n")
 
+    for stale in ("error_code", "error_message"):
+        job.pop(stale, None)
     job.update({
         "status": "plan_ready",
-        "url": dr_res.get("url"),
+        "url": plan_url,
         "latest_plan": plan_text,
         "plan_count": int(dr_res.get("plan_count") or 1),
         "plan_iterations": iteration,
@@ -1240,6 +1457,7 @@ def cmd_edit(a) -> int:
             code="EDIT_INVALID_STATE",
         )
     _sync_job_model_settings(job, a)
+    resume_url = require_conversation_url(job, "edit")
     feedback_raw = resolve_text_input(a.feedback, a.feedback_file, "feedback")
     feedback_text = validate_edit_feedback(feedback_raw, allow_questions=bool(getattr(a, "allow_questions", False)))
     seq = int(job.get("seq") or 0) + 1
@@ -1262,7 +1480,7 @@ def cmd_edit(a) -> int:
         "step": "edit",
         "seq": seq,
         "driver": str(dr_skill_dir / "scripts" / "run_deep_research.py"),
-        "resume_url": job.get("url") or "current",
+        "resume_url": resume_url,
         "feedback_file": str(feedback_path),
         "deadline": eff_deadline,
         "gemini_model": job["gemini_model"],
@@ -1288,23 +1506,31 @@ def cmd_edit(a) -> int:
         save_job(job_dir, job)
         die("relay/result.json was not produced during edit step", 3, code="NO_RELAY_RESULT", agy_rc=rc)
 
+    plan_status = job.get("status")
     if dr_res.get("status") not in ("plan_revised", "plan_ready"):
         code = dr_res.get("code") or "EDIT_FAILED"
         msg = dr_res.get("message") or f"edit step failed with status {dr_res.get('status')!r}"
-        exit_code = int(dr_res.get("exit_code") or 2)
-        job["status"] = "error"
-        job["error_code"] = code
-        job["error_message"] = msg
-        save_job(job_dir, job)
-        die(msg, exit_code, code=code, job_id=job["job_id"], relay_result=dr_res)
+        # refused for identity before the edit button or the feedback touched the page: the reviewed plan stands
+        # (the edit button alone only adds a canned turn; the reviewed plan changes only once feedback is typed)
+        untouched = code == "CONVERSATION_MISMATCH" and not dr_res.get("prompt_sent")
+        fail_job(job_dir, job, dr_res, code, msg, int(dr_res.get("exit_code") or 2), status=plan_status if untouched else "error")
+
+    got = conversation_id_from_url(dr_res.get("url"))
+    want = conversation_id_from_url(resume_url)
+    if got != want:
+        # the revised plan was not read from this job's conversation: the job's own plan and url stay as they were
+        fail_job(job_dir, job, dr_res, "CONVERSATION_MISMATCH",
+                 f"the revised plan came from conversation {got or dr_res.get('url')!r}, not this job's {want}", 2, status=plan_status)
 
     plan_text = (dr_res.get("plan") or "").strip()
     plan_file = job_dir / f"plan_v{iteration}.md"
     write_text_atomic(plan_file, plan_text + "\n")
 
+    for stale in ("error_code", "error_message"):
+        job.pop(stale, None)
     job.update({
         "status": "plan_revised",
-        "url": dr_res.get("url") or job.get("url"),
+        "url": resume_url,
         "latest_plan": plan_text,
         "plan_count": int(dr_res.get("plan_count") or job.get("plan_count") or 1),
         "plan_iterations": iteration,
@@ -1332,6 +1558,7 @@ def cmd_approve(a) -> int:
     job = load_job(job_dir)
     clean_reason = enforce_approval_gate(job_dir, job, a.reason)
     _sync_job_model_settings(job, a)
+    resume_url = require_conversation_url(job, "approve")
 
     seq = int(job.get("seq") or 0) + 1
     out_path = Path(a.out).expanduser().resolve() if getattr(a, "out", None) else Path(job.get("out_path") or (job_dir / "report.md")).resolve()
@@ -1341,6 +1568,7 @@ def cmd_approve(a) -> int:
     job["seq"] = seq
     job["approval_reason"] = clean_reason
     job["out_path"] = str(out_path)
+    job["plan_status_before_approve"] = job.get("status")
     save_job(job_dir, job)
 
     relay_dir = job_dir / "relay"
@@ -1357,10 +1585,10 @@ def cmd_approve(a) -> int:
         "seq": seq,
         "mode": "detach",
         "driver": str(dr_skill_dir / "scripts" / "run_deep_research.py"),
-        "resume_url": job.get("url") or "current",
-        "expected_url": job.get("url"),
+        "resume_url": resume_url,
+        "expected_url": resume_url,
         "expected_plan_count": int(job.get("plan_count") or 1),
-        "output": str(job_dir / "report.md"),
+        "output": str(staged_report_path(job_dir, seq)),
         "timeout": timeout_sec,
         "gemini_model": job["gemini_model"],
         "gemini_thinking": job["gemini_thinking"],
@@ -1386,15 +1614,12 @@ def cmd_approve(a) -> int:
     if res_now and res_now.get("status") == "error":
         code = res_now.get("code") or "APPROVE_FAILED"
         msg = res_now.get("message") or "approve step failed"
-        exit_code = int(res_now.get("exit_code") or 2)
-        job["status"] = "error"
-        job["error_code"] = code
-        job["error_message"] = msg
-        save_job(job_dir, job)
-        die(msg, exit_code, code=code, job_id=job["job_id"], relay_result=res_now)
+        fail_job(job_dir, job, res_now, code, msg, int(res_now.get("exit_code") or 2))
 
     pid = (started or {}).get("worker_pid") or (started or {}).get("pid")
     job["status"] = "running"
+    for stale in ("error_code", "error_message"):
+        job.pop(stale, None)
     job["worker_pid"] = pid
     save_job(job_dir, job)
 
@@ -1467,6 +1692,13 @@ def _init_job_internal(a) -> tuple[str, Path, dict]:
     warnings = check_korean_safety_keywords(prompt_text)
 
     job_id, job_dir = allocate_job_dir(getattr(a, "job", None))
+    relay_dir = job_dir / "relay"
+    if relay_dir.is_dir() and any(relay_dir.iterdir()):
+        # a re-initialised job is a new generation: nothing an earlier run left (result, worker, bound conversation,
+        # progress, staged reports) may pass as this one's; kept as evidence
+        stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        with contextlib.suppress(OSError):
+            os.replace(relay_dir, job_dir / f"relay.prev-{stamp}-{secrets.token_hex(2)}")
     write_text_atomic(job_dir / "prompt.md", prompt_text + "\n")
     write_text_atomic(job_dir / "goal.md", goal_text + "\n")
     (job_dir / "relay").mkdir(parents=True, exist_ok=True)
@@ -1526,6 +1758,8 @@ def cmd_status(a) -> int:
             status = "ready_to_collect"
         elif result.get("status") == "error":
             status = "error"
+    result_conv = conversation_id_from_url((result or {}).get("url")) if (result or {}).get("status") == "completed" else None
+    job_conv = conversation_id_from_url(job.get("url"))
 
     out = {
         "status": status,
@@ -1533,7 +1767,10 @@ def cmd_status(a) -> int:
         "job_dir": str(job_dir),
         "seq": job.get("seq"),
         "plan_iterations": job.get("plan_iterations"),
-        "url": (result or {}).get("url") or job.get("url"),
+        "url": job.get("url") or (result or {}).get("url"),
+        "conversation_id": job_conv,
+        "result_conversation_id": result_conv,
+        "conversation_match": (result_conv == job_conv) if (result_conv and job_conv) else None,
         "worker_pid": pid,
         "worker_alive": alive,
         "progress_count": len(progress_entries),
@@ -1558,12 +1795,36 @@ def cmd_collect(a) -> int:
     result_file = relay_dir / "result.json"
     started_file = relay_dir / "started.json"
 
+    url_arg = (getattr(a, "url", None) or "").strip()
+    if url_arg:
+        cid = conversation_id_from_url(url_arg)
+        if not cid:
+            die(f"--url names no Gemini conversation: {url_arg!r}", 5, code="INVALID_CONVERSATION_URL",
+                hint="pass the job's conversation as https://gemini.google.com/app/<id>")
+        own = conversation_id_from_url(job.get("url"))
+        if own and own != cid:
+            die(f"this job is bound to conversation {own}; --url names {cid}", 5, code="CONVERSATION_URL_CONFLICT",
+                job_id=job["job_id"], hint="a job's conversation never changes; start a new job for another conversation")
+        owner = conversation_owner(job_dir, cid)
+        if owner:
+            die(f"conversation {cid} belongs to job {owner}", 5, code="CONVERSATION_URL_CONFLICT",
+                job_id=job["job_id"], hint="two jobs never share a conversation; collect that job instead")
+        if not own:
+            job["url"] = url_arg
+            job["url_source"] = "collect --url"
+            save_job(job_dir, job)
+
     res_now = read_json_safe(result_file)
     started = read_json_safe(started_file) or {}
     pid = started.get("worker_pid") or started.get("pid") or job.get("worker_pid")
 
+    # Case 0: the detached approve worker of this sequence was refused before it clicked anything: report it and
+    # put the plan back up for approval (a fresh collect would only find the unstarted plan card)
+    if res_now and res_now.get("status") == "error" and res_now.get("seq") == job.get("seq") and approve_clicked_nothing(res_now):
+        return finalize_completed_report(job_dir, job, res_now, out_path)
+
     # Case 1: Current sequence already produced a completed result.json on disk
-    if res_now and res_now.get("status") == "completed":
+    if res_now and res_now.get("status") == "completed" and res_now.get("seq") == job.get("seq"):
         # Drain any progress highlights
         highlights = list(job.get("progress_highlights") or [])
         progress_file = relay_dir / "progress.jsonl"
@@ -1592,6 +1853,9 @@ def cmd_collect(a) -> int:
         return stream_progress_and_finalize(job_dir, job, out_path, timeout_sec=timeout_sec, poll_interval=poll_interval)
 
     # Case 3: Worker is not running and no completed result is on disk -> run a 'collect' relay step via agy
+    if adopt_pinned_conversation(job_dir, job):   # e.g. an auto run that timed out or died after binding its new chat
+        save_job(job_dir, job)
+    resume_url = require_conversation_url(job, "collect")
     seq = int(job.get("seq") or 0) + 1
     job["seq"] = seq
     job["out_path"] = str(out_path)
@@ -1608,8 +1872,8 @@ def cmd_collect(a) -> int:
         "seq": seq,
         "mode": "detach" if getattr(a, "detach", False) else "wait",
         "driver": str(dr_skill_dir / "scripts" / "run_deep_research.py"),
-        "resume_url": job.get("url") or "current",
-        "output": str(job_dir / "report.md"),
+        "resume_url": resume_url,
+        "output": str(staged_report_path(job_dir, seq)),
         "timeout": timeout_sec,
         "gemini_model": job.get("gemini_model", DEFAULT_GEMINI_MODEL),
         "gemini_thinking": job.get("gemini_thinking", DEFAULT_GEMINI_THINKING),
@@ -1731,6 +1995,12 @@ def run_cmd_auto(a) -> int:
     save_job(job_dir, job)
 
     relay_dir = job_dir / "relay"
+    # a reused job dir restarts at seq 1: nothing an earlier run left may pass as this run's (the relay's started.json
+    # dedupe would otherwise return the old worker and its old result)
+    for stale in (relay_dir / "result.json", relay_dir / "started.json", relay_dir / "conversation.json",
+                  staged_report_path(job_dir, seq)):
+        with contextlib.suppress(OSError):
+            stale.unlink()
     dr_skill_dir = resolve_active_dr_skill_dir(getattr(a, "dr_skill_dir", None))
     req = {
         "relay_version": RELAY_VERSION,
@@ -1739,7 +2009,7 @@ def run_cmd_auto(a) -> int:
         "mode": "detach",
         "driver": str(dr_skill_dir / "scripts" / "run_deep_research.py"),
         "prompt_file": str(job_dir / "prompt.md"),
-        "output": str(job_dir / "report.md"),
+        "output": str(staged_report_path(job_dir, seq)),
         "timeout": timeout_sec,
         "gemini_model": job["gemini_model"],
         "gemini_thinking": job["gemini_thinking"],
@@ -1767,14 +2037,12 @@ def run_cmd_auto(a) -> int:
     if res_now and res_now.get("status") == "error":
         code = res_now.get("code") or "AUTO_FAILED"
         msg = res_now.get("message") or "auto step failed"
-        exit_code = int(res_now.get("exit_code") or 2)
-        job["status"] = "error"
-        job["error_code"] = code
-        save_job(job_dir, job)
-        die(msg, exit_code, code=code, job_id=job_id, relay_result=res_now)
+        fail_job(job_dir, job, res_now, code, msg, int(res_now.get("exit_code") or 2))
 
     pid = (started or {}).get("worker_pid") or (started or {}).get("pid")
     job["status"] = "running"
+    for stale in ("error_code", "error_message"):
+        job.pop(stale, None)
     job["worker_pid"] = pid
     save_job(job_dir, job)
 
@@ -1896,6 +2164,8 @@ def build_parser() -> argparse.ArgumentParser:
     co.add_argument("--out", "-o", help="output Markdown report path")
     co.add_argument("--no-wait", action="store_true", help="do not block if worker is still running")
     co.add_argument("--detach", action="store_true", help="if starting a collect relay step, run in detach mode")
+    co.add_argument("--url", help="bind a job that never recorded its conversation to https://gemini.google.com/app/<id> "
+                                  "(refused when the job already has a different one)")
     co.add_argument("--timeout", type=int, default=None, help="collect timeout in seconds (default: 1200, or 1800 for Argon)")
     co.add_argument("--poll-interval", type=float, default=0.25, help="progress poll interval in seconds")
     co.add_argument("--dr-skill-dir", help="override local-gemini-deep-research skill directory")

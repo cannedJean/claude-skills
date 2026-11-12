@@ -1,9 +1,11 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+from urllib.parse import urlsplit
 try:
     from playwright.sync_api import sync_playwright
 except ImportError:
@@ -140,6 +142,14 @@ HTML_TO_MARKDOWN_JS = r"""
         }
     };
 
+    // which research the extracted panel belongs to (read in the same evaluate as the report itself)
+    const researchIdentity = () => ({
+        chipTitles: Array.from(document.querySelectorAll('immersive-entry-chip .card-title'))
+            .map(e => (e.innerText || '').trim().replace(/\s+/g, ' ')).filter(Boolean),
+        panelTitle: ((document.querySelector('deep-research-immersive-panel h2.title-text, deep-research-immersive-panel .title-text') || {}).innerText || '')
+            .trim().replace(/\s+/g, ' ')
+    });
+
     let md = convertNode(root)
         .replace(/\n{3,}/g, '\n\n')
         .trim();
@@ -155,7 +165,7 @@ HTML_TO_MARKDOWN_JS = r"""
         sourceLinks.push({ title: title || href, url: href });
     }
 
-    return { markdown: md, sources: sourceLinks };
+    return { markdown: md, sources: sourceLinks, ...researchIdentity() };
 }
 """
 
@@ -163,6 +173,161 @@ HTML_TO_MARKDOWN_JS = r"""
 def log(msg):
     ts = time.strftime("%H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
+
+
+# --------------------------------------------------------------------------- conversation identity
+# The Gemini desktop app has ONE page, shared by every driver process connected over CDP. Another job's driver
+# (or the user) can move it to a different conversation at any time, so nothing is read, clicked or extracted
+# unless the page is on this step's conversation, and the report panel shows this conversation's research.
+# The same url parser lives in relay_step.py and deep_research.py (tests/test_conversation_identity.py keeps
+# the three in step).
+_CONVERSATION_PATH_RE = re.compile(r"(?:^|/)app/([A-Za-z0-9_-]+)(?:/|$)", re.IGNORECASE)
+_GEMINI_HOSTS = ("gemini.google.com",)
+PROVENANCE_PREFIX = "[REPORT_PROVENANCE] "
+CONVERSATION_PREFIX = "[CONVERSATION] "
+IDENTITY_GRACE_POLLS = 3   # consecutive polls a foreign report panel / missing research chip is tolerated
+USER_QUERIES_JS = r"""() => Array.from(document.querySelectorAll('user-query'))
+    .map(q => (q.innerText || '').trim().replace(/\s+/g, ' '))"""
+
+
+class ConversationMismatch(RuntimeError):
+    """The page shows another conversation (or another research's report panel) than this step's."""
+
+
+def conversation_id_from_url(url):
+    """'https://gemini.google.com/app/<id>' (also /u/<n>/app/<id>, ?query, #fragment, trailing /) -> '<id>', else None.
+    Only the Gemini app's own host counts."""
+    if not isinstance(url, str) or not url.strip():
+        return None
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in ("http", "https") or (parts.hostname or "") not in _GEMINI_HOSTS:
+        return None
+    m = _CONVERSATION_PATH_RE.search(parts.path)
+    return m.group(1).lower() if m else None
+
+
+def _page_url(page):
+    url = getattr(page, "url", "")
+    return url if isinstance(url, str) else ""
+
+
+def assert_conversation(page, expected_id, where):
+    """Fail closed when the page is not on expected_id (nothing pinned yet -> no check). Returns the page's id."""
+    actual = conversation_id_from_url(_page_url(page))
+    if expected_id and actual != expected_id:
+        raise ConversationMismatch(
+            f"Conversation mismatch ({where}): expected {expected_id}, page is on {actual or _page_url(page) or 'unknown'}. "
+            "Another job or the user moved the shared Gemini page; nothing from it was used.")
+    return actual
+
+
+def bind_conversation(page, resume_url):
+    """Settle the page on the step's conversation and return its id. 'current' pins whatever conversation is open."""
+    if resume_url == "current":
+        cid = conversation_id_from_url(_page_url(page))
+        if not cid:
+            raise ConversationMismatch(
+                f"Conversation mismatch (resume): --resume-url current, but the page is on no conversation ({_page_url(page) or 'unknown'}).")
+        log(f"Using the conversation that is open: {cid}")
+        return cid
+    want = conversation_id_from_url(resume_url)
+    if not want:
+        raise ConversationMismatch(f"Conversation mismatch (resume): --resume-url names no conversation: {resume_url!r}")
+    if conversation_id_from_url(_page_url(page)) != want:
+        log(f"Navigating to conversation: {resume_url}")
+        page.goto(resume_url, wait_until="domcontentloaded")
+        time.sleep(2.5)
+    assert_conversation(page, want, "after navigation")
+    return want
+
+
+def _norm_title(title):
+    return " ".join(str(title or "").split()).casefold()
+
+
+def check_research_identity(state, research_title):
+    """-> (research_title, problem or None). The research is this conversation's when its chip is on the page and
+    the open report panel shows that research. The first chip title seen on the verified conversation is pinned.
+    States without title fields (older UI, no chip yet) are not judged."""
+    chips = [c for c in (state.get("chipTitles") or []) if _norm_title(c)]
+    panel = state.get("panelTitle") or ""
+    if not research_title:
+        if not chips:
+            return research_title, None
+        research_title = chips[-1]
+    want = _norm_title(research_title)
+    if chips and want not in {_norm_title(c) for c in chips}:
+        return research_title, f"the conversation no longer shows the research '{research_title}' (chips on the page: {chips})"
+    if _norm_title(panel) and _norm_title(panel) != want:
+        return research_title, f"the report panel shows the research '{panel}', not this conversation's '{research_title}'"
+    return research_title, None
+
+
+def panel_unverified(state, research_title):
+    """True while a report panel is open but this conversation shows no research chip to match it against: the panel
+    lives in the app shell and may still show another conversation's research (older UI without title fields: False)."""
+    if research_title or "chipTitles" not in state:
+        return False
+    chips = [c for c in (state.get("chipTitles") or []) if _norm_title(c)]
+    return not chips and bool(_norm_title(state.get("panelTitle")))
+
+
+def open_research_panel(page, research_title):
+    """Click this conversation's research chip so the (global) report panel shows it."""
+    try:
+        chip = page.locator("immersive-entry-chip gem-processing-card", has_text=research_title).last
+        if chip.count() > 0:
+            chip.click(force=True)
+            time.sleep(1.5)
+    except Exception:
+        pass
+
+
+def format_report_provenance(result):
+    """The stdout line the relay turns into result.json provenance; printed right before the report block."""
+    return PROVENANCE_PREFIX + json.dumps({k: result.get(k) for k in ("conversation_id", "url", "report_title")}, ensure_ascii=False)
+
+
+def format_conversation_line(conversation_id, url):
+    """The stdout line the relay persists (relay/conversation.json) the moment the step's conversation is bound,
+    so a later collect finds the research even when this run fails or dies."""
+    return CONVERSATION_PREFIX + json.dumps({"conversation_id": conversation_id, "url": url}, ensure_ascii=False)
+
+
+def assert_fresh_new_chat(page):
+    """Right before a new chat's prompt is typed the page must be on no conversation (/app): otherwise the prompt
+    would continue whatever conversation another job (or the user) left on the shared page."""
+    cid = conversation_id_from_url(_page_url(page))
+    if cid:
+        raise ConversationMismatch(
+            f"Conversation mismatch (new chat): the page is on conversation {cid}, not on a new chat, before the prompt "
+            "was sent; nothing was typed.")
+
+
+def _normalized_prompt(prompt_text):
+    """The whole prompt, whitespace-collapsed: composed prompts share their opening template, so a head is not enough."""
+    return " ".join(str(prompt_text or "").split())
+
+
+def verify_new_chat_conversation(page, prompt_text, where="new chat"):
+    """A new chat owns only the conversation its own prompt created: the page's conversation must hold exactly one
+    user query, this run's prompt. Another job's conversation (the shared page moved before ours got its id) fails
+    closed here, before anything on it is clicked. -> the conversation id"""
+    cid = conversation_id_from_url(_page_url(page))
+    if not cid:
+        raise ConversationMismatch(f"Conversation mismatch ({where}): the page has no conversation id ({_page_url(page) or 'unknown'}).")
+    queries = evaluate_with_navigation_retry(page, USER_QUERIES_JS) or []
+    assert_conversation(page, cid, where)
+    full = _normalized_prompt(prompt_text)
+    if len(queries) != 1 or (full and full not in queries[0]):
+        first = (queries[0] if queries else "")[:80]
+        raise ConversationMismatch(
+            f"Conversation mismatch ({where}): conversation {cid} is not this run's new chat "
+            f"({len(queries)} user queries; first: {first!r}); nothing on it was touched.")
+    return cid
 
 
 REQUIRED_XML_TAGS = (
@@ -635,12 +800,19 @@ def is_generation_in_progress(page):
         return False
 
 
-def wait_for_new_plan(page, prev_plan_count=0, timeout_sec=300):
-    """Wait until a new Research Plan card with an active confirm button appears."""
+def wait_for_new_plan(page, prev_plan_count=0, timeout_sec=300, new_chat_prompt=None):
+    """Wait until a new Research Plan card with an active confirm button appears. The conversation is pinned the
+    first time the url carries an id (a new chat gets one after the prompt is sent); the plan is read only there.
+    For a new chat (new_chat_prompt) that conversation must hold this run's prompt before the plan is touched."""
     start_time = time.time()
     last_reload_at = 0
+    conversation_id = conversation_id_from_url(_page_url(page))
     while time.time() - start_time < timeout_sec:
         elapsed = time.time() - start_time
+        if conversation_id:
+            assert_conversation(page, conversation_id, "plan wait")
+        else:
+            conversation_id = conversation_id_from_url(_page_url(page))
 
         resp_el = page.locator("model-response").last
         if resp_el.count() > 0:
@@ -663,7 +835,13 @@ def wait_for_new_plan(page, prev_plan_count=0, timeout_sec=300):
 
         if current_plan_count > prev_plan_count and active_confirm.count() > 0:
             time.sleep(0.8)
+            # identity before the countdown cancel / plan expand: never touch another job's plan card
+            if new_chat_prompt is not None:
+                conversation_id = verify_new_chat_conversation(page, new_chat_prompt, "plan read")
+            else:
+                assert_conversation(page, conversation_id, "plan read")
             plan_text = stop_auto_confirm_fuse_and_expand_plan(page)
+            assert_conversation(page, conversation_id, "plan read")
             return {
                 "status": "plan_ready",
                 "url": page.url,
@@ -692,9 +870,11 @@ def wait_for_new_plan(page, prev_plan_count=0, timeout_sec=300):
     raise TimeoutError(f"Research Plan confirmation button did not appear within {timeout_sec}s.")
 
 
-def apply_plan_edit(page, edit_feedback, timeout_sec=300):
-    """Click '계획 수정' (edit-button), wait for edit prompt readiness, submit modification instructions, and wait for the revised plan."""
+def apply_plan_edit(page, edit_feedback, timeout_sec=300, conversation_id=None):
+    """Click '계획 수정' (edit-button), wait for edit prompt readiness, submit modification instructions, and wait for the revised plan.
+    With conversation_id, the page must be on that conversation before the click and before the feedback is typed."""
     log_current_model_mode(page)  # model is locked at plan time; never switch mid-conversation
+    assert_conversation(page, conversation_id, "before edit click")
     prev_plan_count = page.locator('[data-test-id="research-steps"], .research-steps').count()
     prev_resp_count = page.locator("model-response").count()
 
@@ -717,6 +897,7 @@ def apply_plan_edit(page, edit_feedback, timeout_sec=300):
         wait_for_response_complete(page, expected_min_responses=prev_resp_count + 1, timeout_sec=45)
         time.sleep(0.8)
 
+    assert_conversation(page, conversation_id, "before typing feedback")
     log(f"Submitting plan modification request: {edit_feedback}")
     submit_prompt(page, edit_feedback, raw_prompt=True)
     log("Waiting for revised Research Plan generation...")
@@ -863,8 +1044,14 @@ def evaluate_with_navigation_retry(page, script, arg=None, attempts=5):
             time.sleep(2.0)
 
 
-def wait_for_report_completion(page, timeout_sec=1200):
+def wait_for_report_completion(page, timeout_sec=1200, expected_conversation_id=None):
+    """Wait for this conversation's Deep Research report and extract it. Fails closed (ConversationMismatch) when the
+    shared page leaves the conversation or the report panel shows another research; without expected_conversation_id
+    the conversation open at the start is pinned."""
     log("Deep Research is running in the background. Monitoring progress...")
+    conversation_id = expected_conversation_id or conversation_id_from_url(_page_url(page))
+    research_title = ""
+    identity_misses = 0
     start_time = time.time()
     last_status = ""
     stable_ticks = 0
@@ -872,6 +1059,7 @@ def wait_for_report_completion(page, timeout_sec=1200):
     last_reload_time = time.time()
 
     while time.time() - start_time < timeout_sec:
+        assert_conversation(page, conversation_id, "before poll")
         state = evaluate_with_navigation_retry(page, r"""() => {
             const isCardCompleted = !!document.querySelector('immersive-entry-chip gem-processing-card.completed');
             const workingEl = document.querySelector('[data-test-id="remy-processing-state-agent-working"], remy-processing-state');
@@ -905,6 +1093,11 @@ def wait_for_report_completion(page, timeout_sec=1200):
                 reportTextLen = (immersivePanel.innerText || '').trim().length;
             }
 
+            const chipTitles = Array.from(document.querySelectorAll('immersive-entry-chip .card-title'))
+                .map(e => (e.innerText || '').trim().replace(/\s+/g, ' ')).filter(Boolean);
+            const panelTitleEl = document.querySelector('deep-research-immersive-panel h2.title-text, deep-research-immersive-panel .title-text');
+            const panelTitle = panelTitleEl ? (panelTitleEl.innerText || '').trim().replace(/\s+/g, ' ') : '';
+
             return {
                 isCardCompleted,
                 hasWorkingIndicator: !!workingEl,
@@ -913,9 +1106,29 @@ def wait_for_report_completion(page, timeout_sec=1200):
                 isChipStillWriting,
                 hasImmersiveChip: !!immersiveChipBtn,
                 hasImmersivePanel: !!immersivePanel,
-                reportTextLen
+                reportTextLen,
+                chipTitles,
+                panelTitle
             };
         }""")
+        assert_conversation(page, conversation_id, "after poll")
+
+        pinned_before = research_title
+        research_title, problem = check_research_identity(state, research_title)
+        if research_title and not pinned_before:
+            log(f"Watching research '{research_title}' in conversation {conversation_id or 'unknown'}")
+        if problem:
+            identity_misses += 1
+            if identity_misses >= IDENTITY_GRACE_POLLS:
+                raise ConversationMismatch(f"Conversation mismatch (report panel) in conversation {conversation_id}: {problem}")
+            log(f"Notice: {problem}; reopening this conversation's research ({identity_misses}/{IDENTITY_GRACE_POLLS - 1})...")
+            stable_ticks = 0
+            open_research_panel(page, research_title)
+            time.sleep(2.0)
+            continue
+        identity_misses = 0
+        # never count a panel this conversation's chip cannot vouch for; keep waiting (and recovering) for the chip
+        unverified = panel_unverified(state, research_title)
 
         status_line = f"{state['chipText']} | {state['statusText']}".strip(" |")
         if status_line and status_line != last_status:
@@ -924,17 +1137,20 @@ def wait_for_report_completion(page, timeout_sec=1200):
             log(f"[{elapsed}s] Progress: {status_line}")
 
         if state["hasImmersiveChip"] and not state["hasImmersivePanel"]:
-            try:
-                chip = page.locator(
-                    'immersive-entry-chip gem-processing-card, button[data-test-id="immersive-entry-chip-view-report-button"], immersive-entry-chip'
-                ).first
-                if chip.count() > 0:
-                    chip.click(force=True)
-                    time.sleep(1.5)
-            except Exception:
-                pass
+            if research_title:
+                open_research_panel(page, research_title)
+            else:
+                try:
+                    chip = page.locator(
+                        'immersive-entry-chip gem-processing-card, button[data-test-id="immersive-entry-chip-view-report-button"], immersive-entry-chip'
+                    ).first
+                    if chip.count() > 0:
+                        chip.click(force=True)
+                        time.sleep(1.5)
+                except Exception:
+                    pass
 
-        if state["reportTextLen"] > 400 and (state["isCardCompleted"] or not state["isChipStillWriting"]):
+        if not unverified and state["reportTextLen"] > 400 and (state["isCardCompleted"] or not state["isChipStillWriting"]):
             if state["reportTextLen"] == last_len:
                 stable_ticks += 1
             else:
@@ -961,7 +1177,14 @@ def wait_for_report_completion(page, timeout_sec=1200):
     else:
         raise TimeoutError(f"Deep Research did not finish within {timeout_sec} seconds.")
 
+    assert_conversation(page, conversation_id, "before extraction")
     extracted = evaluate_with_navigation_retry(page, HTML_TO_MARKDOWN_JS)
+    assert_conversation(page, conversation_id, "after extraction")
+    research_title, problem = check_research_identity(extracted, research_title)
+    if not problem and panel_unverified(extracted, research_title):
+        problem = "the report panel is open but this conversation shows no research chip to match it"
+    if problem:
+        raise ConversationMismatch(f"Conversation mismatch (extraction) in conversation {conversation_id}: {problem}")
     markdown = extracted.get("markdown", "").strip()
     sources = extracted.get("sources", [])
 
@@ -973,6 +1196,8 @@ def wait_for_report_completion(page, timeout_sec=1200):
     return {
         "status": "completed",
         "url": page.url,
+        "conversation_id": conversation_id,
+        "report_title": research_title or extracted.get("panelTitle") or "",
         "markdown": markdown,
         "sources_count": len(sources),
     }
@@ -1079,10 +1304,11 @@ def main():
         page = get_gemini_page(browser)
         prevent_background_throttling(page)
 
-        if args.resume_url and args.resume_url != "current" and page.url != args.resume_url:
-            log(f"Navigating to conversation: {args.resume_url}")
-            page.goto(args.resume_url, wait_until="domcontentloaded")
-            time.sleep(2.5)
+        # Conversation identity: an existing conversation is bound before anything is read or clicked;
+        # a new chat (plan / auto) is bound once Gemini gives it an id (wait_for_new_plan).
+        conversation_id = bind_conversation(page, args.resume_url) if args.resume_url else None
+        if conversation_id:
+            print(format_conversation_line(conversation_id, _page_url(page)), flush=True)
 
         # Model lock: the model/thinking level is selected exactly once, in the new chat
         # (activate_deep_research_mode -> ensure_pro_mode) before the prompt is sent.
@@ -1092,7 +1318,8 @@ def main():
 
         # Step mode 1: Edit an existing plan and return the revised plan to the caller agent
         if args.step == "edit":
-            revised = apply_plan_edit(page, args.edit_prompt)
+            revised = apply_plan_edit(page, args.edit_prompt, conversation_id=conversation_id)
+            assert_conversation(page, conversation_id, "after edit")
             print("\n=== [PLAN_REVIEW_HOOK_START] ===", flush=True)
             print(json.dumps({"event": "on_plan_revised", **revised}, ensure_ascii=False, indent=2), flush=True)
             print("=== [PLAN_REVIEW_HOOK_END] ===\n", flush=True)
@@ -1111,10 +1338,12 @@ def main():
         if args.step == "approve":
             confirm_btn = page.locator(confirm_locators).last
             if confirm_btn.count() > 0:
+                assert_conversation(page, conversation_id, "before start click")
                 confirm_current_plan(page)
         elif args.resume_url:
             confirm_btn = page.locator(confirm_locators).last
             if confirm_btn.count() > 0:
+                assert_conversation(page, conversation_id, "before start click")
                 if args.review_plan or args.plan_hook:
                     plan_text = stop_auto_confirm_fuse_and_expand_plan(page)
                     run_plan_review_hook_loop(
@@ -1145,8 +1374,12 @@ def main():
                 page.goto("https://gemini.google.com/app", wait_until="domcontentloaded")
                 time.sleep(3.0)
             activate_deep_research_mode(page)
+            assert_fresh_new_chat(page)
             submit_prompt(page, args.prompt, raw_prompt=args.raw_prompt)
-            plan_res = wait_for_new_plan(page, prev_plan_count=0)
+            plan_res = wait_for_new_plan(page, prev_plan_count=0, new_chat_prompt=args.prompt)
+            new_conversation_id = conversation_id_from_url(plan_res.get("url"))
+            if new_conversation_id:   # verified to hold this run's prompt: persist the binding now
+                print(format_conversation_line(new_conversation_id, plan_res.get("url")), flush=True)
 
             print("\n--- [Research Plan] ---\n" + plan_res["plan"] + "\n-----------------------\n", flush=True)
 
@@ -1161,13 +1394,20 @@ def main():
                         f.write(f"# Research Plan\n\nURL: {plan_res['url']}\n\n{plan_res['plan']}\n")
                 return
 
+            # The new chat is this run's conversation from here on (auto): pin it before starting the research
+            conversation_id = conversation_id_from_url(plan_res.get("url"))
+            if not conversation_id:
+                raise ConversationMismatch(
+                    f"Conversation mismatch (new chat): the plan's page has no conversation id ({plan_res.get('url')!r}); not starting the research.")
+            assert_conversation(page, conversation_id, "before start click")
+
             # If --review-plan or --plan-hook is enabled, enter the interactive verification/revision loop
             if args.review_plan or args.plan_hook:
                 run_plan_review_hook_loop(page, plan_res, plan_hook_cmd=args.plan_hook)
             else:
                 confirm_current_plan(page)
 
-        result = wait_for_report_completion(page, timeout_sec=args.timeout)
+        result = wait_for_report_completion(page, timeout_sec=args.timeout, expected_conversation_id=conversation_id)
         if args.output:
             out_path = os.path.abspath(args.output)
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -1175,6 +1415,8 @@ def main():
                 f.write(result["markdown"])
             log(f"Saved Markdown report ({len(result['markdown'])} chars) to: {out_path}")
 
+        # provenance first, then the report: the relay accepts a report only with this line from the same run
+        print(format_report_provenance(result), flush=True)
         print("\n=== DEEP RESEARCH REPORT START ===\n")
         print(result["markdown"])
         print("\n=== DEEP RESEARCH REPORT END ===\n")

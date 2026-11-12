@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -809,11 +810,13 @@ class ModelAndEffortCliOptionsTestCase(DeepResearchTestBase):
             "--goal", "Raft vs PBFT throughput comparison.",
         ])
 
-        # Run collect in relay mode (Case 3) with explicit overrides
+        # Run collect in relay mode (Case 3) with explicit overrides; the job never planned, so it is bound to its
+        # conversation explicitly (collect refuses to fall back to whatever conversation the app shows)
         report_out = self.out_dir / "collect_report.md"
         rc_col, res_col, _ = self.run_dr([
             "collect",
             "--job", "collect_model_job",
+            "--url", "https://gemini.google.com/app/fake_conv_001",
             "--agy-model", "pro",
             "--agy-effort", "medium",
             "--gemini-model", "argon",
@@ -1204,6 +1207,368 @@ class PromptEngineeringAndGatesTestCase(DeepResearchTestBase):
         self.assertEqual(rc_app, 0)
         req_app = json.loads((self.jobs_dir / "argon_warn_job" / "relay" / "request.json").read_text(encoding="utf-8"))
         self.assertEqual(req_app["timeout"], 1800)
+
+
+FOREIGN_URL = "https://gemini.google.com/app/foreign_conv_999"
+
+
+def own_url(job_id: str) -> str:
+    """The fake's own conversation for a job (fake_agy_dr.job_conversation_url)."""
+    return f"https://gemini.google.com/app/fake_{job_id}"
+
+
+class ConversationIdentityTestCase(DeepResearchTestBase):
+    """A report (or revised plan) is accepted only from the job's own Gemini conversation.
+
+    Regression: two jobs drove the one shared Gemini page at once and job B saved job A's report (byte-identical)
+    as its own, because acceptance only checked length and headings."""
+
+    REASON = "The plan covers every metric and entity required by goal.md for this research."
+    PROMPT = ["--prompt", "Distributed vector indexing deep dive.", "--goal", "Detailed latency and memory comparison."]
+
+    def init_job(self, job_id: str) -> Path:
+        rc, res, _ = self.run_dr(["init", "--job", job_id, *self.PROMPT])
+        self.assertEqual(rc, 0, res)
+        return self.jobs_dir / job_id
+
+    def planned_job(self, job_id: str) -> Path:
+        job_dir = self.init_job(job_id)
+        rc, res, _ = self.run_dr(["plan", "--job", job_id])
+        self.assertEqual(rc, 0, res)
+        return job_dir
+
+    def load_job(self, job_dir: Path) -> dict:
+        return json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+
+    def request(self, job_dir: Path) -> dict:
+        return json.loads((job_dir / "relay" / "request.json").read_text(encoding="utf-8"))
+
+    def wait_for_result(self, job_dir: Path, timeout: float = 15) -> None:
+        result_file = job_dir / "relay" / "result.json"
+        deadline = time.time() + timeout
+        while not result_file.exists() and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(result_file.exists(), "fake worker never wrote its result")
+
+    # ---------------------------------------------------------------- report acceptance
+    def test_approve_rejects_report_from_another_conversation(self) -> None:
+        job_dir = self.planned_job("foreign_approve")
+        out = self.out_dir / "foreign.md"
+        rc, res, err = self.run_dr(["approve", "--job", "foreign_approve", "--reason", self.REASON, "--out", str(out)],
+                                   scenario="foreign_conversation")
+        self.assertEqual(rc, 2, f"{res}\n{err}")
+        self.assertEqual(res.get("code"), "CONVERSATION_MISMATCH")
+        self.assertFalse(out.exists(), "a foreign report must not reach --out")
+        self.assertFalse(Path(str(out) + ".meta.json").exists())
+        job = self.load_job(job_dir)
+        self.assertEqual(job["url"], own_url("foreign_approve"), "the job keeps its own conversation url")
+        self.assertEqual(job["error_code"], "CONVERSATION_MISMATCH")
+        self.assertNotEqual(job["status"], "completed")
+        self.assertFalse((job_dir / "report.md").exists(), "the foreign report must not stay as the job's report")
+        self.assertTrue(list((job_dir / "relay").glob("rejected_*")), "the rejected result is kept as evidence")
+
+    def test_collect_after_rejection_fetches_from_the_jobs_conversation(self) -> None:
+        job_dir = self.planned_job("foreign_then_collect")
+        self.run_dr(["approve", "--job", "foreign_then_collect", "--reason", self.REASON], scenario="foreign_conversation")
+        out = self.out_dir / "recovered.md"
+        rc, res, err = self.run_dr(["collect", "--job", "foreign_then_collect", "--out", str(out)])
+        self.assertEqual(rc, 0, f"{res}\n{err}")
+        self.assertEqual(res["status"], "completed")
+        req = self.request(job_dir)
+        self.assertEqual((req["step"], req["resume_url"]), ("collect", own_url("foreign_then_collect")))
+        meta = json.loads(Path(str(out) + ".meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["conversation_id"], "fake_foreign_then_collect")
+        self.assertEqual(meta["url"], own_url("foreign_then_collect"))
+        self.assertNotIn("FOREIGN", out.read_text(encoding="utf-8"))
+
+    def test_collect_step_rejects_report_from_another_conversation(self) -> None:
+        job_dir = self.planned_job("foreign_collect")
+        rc, res, _ = self.run_dr(["collect", "--job", "foreign_collect"], scenario="foreign_conversation")
+        self.assertEqual(rc, 2, res)
+        self.assertEqual(res.get("code"), "CONVERSATION_MISMATCH")
+        self.assertEqual(self.load_job(job_dir)["url"], own_url("foreign_collect"))
+
+    def test_completed_result_on_disk_from_another_conversation_is_rejected(self) -> None:
+        job_dir = self.planned_job("foreign_on_disk")
+        rc, res, _ = self.run_dr(["approve", "--job", "foreign_on_disk", "--reason", self.REASON, "--no-wait"],
+                                 scenario="foreign_conversation")
+        self.assertEqual(rc, 0, res)
+        self.wait_for_result(job_dir)
+        rc2, res2, _ = self.run_dr(["collect", "--job", "foreign_on_disk"], scenario="foreign_conversation")
+        self.assertEqual(rc2, 2, res2)
+        self.assertEqual(res2.get("code"), "CONVERSATION_MISMATCH")
+
+    def test_report_without_provenance_is_rejected(self) -> None:
+        self.planned_job("no_provenance_job")
+        rc, res, _ = self.run_dr(["approve", "--job", "no_provenance_job", "--reason", self.REASON], scenario="no_provenance")
+        self.assertEqual(rc, 2, res)
+        self.assertEqual(res.get("code"), "REPORT_PROVENANCE_MISSING")
+
+    def test_reports_are_staged_and_promoted_only_after_the_gate(self) -> None:
+        job_dir = self.planned_job("staged_job")
+        rc, res, _ = self.run_dr(["approve", "--job", "staged_job", "--reason", self.REASON])
+        self.assertEqual(rc, 0, res)
+        staged = Path(self.request(job_dir)["output"])
+        self.assertEqual(staged.parent.resolve(), (job_dir / "relay").resolve(), "the relay writes a staging file, never the deliverable")
+        self.assertTrue((job_dir / "report.md").is_file(), "the accepted report is promoted to the job's report.md")
+
+    def test_default_out_keeps_the_accepted_report_when_a_later_run_is_rejected(self) -> None:
+        job_dir = self.planned_job("keep_accepted_job")
+        rc, res, _ = self.run_dr(["approve", "--job", "keep_accepted_job", "--reason", self.REASON])
+        self.assertEqual(rc, 0, res)
+        accepted = (job_dir / "report.md").read_text(encoding="utf-8")
+        (job_dir / "relay" / "result.json").unlink()   # force a fresh collect relay step
+        rc2, res2, _ = self.run_dr(["collect", "--job", "keep_accepted_job"], scenario="foreign_conversation")
+        self.assertEqual(rc2, 2, res2)
+        self.assertEqual(res2.get("code"), "CONVERSATION_MISMATCH")
+        self.assertEqual((job_dir / "report.md").read_text(encoding="utf-8"), accepted)
+        job = self.load_job(job_dir)
+        self.assertEqual(job["status"], "completed", "a refused re-collect does not demote a completed job")
+        self.assertNotIn("error_code", job)
+        self.assertTrue(job.get("progress_highlights"), "the accepted run's highlights stay")
+        self.assertEqual([r["code"] for r in job["rejections"]], ["CONVERSATION_MISMATCH"])
+
+    def test_completed_result_without_its_staged_report_does_not_dead_end_collect(self) -> None:
+        job_dir = self.planned_job("no_staged_job")
+        rc, res, _ = self.run_dr(["approve", "--job", "no_staged_job", "--reason", self.REASON, "--no-wait"])
+        self.assertEqual(rc, 0, res)
+        self.wait_for_result(job_dir)
+        seq = self.load_job(job_dir)["seq"]
+        (job_dir / "relay" / f"report_{seq}.md").unlink()
+        rc2, res2, _ = self.run_dr(["collect", "--job", "no_staged_job"])
+        self.assertEqual(res2.get("code"), "REPORT_FILE_MISSING", res2)
+        rc3, res3, err3 = self.run_dr(["collect", "--job", "no_staged_job"])
+        self.assertEqual(rc3, 0, f"{res3}\n{err3}")
+
+    def test_identity_failure_from_the_relay_sets_aside_and_drops_progress(self) -> None:
+        job_dir = self.planned_job("relay_mismatch_job")
+        rc, res, _ = self.run_dr(["approve", "--job", "relay_mismatch_job", "--reason", self.REASON],
+                                 scenario="foreign_progress_relay_error")
+        self.assertEqual(rc, 2, res)
+        self.assertEqual(res.get("code"), "CONVERSATION_MISMATCH")
+        relay = job_dir / "relay"
+        self.assertFalse((relay / "result.json").exists())
+        self.assertFalse((relay / "progress.jsonl").exists())
+        self.assertTrue(list(relay.glob("rejected_*.result.json")))
+        self.assertTrue(list(relay.glob("rejected_*.progress.jsonl")))
+        self.assertEqual(self.load_job(job_dir).get("progress_highlights"), [])
+
+    def test_rejected_run_progress_does_not_reach_the_accepted_report(self) -> None:
+        job_dir = self.planned_job("foreign_progress_job")
+        self.run_dr(["approve", "--job", "foreign_progress_job", "--reason", self.REASON], scenario="foreign_conversation")
+        self.assertEqual(self.load_job(job_dir).get("progress_highlights"), [])
+        self.assertTrue(list((job_dir / "relay").glob("rejected_*.progress.jsonl")), "the rejected run's progress is kept as evidence")
+        out = self.out_dir / "clean_progress.md"
+        rc, res, _ = self.run_dr(["collect", "--job", "foreign_progress_job", "--out", str(out)])
+        self.assertEqual(rc, 0, res)
+        meta = json.loads(Path(str(out) + ".meta.json").read_text(encoding="utf-8"))
+        self.assertFalse([h for h in meta["progress_highlights"] if "FOREIGN" in h], meta["progress_highlights"])
+
+    # ---------------------------------------------------------------- approve / edit recovery
+    def test_approve_refused_on_a_moved_page_keeps_the_plan_approvable(self) -> None:
+        job_dir = self.planned_job("moved_page_job")
+        rc, res, _ = self.run_dr(["approve", "--job", "moved_page_job", "--reason", self.REASON], scenario="approve_page_moved")
+        self.assertEqual(rc, 2, res)
+        self.assertEqual(res.get("code"), "CONVERSATION_MISMATCH")
+        self.assertEqual(self.load_job(job_dir)["status"], "plan_ready", "nothing was clicked: the plan still awaits approval")
+        rc2, res2, err2 = self.run_dr(["approve", "--job", "moved_page_job", "--reason", self.REASON])
+        self.assertEqual(rc2, 0, f"{res2}\n{err2}")
+        self.assertEqual(res2["status"], "completed")
+
+    def test_no_wait_pre_click_refusal_is_restored_by_collect(self) -> None:
+        job_dir = self.planned_job("no_wait_moved_job")
+        rc, res, _ = self.run_dr(["approve", "--job", "no_wait_moved_job", "--reason", self.REASON, "--no-wait"],
+                                 scenario="approve_page_moved_worker")
+        self.assertEqual(rc, 0, res)
+        self.wait_for_result(job_dir)
+        rc2, res2, _ = self.run_dr(["collect", "--job", "no_wait_moved_job"])
+        self.assertEqual(rc2, 2, res2)
+        self.assertEqual(res2.get("code"), "CONVERSATION_MISMATCH")
+        self.assertEqual(self.load_job(job_dir)["status"], "plan_ready")
+        rc3, res3, err3 = self.run_dr(["approve", "--job", "no_wait_moved_job", "--reason", self.REASON])
+        self.assertEqual(rc3, 0, f"{res3}\n{err3}")
+
+    def test_completed_job_clears_identity_error_fields(self) -> None:
+        job_dir = self.planned_job("clears_errors_job")
+        self.run_dr(["approve", "--job", "clears_errors_job", "--reason", self.REASON], scenario="approve_page_moved")
+        rc, res, _ = self.run_dr(["approve", "--job", "clears_errors_job", "--reason", self.REASON])
+        self.assertEqual(rc, 0, res)
+        job = self.load_job(job_dir)
+        self.assertNotIn("error_code", job)
+        self.assertNotIn("error_message", job)
+        self.assertEqual([r["code"] for r in job.get("rejections", [])], ["CONVERSATION_MISMATCH"])
+
+    def test_edit_on_another_conversation_keeps_the_job_plan(self) -> None:
+        job_dir = self.planned_job("edit_foreign_job")
+        rc, res, _ = self.run_dr(["edit", "--job", "edit_foreign_job", "--feedback", "Add a GPU memory footprint comparison."],
+                                 scenario="edit_foreign")
+        self.assertEqual(rc, 2, res)
+        self.assertEqual(res.get("code"), "CONVERSATION_MISMATCH")
+        job = self.load_job(job_dir)
+        self.assertEqual(job["url"], own_url("edit_foreign_job"))
+        self.assertEqual(job["status"], "plan_ready")
+        self.assertEqual(job["plan_iterations"], 1)
+        self.assertFalse((job_dir / "plan_v2.md").exists())
+
+    def test_edit_relay_mismatch_before_typing_keeps_the_plan(self) -> None:
+        job_dir = self.planned_job("edit_relay_job")
+        rc, res, _ = self.run_dr(["edit", "--job", "edit_relay_job", "--feedback", "Add a GPU memory footprint comparison."],
+                                 scenario="edit_relay_mismatch")
+        self.assertEqual(rc, 2, res)
+        self.assertEqual(res.get("code"), "CONVERSATION_MISMATCH")
+        self.assertEqual(self.load_job(job_dir)["status"], "plan_ready")
+        rc2, res2, err2 = self.run_dr(["approve", "--job", "edit_relay_job", "--reason", self.REASON])
+        self.assertEqual(rc2, 0, f"{res2}\n{err2}")
+
+    def test_edit_refused_after_the_edit_click_but_before_typing_keeps_the_plan(self) -> None:
+        job_dir = self.planned_job("edit_click_job")
+        rc, res, _ = self.run_dr(["edit", "--job", "edit_click_job", "--feedback", "Add a GPU memory footprint comparison."],
+                                 scenario="edit_relay_mismatch_after_click")
+        self.assertEqual(rc, 2, res)
+        self.assertEqual(self.load_job(job_dir)["status"], "plan_ready")
+
+    def test_edit_refused_after_typing_marks_the_job_failed(self) -> None:
+        job_dir = self.planned_job("edit_typed_job")
+        rc, res, _ = self.run_dr(["edit", "--job", "edit_typed_job", "--feedback", "Add a GPU memory footprint comparison."],
+                                 scenario="edit_relay_mismatch_after_typing")
+        self.assertEqual(rc, 2, res)
+        self.assertEqual(self.load_job(job_dir)["status"], "error")
+
+    def test_successful_edit_clears_an_earlier_refusal(self) -> None:
+        job_dir = self.planned_job("edit_clears_job")
+        self.run_dr(["edit", "--job", "edit_clears_job", "--feedback", "Add a GPU memory footprint comparison."],
+                    scenario="edit_relay_mismatch")
+        rc, res, _ = self.run_dr(["edit", "--job", "edit_clears_job", "--feedback", "Add a GPU memory footprint comparison."])
+        self.assertEqual(rc, 0, res)
+        job = self.load_job(job_dir)
+        self.assertNotIn("error_code", job)
+        self.assertNotIn("error_message", job)
+
+    def test_reinit_does_not_inherit_the_previous_runs_conversation(self) -> None:
+        job_dir = self.planned_job("reinit_job")
+        self.assertTrue((job_dir / "relay" / "conversation.json").is_file())
+        self.init_job("reinit_job")
+        self.assertFalse((job_dir / "relay" / "conversation.json").exists())
+        rc, res, _ = self.run_dr(["collect", "--job", "reinit_job"])
+        self.assertEqual(res.get("code"), "NO_CONVERSATION_URL", res)
+
+    def test_a_running_auto_jobs_conversation_cannot_be_bound_by_another_job(self) -> None:
+        rc, res, _ = self.run_dr(["auto", "--job", "auto_owner_job", *self.PROMPT, "--no-wait"], scenario="long_running")
+        self.assertEqual(rc, 0, res)
+        conv = self.jobs_dir / "auto_owner_job" / "relay" / "conversation.json"
+        deadline = time.time() + 10
+        while not conv.exists() and time.time() < deadline:
+            time.sleep(0.05)
+        self.init_job("binder_job")
+        rc2, res2, _ = self.run_dr(["collect", "--job", "binder_job", "--url", own_url("auto_owner_job")])
+        self.assertEqual(rc2, 5, res2)
+        self.assertEqual(res2.get("code"), "CONVERSATION_URL_CONFLICT")
+        self.wait_for_result(self.jobs_dir / "auto_owner_job")
+
+    def test_edit_without_conversation_id_is_rejected(self) -> None:
+        job_dir = self.planned_job("edit_no_id_job")
+        rc, res, _ = self.run_dr(["edit", "--job", "edit_no_id_job", "--feedback", "Add a GPU memory footprint comparison."],
+                                 scenario="edit_no_id")
+        self.assertEqual(rc, 2, res)
+        self.assertEqual(res.get("code"), "CONVERSATION_MISMATCH")
+        self.assertFalse((job_dir / "plan_v2.md").exists())
+
+    # ---------------------------------------------------------------- binding a conversation
+    def test_collect_without_a_recorded_conversation_refuses(self) -> None:
+        self.init_job("no_url_job")
+        rc, res, _ = self.run_dr(["collect", "--job", "no_url_job"])
+        self.assertEqual(rc, 2, res)
+        self.assertEqual(res.get("code"), "NO_CONVERSATION_URL")
+        self.assertFalse((self.jobs_dir / "no_url_job" / "relay" / "agy_invoked.json").exists(), "agy must not run")
+
+    def test_collect_url_binds_a_job_without_a_conversation(self) -> None:
+        self.init_job("bind_url_job")
+        rc, res, _ = self.run_dr(["collect", "--job", "bind_url_job", "--url", own_url("bind_url_job")])
+        self.assertEqual(rc, 0, res)
+        self.assertEqual(self.load_job(self.jobs_dir / "bind_url_job")["url"], own_url("bind_url_job"))
+
+    def test_collect_url_cannot_rebind_a_job(self) -> None:
+        job_dir = self.planned_job("rebind_job")
+        rc, res, _ = self.run_dr(["collect", "--job", "rebind_job", "--url", FOREIGN_URL])
+        self.assertEqual(rc, 5, res)
+        self.assertEqual(res.get("code"), "CONVERSATION_URL_CONFLICT")
+        self.assertEqual(self.load_job(job_dir)["url"], own_url("rebind_job"))
+
+    def test_collect_url_must_name_a_conversation(self) -> None:
+        self.init_job("bad_url_job")
+        rc, res, _ = self.run_dr(["collect", "--job", "bad_url_job", "--url", "https://gemini.google.com/app"])
+        self.assertEqual(rc, 5, res)
+        self.assertEqual(res.get("code"), "INVALID_CONVERSATION_URL")
+
+    def test_collect_url_must_be_a_gemini_url(self) -> None:
+        self.init_job("foreign_host_job")
+        rc, res, _ = self.run_dr(["collect", "--job", "foreign_host_job", "--url", "https://example.com/app/abc"])
+        self.assertEqual(rc, 5, res)
+        self.assertEqual(res.get("code"), "INVALID_CONVERSATION_URL")
+        self.assertIsNone(self.load_job(self.jobs_dir / "foreign_host_job").get("url"))
+
+    def test_plan_without_conversation_id_is_refused(self) -> None:
+        self.init_job("plan_no_id_job")
+        rc, res, _ = self.run_dr(["plan", "--job", "plan_no_id_job"], scenario="plan_no_id")
+        self.assertEqual(rc, 2, res)
+        self.assertEqual(res.get("code"), "NO_CONVERSATION_URL")
+
+    def test_plan_refuses_a_conversation_owned_by_another_job(self) -> None:
+        self.init_job("owner_job")
+        self.init_job("intruder_job")
+        rc1, res1, _ = self.run_dr(["plan", "--job", "owner_job"], scenario="plan_owned")
+        self.assertEqual(rc1, 0, res1)
+        rc2, res2, _ = self.run_dr(["plan", "--job", "intruder_job"], scenario="plan_owned")
+        self.assertEqual(rc2, 2, res2)
+        self.assertEqual(res2.get("code"), "CONVERSATION_MISMATCH")
+        self.assertIsNone(self.load_job(self.jobs_dir / "intruder_job").get("url"))
+
+    # ---------------------------------------------------------------- auto
+    def test_auto_records_conversation_from_report_provenance(self) -> None:
+        out = self.out_dir / "auto_provenance.md"
+        rc, res, _ = self.run_dr(["auto", "--job", "auto_prov_job", *self.PROMPT, "--out", str(out)])
+        self.assertEqual(rc, 0, res)
+        self.assertEqual(self.load_job(self.jobs_dir / "auto_prov_job")["url"], own_url("auto_prov_job"))
+        meta = json.loads(Path(str(out) + ".meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["conversation_id"], "fake_auto_prov_job")
+
+    def test_auto_rejects_a_report_from_another_conversation_than_it_pinned(self) -> None:
+        rc, res, _ = self.run_dr(["auto", "--job", "auto_foreign_job", *self.PROMPT], scenario="foreign_conversation")
+        self.assertEqual(rc, 2, res)
+        self.assertEqual(res.get("code"), "CONVERSATION_MISMATCH")
+        self.assertEqual(self.load_job(self.jobs_dir / "auto_foreign_job")["url"], own_url("auto_foreign_job"))
+
+    def test_auto_error_keeps_the_pinned_conversation_for_collect(self) -> None:
+        rc, res, _ = self.run_dr(["auto", "--job", "auto_timeout_job", *self.PROMPT], scenario="auto_report_timeout")
+        self.assertEqual(rc, 2, res)
+        self.assertEqual(res.get("code"), "REPORT_TIMEOUT")
+        self.assertEqual(self.load_job(self.jobs_dir / "auto_timeout_job")["url"], own_url("auto_timeout_job"))
+        rc2, res2, err2 = self.run_dr(["collect", "--job", "auto_timeout_job"])
+        self.assertEqual(rc2, 0, f"{res2}\n{err2}")
+
+    def test_worker_died_auto_job_keeps_its_conversation(self) -> None:
+        rc, res, _ = self.run_dr(["auto", "--job", "auto_crash_job", *self.PROMPT], scenario="worker_crash")
+        self.assertEqual(rc, 3, res)
+        self.assertEqual(res.get("code"), "WORKER_DIED")
+        self.assertEqual(self.load_job(self.jobs_dir / "auto_crash_job")["url"], own_url("auto_crash_job"))
+
+    def test_auto_on_a_reused_job_dir_ignores_a_stale_result(self) -> None:
+        job_dir = self.jobs_dir / "reused_job"
+        relay = job_dir / "relay"
+        relay.mkdir(parents=True)
+        stale = relay / "report_1.md"
+        stale.write_text("# STALE report\n\n" + "stale words " * 80, encoding="utf-8")
+        (relay / "result.json").write_text(json.dumps({
+            "relay_version": 2, "step": "auto", "seq": 1, "status": "completed", "url": FOREIGN_URL,
+            "conversation_id": "foreign_conv_999", "conversation_url": FOREIGN_URL, "report_file": str(stale), "report_chars": 960,
+        }), encoding="utf-8")
+        (relay / "started.json").write_text(json.dumps({"relay_version": 2, "step": "auto", "seq": 1, "status": "started", "pid": 4}),
+                                            encoding="utf-8")
+        out = self.out_dir / "reused.md"
+        rc, res, err = self.run_dr(["auto", "--job", "reused_job", *self.PROMPT, "--out", str(out)])
+        self.assertEqual(rc, 0, f"{res}\n{err}")
+        self.assertNotIn("STALE", out.read_text(encoding="utf-8"))
+        self.assertEqual(self.load_job(job_dir)["url"], own_url("reused_job"))
 
 
 if __name__ == "__main__":
