@@ -471,6 +471,86 @@ class Hook(unittest.TestCase):
                 self.assertEqual((dec, rule), ("deny", "shell"), tool)
 
 
+class Teamwork(unittest.TestCase):
+    """/teamwork keeps its coordination files in <workdir>/.agents/teamwork/, in agy's scratch folder for the run's
+    conversation and in brain/<id>/teamwork_prompt_<conversation>.md, and reads agy's plugin skills. Regression: the
+    hook denied all of them (and ask_question, whose prose it took for paths), so teams ran ~9 min and some reported
+    SUCCESS without the requested file."""
+
+    A, B = "efaa5da9-f897-43cd-913b-af424c3122ab", "bc9987a0-52a4-4d98-b58e-4e9e1203b2ed"
+
+    def setUp(self):
+        self.base = Path(tempfile.mkdtemp(prefix="tw_"))
+        self.addCleanup(shutil.rmtree, self.base, True)
+        self.root = self.base / "work"
+        (self.root / ".agents").mkdir(parents=True)
+        self.home = self.base / "gemini_home"
+        (self.home / "config" / "plugins" / "superpowers" / "skills" / "x").mkdir(parents=True)
+        (self.home / "config" / "plugins" / "superpowers" / "skills" / "x" / "SKILL.md").write_text("s")
+        self.scratch = self.home / "antigravity-cli" / "scratch" / "teamwork"
+        self.brain = self.home / "antigravity-cli" / "brain"
+        self.log = self.base / "run" / "confine.jsonl"
+        self.log.parent.mkdir()
+
+    def decide(self, name, args, log=True):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("AGY_CONFINE_")}
+        env.update({"AGY_CONFINE_ROOT": str(self.root), "AGY_CONFINE_AGY_HOME": str(self.home)})
+        if log:
+            env["AGY_CONFINE_LOG"] = str(self.log)
+        data = json.dumps({"toolCall": {"name": name, "args": args}}).encode()
+        cp = subprocess.run([sys.executable, str(HOOK)], input=data, capture_output=True, cwd=str(self.root / ".agents"), env=env)
+        out = json.loads(cp.stdout)
+        return out["decision"], out.get("reason", "")
+
+    def write(self, path, log=True):
+        return self.decide("write_to_file", {"TargetFile": str(path), "CodeContent": "x"}, log)[0]
+
+    def test_teamwork_files_in_the_workdir_are_writable_but_the_hook_config_is_not(self):
+        for rel, want in [(".agents/teamwork/ORIGINAL_REQUEST.md", "ask"),
+                          (".agents/teamwork/orchestrator/DISPATCH.md", "ask"),
+                          (".agents/hooks.json", "deny"), (".agents/confine.cmd", "deny"),
+                          (".agents/rules/extra.md", "deny"), (".agents/teamwork/../hooks.json", "deny"),
+                          (".agy_task/x/events.jsonl", "deny")]:
+            with self.subTest(rel):
+                self.assertEqual(self.write(self.root / rel), want)
+
+    def test_scratch_of_the_runs_own_conversation_only(self):
+        own = self.scratch / self.A / ".agents" / "teamwork" / "sentinel" / "BRIEFING.md"
+        self.assertEqual(self.write(own), "ask")
+        self.assertEqual(self.decide("view_file", {"AbsolutePath": str(own)})[0], "ask")
+        self.assertEqual(self.write(self.scratch / self.A / "swe_1" / "DISPATCH.md"), "ask")
+        self.assertEqual(self.write(self.scratch / self.B / ".agents" / "teamwork" / "x.md"), "deny", "another conversation")
+        self.assertEqual(self.write(self.home / "antigravity-cli" / "scratch" / "other.md"), "deny")
+        self.assertEqual(self.write(self.home / "antigravity-cli" / "settings.json"), "deny")
+
+    def test_scratch_needs_a_run_log_to_pin_the_conversation(self):
+        self.assertEqual(self.write(self.scratch / self.A / "x.md", log=False), "deny")
+
+    def test_brain_prompt_file_of_the_runs_conversation_only(self):
+        self.assertEqual(self.write(self.brain / "a76f258b" / f"teamwork_prompt_{self.A}.md"), "ask")
+        self.assertEqual(self.write(self.brain / "a76f258b" / f"teamwork_prompt_{self.B}.md"), "deny")
+        self.assertEqual(self.write(self.brain / "a76f258b" / "scratch" / "test.md"), "deny")
+        self.assertEqual(self.write(self.scratch / self.B / "x.md"), "deny", "the brain file pinned conversation A")
+
+    def test_plugin_skills_are_readable_not_writable(self):
+        skill = self.home / "config" / "plugins" / "superpowers" / "skills" / "x" / "SKILL.md"
+        self.assertEqual(self.decide("view_file", {"AbsolutePath": str(skill)})[0], "ask")
+        self.assertEqual(self.write(skill), "deny")
+        self.assertEqual(self.decide("view_file", {"AbsolutePath": str(self.home / "config" / "settings.json")})[0], "deny")
+
+    def test_ask_question_is_answered_with_go_ahead_guidance(self):
+        decision, reason = self.decide("ask_question", {"questions": [
+            {"question": "1. Task Purpose: What is the primary purpose of this task?",
+             "options": ["(Recommended) None of these: no restrictions", "~/teamwork_projects/hello"]}]})
+        self.assertEqual(decision, "deny")
+        self.assertIn("default", reason.lower())
+        self.assertNotIn("path", reason.lower())
+
+    def test_prose_with_colons_is_not_a_path(self):
+        self.assertEqual(self.decide("write_to_file", {"TargetFile": str(self.root / "a.md"),
+                                                       "question": "Purpose: what is it?"})[0], "ask")
+
+
 class Installer(unittest.TestCase):
     def setUp(self):
         self.work = Path(tempfile.mkdtemp(prefix="cfw_"))

@@ -126,7 +126,12 @@ a pre-existing file of either name is restored byte for byte, also our own entry
 agy session may still be alive and must stay hooked). It
 hard-denies any tool call whose path arguments resolve outside the work directory, hard-linked files,
 traversal look-alike components (`.. `, `...`), every shell, browser and MCP tool, writes into `.agents/`
-or `.agy_task/`, and view tools on `--inlined` files; everything else is left to the rules above (the hook
+(except `/teamwork`'s own `.agents/teamwork/**`) or `.agy_task/`, `ask_question` (refused with "proceed with
+reasonable defaults and state your assumptions": nobody answers a headless run), and view tools on `--inlined`
+files. For `/teamwork` the default mode also allows, outside the work directory, agy's scratch folder
+`~/.gemini/antigravity-cli/scratch/teamwork/<conversation>/**` and `brain/<id>/teamwork_prompt_<conversation>.md`
+for the run's own conversation only (the first one touched is pinned in `.agy_task/<stamp>/teamwork_conversation`;
+any other stays denied), and read-only access to `~/.gemini/config/plugins/**`. Everything else is left to the rules above (the hook
 answers `ask`, which never grants more than agy would on its own). Each decision is logged to
 `.agy_task/<stamp>/confine.jsonl` with the rule that fired (`shell`, `tool`, `path`, `hard_link`,
 `protected`, `inlined`, `error`); `inlined` denials are counted apart from `denied_count`, which keeps

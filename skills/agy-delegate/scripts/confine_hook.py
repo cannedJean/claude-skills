@@ -46,7 +46,18 @@ SHELL_TOOLS = {"run_command", "send_command_input", "read_terminal", "command_st
 # - absolute, rooted, ~, file:, or with a .. segment - is checked whatever its key, e.g. a glob Pattern)
 TEXT_KEYS = {"codecontent", "replacementcontent", "targetcontent", "instruction", "description", "toolaction",
              "toolsummary", "query", "searchquery", "commandline", "input", "prompt", "message", "content", "text",
-             "explanation", "summary", "title"}
+             "explanation", "summary", "title", "question", "questions", "options", "option", "choices", "choice",
+             "header", "label", "answer", "rationale", "placeholder"}
+# /teamwork in the default mode: the team's coordination files live in <workdir>/.agents/teamwork/ (writable; the rest
+# of .agents/ stays protected), in agy's scratch folder for the run's conversation and in
+# brain/<id>/teamwork_prompt_<conversation>.md. The first conversation the run touches there is pinned (a state file
+# next to AGY_CONFINE_LOG); any other conversation stays denied. agy's own plugin skills are readable, never writable.
+TEAMWORK_DIR = (".agents", "teamwork")
+CONVERSATION_ID = re.compile(r"^[0-9a-f][0-9a-f-]{7,63}$", re.I)
+BRAIN_PROMPT = re.compile(r"^teamwork_prompt_([0-9a-f][0-9a-f-]{7,63})\.md$", re.I)
+QUESTION_TOOLS = {"ask_question", "ask_user", "ask_followup_question"}
+HEADLESS_QUESTION = ("this is a headless run and nobody can answer questions: do not ask. Proceed with reasonable "
+                     "defaults and state the assumptions you made in your result.")
 PATH_KEY = re.compile(r"(path|paths|file|files|dir|dirs|directory|directories|folder|cwd|uri|url|location|root|target)$",
                       re.I)
 URL_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]+)://", re.I)
@@ -141,10 +152,58 @@ def scan(args, root: str, key: str = ""):
                 yield key, args, path, reason
 
 
+def agy_home() -> str:
+    return canon(os.environ.get("AGY_CONFINE_AGY_HOME") or os.path.join(os.path.expanduser("~"), ".gemini"))
+
+
+def pin_teamwork_conversation(cid: str) -> bool:
+    """True when cid is the run's teamwork conversation: the first one seen is recorded atomically next to the run's
+    log; without a log there is nowhere to pin it, so nothing outside the root is allowed (fail closed)."""
+    log = os.environ.get("AGY_CONFINE_LOG")
+    if not log:
+        return False
+    state = os.path.join(os.path.dirname(os.path.abspath(log)), "teamwork_conversation")
+    cid = cid.lower()
+    try:
+        fd = os.open(state, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(cid)
+        return True
+    except FileExistsError:
+        try:
+            with open(state, encoding="utf-8") as f:
+                return f.read().strip() == cid
+        except OSError:
+            return False
+    except OSError:
+        return False
+
+
+def agy_area_allowed(path: str, name: str) -> bool:
+    """Paths outside the root that /teamwork legitimately uses (see TEAMWORK_DIR)."""
+    home = agy_home()
+    plugins = os.path.join(home, "config", "plugins")
+    if inside(path, plugins):
+        return name in READ_TOOLS
+    scratch = os.path.join(home, "antigravity-cli", "scratch", "teamwork")
+    if inside(path, scratch) and path != scratch:
+        cid = os.path.relpath(path, scratch).split(os.sep)[0]
+        return bool(CONVERSATION_ID.match(cid)) and pin_teamwork_conversation(cid)
+    brain = os.path.join(home, "antigravity-cli", "brain")
+    if inside(path, brain):
+        parts = os.path.relpath(path, brain).split(os.sep)
+        m = BRAIN_PROMPT.match(parts[-1]) if len(parts) == 2 else None
+        return bool(m) and pin_teamwork_conversation(m.group(1))
+    return False
+
+
 def is_protected_file(rel: str, mode: str = "default") -> bool:
     rel_clean = rel.replace("\\", "/")
     base_rel = rel_clean.split(":")[0]
-    first_part = base_rel.split("/")[0]
+    parts = base_rel.split("/")
+    first_part = parts[0]
+    if mode != "deep-research" and tuple(p.lower() for p in parts[:2]) == TEAMWORK_DIR and len(parts) > 2:
+        return False   # /teamwork's own coordination files (BRIEFING, DISPATCH, ORIGINAL_REQUEST, ...)
     if first_part in PROTECTED:
         return True
     if mode == "deep-research":
@@ -301,6 +360,9 @@ def decide(payload: dict, root: str, inlined=frozenset(), mode: str = "default",
     # Browser and MCP tools are unconditionally denied
     if name.startswith("browser") or "mcp" in name:
         return "deny", f"tool {name} is disabled: this session may only touch files inside " + root, [], "tool"
+    # Nobody answers in a headless run: refuse with guidance instead of letting the model invent the answers
+    if name in QUESTION_TOOLS:
+        return "deny", HEADLESS_QUESTION, [], "tool"
 
     # Shell tools handling
     if mode == "deep-research":
@@ -335,8 +397,8 @@ def decide(payload: dict, root: str, inlined=frozenset(), mode: str = "default",
             if not (inside(path, root) or (bool(dr_dir) and inside(path, dr_dir))):
                 return "deny", f"{key}={raw!r} is outside {root} and {dr_dir}; only paths inside them are allowed", hits, "path"
         else:
-            # For write tools, or default mode: must be inside root
-            if not inside(path, root):
+            # For write tools, or default mode: must be inside root (default mode: plus /teamwork's agy areas)
+            if not inside(path, root) and not (mode != "deep-research" and agy_area_allowed(path, name)):
                 return "deny", f"{key}={raw!r} is outside {root}; only paths inside it are allowed", hits, "path"
 
         if hard_linked(path):

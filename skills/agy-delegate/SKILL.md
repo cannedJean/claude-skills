@@ -128,7 +128,11 @@ Commands below are relative to this skill's directory (`scripts/agy_task.py`).
   confinement on it cannot read anything else.
 - agy is **confined to the work directory** by default (do not pass `--no-confine` unless the user asked):
   a hook denies paths outside it (any form, links included), every shell, browser and MCP tool, and writes into
-  `.agents/` or `.agy_task/`. `confinement.enabled: false` means the hook did not see every tool call: the run
+  `.agents/` (except `/teamwork`'s `.agents/teamwork/**`) or `.agy_task/`. For `/teamwork` it also allows agy's
+  scratch folder of the run's own conversation and `brain/<id>/teamwork_prompt_<that conversation>.md` (the first
+  conversation used is pinned; others stay denied), and reading `~/.gemini/config/plugins/**`. `ask_question` is
+  refused with "proceed with reasonable defaults and state your assumptions" (nobody answers a headless run).
+  `confinement.enabled: false` means the hook did not see every tool call: the run
   was **not** confined; say so. Report a non-zero `confinement.denied_count` (check `denied[].rule` / `reason`).
   Details: README.md "Permissions model".
 - Under `--deep-research` confinement profile:
