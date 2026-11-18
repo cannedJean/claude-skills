@@ -19,7 +19,7 @@ can judge their failing tests (triage).
   triage PLAN UNIT           the referee judges the last failing attempt: code_bug / test_bug / spec_gap / unclear
   status PLAN                print report.md
   integrate PLAN --dest DIR  copy accepted deliverables (optionally the tests) into a project tree
-  seal PLAN / unseal PLAN    encrypt the hidden tests into hidden.sealed (DPAPI) / restore them to edit
+  seal PLAN / unseal PLAN    encrypt the hidden tests into hidden.sealed (DPAPI / Keychain) / restore them to edit
 
 Exit codes: 0 all selected units accepted (and integration passed) / audit passed; 2 some unit not accepted,
 integration failed, integrate conflict or not ready, audit failed; 3 agy quota or runtime error, also a failed
@@ -33,7 +33,9 @@ import ast
 import concurrent.futures as cf
 import contextlib
 import datetime as _dt
+import getpass
 import hashlib
+import hmac
 import importlib.util
 import json
 import os
@@ -110,8 +112,8 @@ def copy_file(src, dst: Path) -> None:
 
 
 # --------------------------------------------------------------------------- sealed hidden tests
-# `seal` moves the hidden tests into <plan dir>/hidden.sealed, encrypted with Windows DPAPI (user scope), and
-# deletes the plaintext. They then exist in clear only inside verify/red/integration dirs while no contractor session
+# `seal` moves the hidden tests into <plan dir>/hidden.sealed, encrypted with Windows DPAPI (user scope) or, on macOS,
+# with a random key kept in the user's login Keychain (see _keychain_key), and deletes the plaintext. They then exist in clear only inside verify/red/integration dirs while no contractor session
 # of the run is live (SessionGate: with -j > 1 a unit's hidden-test gate waits until every running session is over,
 # and no session starts until the plaintext is gone), and are deleted from there right after the test gate.
 SEALED = "hidden.sealed"
@@ -175,6 +177,94 @@ def _dpapi(data: bytes, protect: bool) -> bytes:
         ctypes.windll.kernel32.LocalFree(outp.pbData)
 
 
+# macOS: stdlib Python has no AES and no DPAPI, so the store is sealed with HMAC-SHA256 in counter mode (a PRF
+# keystream) plus an encrypt-then-MAC tag, under a 32-byte random key that never touches the disk: it lives in the
+# login Keychain as a generic password, written through `security -i` on stdin (so it is never in a process's argv)
+# and read with `security find-generic-password -w`. Like DPAPI it is bound to the user, so a process of the same
+# user could still ask for it; agy's confinement layers keep that from reaching agy (references/isolation.md).
+_KC_MAGIC = b"AOK1"
+_KC_KEY = None  # cached per process: one Keychain read per run
+
+
+def _kc_service() -> str:
+    return os.environ.get("AGY_OUTSOURCE_KEYCHAIN_SERVICE") or "agy-outsource hidden-test seal"
+
+
+def _kc_stream(key: bytes, nonce: bytes, n: int) -> bytes:
+    k = hmac.new(key, b"enc", hashlib.sha256).digest()
+    return b"".join(hmac.new(k, nonce + i.to_bytes(8, "big"), hashlib.sha256).digest()
+                    for i in range((n + 31) // 32))[:n]
+
+
+def _kc_xor(a: bytes, b: bytes) -> bytes:
+    return (int.from_bytes(a, "big") ^ int.from_bytes(b, "big")).to_bytes(len(a), "big") if a else b""
+
+
+def _kc_tag(key: bytes, body: bytes) -> bytes:
+    return hmac.new(hmac.new(key, b"mac", hashlib.sha256).digest(), body, hashlib.sha256).digest()
+
+
+def _kc_encrypt(key: bytes, data: bytes) -> bytes:
+    nonce = os.urandom(16)
+    body = _KC_MAGIC + nonce + _kc_xor(data, _kc_stream(key, nonce, len(data)))
+    return body + _kc_tag(key, body)
+
+
+def _kc_decrypt(key: bytes, blob: bytes) -> bytes:
+    body, tag = blob[:-32], blob[-32:]
+    if len(blob) < len(_KC_MAGIC) + 16 + 32 or not body.startswith(_KC_MAGIC) \
+            or not hmac.compare_digest(tag, _kc_tag(key, body)):
+        raise PlanError("sealed hidden test failed its integrity check (tampered, or sealed under another key)")
+    nonce, ct = body[4:20], body[20:]
+    return _kc_xor(ct, _kc_stream(key, nonce, len(ct)))
+
+
+def _security(args, stdin=None):
+    try:  # a locked Keychain must fail the run, never wait on a dialog nobody will answer at night
+        return subprocess.run(["security", *args], input=stdin, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise PlanError(f"macOS Keychain did not answer ({type(e).__name__}): is the login keychain unlocked?")
+
+
+def _keychain_key(create: bool) -> bytes:
+    global _KC_KEY
+    if _KC_KEY:
+        return _KC_KEY
+    account, service = getpass.getuser(), _kc_service()
+    cp = _security(["find-generic-password", "-a", account, "-s", service, "-w"])
+    if cp.returncode == 44 and create:  # errSecItemNotFound: first seal on this Mac
+        key = os.urandom(32).hex()
+        add = _security(["-i"], stdin=f'add-generic-password -a "{account}" -s "{service}" -w {key}\n')
+        if add.returncode != 0:
+            raise PlanError(f"could not store the seal key in the Keychain: {(add.stderr or add.stdout).strip()[:200]}")
+        cp = _security(["find-generic-password", "-a", account, "-s", service, "-w"])
+    if cp.returncode != 0:
+        raise PlanError(f"seal key not readable from the Keychain (security exit {cp.returncode}): "
+                        f"{cp.stderr.strip()[:200]}")
+    try:
+        key = bytes.fromhex(cp.stdout.strip())
+    except ValueError:
+        key = b""
+    if len(key) != 32:
+        raise PlanError(f"the Keychain item {service!r} does not hold a 32-byte seal key")
+    _KC_KEY = key
+    return key
+
+
+def can_seal() -> bool:
+    return os.name == "nt" or sys.platform == "darwin"
+
+
+def _seal_bytes(data: bytes, protect: bool) -> bytes:
+    """Encrypt (protect) or decrypt one hidden test with this OS's at-rest protection."""
+    if os.name == "nt":
+        return _dpapi(data, protect)
+    if sys.platform == "darwin":
+        key = _keychain_key(create=protect)
+        return _kc_encrypt(key, data) if protect else _kc_decrypt(key, data)
+    raise PlanError("sealing hidden tests needs Windows DPAPI or the macOS Keychain")
+
+
 def sealed_store(plan) -> dict:
     return read_json(plan["_dir"] / SEALED, {}) or {}
 
@@ -187,7 +277,7 @@ def hidden_src(plan, rel: str):
     except FileNotFoundError:
         pass
     blob = sealed_store(plan).get(rel)
-    return _dpapi(bytes.fromhex(blob), False) if blob else None
+    return _seal_bytes(bytes.fromhex(blob), False) if blob else None
 
 
 def drop_hidden(plan, root: Path) -> None:
@@ -1554,8 +1644,12 @@ def call_agy(agy_task: Path, work: Path, prompt_file: Path, a, effort: str, inli
 
 
 def path_forms(p) -> set:
-    s = str(Path(p).resolve())
-    return {s, s.replace("\\", "/"), s.replace("\\", "\\\\")}
+    # both the path as given and as resolved: on macOS /var and /tmp are symlinks into /private, and a test runner
+    # prints whichever form it was handed
+    forms = set()
+    for s in {os.path.abspath(p), str(Path(p).resolve())}:
+        forms |= {s, s.replace("\\", "/"), s.replace("\\", "\\\\")}
+    return forms
 
 
 def scrub(text: str, dirs: list) -> str:
@@ -2198,12 +2292,12 @@ def cmd_run(a) -> int:
         return 5
     # sealed only once every refusal above is behind us (a refused run leaves the spec folder as it was), and before
     # the Runner fingerprints the hidden-test store
-    if os.name == "nt":  # agy must never find the hidden tests in clear while it runs
+    if can_seal():  # agy must never find the hidden tests in clear while it runs
         sealed = seal_plan(plan)["sealed"]
         if sealed:
             log("sealed hidden tests: " + ", ".join(sealed))
     else:
-        log("warning: hidden tests stay in plaintext (sealing needs Windows DPAPI)")
+        log("warning: hidden tests stay in plaintext (sealing needs Windows DPAPI or the macOS Keychain)")
     out.mkdir(parents=True, exist_ok=True)
     sweep_hidden(plan, out)  # plaintext copies a crashed or interrupted run left behind
     runner = Runner(plan, out, a, agy_task, roles_)
@@ -2310,14 +2404,14 @@ def seal_plan(plan, mode: str = "seal") -> dict:
     for f in files:
         p = plan["_dir"] / f
         if mode == "seal" and p.is_file():
-            store[f] = _dpapi(p.read_bytes(), True).hex()
+            store[f] = _seal_bytes(p.read_bytes(), True).hex()
             write_json(plan["_dir"] / SEALED, store)
-            if _dpapi(bytes.fromhex(store[f]), False) != p.read_bytes():
+            if _seal_bytes(bytes.fromhex(store[f]), False) != p.read_bytes():
                 raise PlanError(f"seal round-trip failed for {f}")
             p.unlink()
             done.append(f)
         elif mode == "unseal" and f in store:
-            copy_file(_dpapi(bytes.fromhex(store.pop(f)), False), p)
+            copy_file(_seal_bytes(bytes.fromhex(store.pop(f)), False), p)
             done.append(f)
     if mode == "unseal":
         if store:
@@ -2426,7 +2520,7 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--partial", action="store_true", help="copy the accepted units even if others are not")
     i.add_argument("--dry-run", action="store_true")
 
-    for name, text in (("seal", "encrypt the hidden tests into hidden.sealed (DPAPI) and delete the plaintext"),
+    for name, text in (("seal", "encrypt the hidden tests into hidden.sealed (DPAPI / macOS Keychain) and delete the plaintext"),
                        ("unseal", "restore the hidden tests from hidden.sealed (to edit them; seal again after)")):
         sub.add_parser(name, help=text).add_argument("plan")
     return p

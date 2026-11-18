@@ -35,6 +35,9 @@ import outsource  # noqa: E402
 JOBS = Path(tempfile.mkdtemp(prefix="agy-jobs-"))
 os.environ["OUTSOURCE_CLAUDE"] = str(HERE / "fake_claude.py")
 os.environ["AGY_OUTSOURCE_JOBS"] = str(JOBS)
+# macOS seals with a key kept in the login Keychain: the self-tests use their own item, never the real one
+os.environ["AGY_OUTSOURCE_KEYCHAIN_SERVICE"] = "agy-outsource hidden-test seal (self-test)"
+CAN_SEAL = os.name == "nt" or sys.platform == "darwin"
 
 
 def tearDownModule():
@@ -192,6 +195,21 @@ class PlanTests(unittest.TestCase):
         d = Path(tempfile.gettempdir()) / "x_verify"
         text = f'File "{d}\\hidden/test_a.py", line 3'
         self.assertEqual(outsource.scrub(text, [d]), 'File "hidden/test_a.py", line 3')
+
+    def test_scrub_removes_a_path_given_through_a_symlink(self):
+        # macOS: /var and /tmp are symlinks into /private, and tools print whichever form they were handed
+        real = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, real, True)
+        link = Path(tempfile.mkdtemp()) / "link"
+        self.addCleanup(shutil.rmtree, link.parent, True)
+        try:
+            link.symlink_to(real, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("cannot create a symlink here")
+        for given, printed in ((link, real), (link, link)):  # handed the link, printed either way
+            with self.subTest(given=given, printed=printed):
+                text = f'File "{printed}/hidden/test_a.py", line 3'
+                self.assertEqual(outsource.scrub(text, [given]), 'File "hidden/test_a.py", line 3')
 
     def test_work_order_lists_the_directory_and_asks_nothing_redundant(self):
         p = outsource.load_plan(PLAN)
@@ -546,7 +564,7 @@ class EndToEnd(E2EBase):
         rc, res, _ = self.run_plan("perfect", "--allow-all", "--no-confine")
         self.assertEqual(rc, 0, res)
 
-    @unittest.skipUnless(os.name == "nt", "sealing uses Windows DPAPI")
+    @unittest.skipUnless(CAN_SEAL, "sealing uses Windows DPAPI or the macOS Keychain")
     def test_every_run_seals_hidden_tests_and_flags_unconfined_attempts(self):
         for extra, scenario, flagged in (([], "perfect", False), (["--no-confine"], "perfect", True),
                                          ([], "U1-normalize=hookless", True)):
@@ -736,6 +754,60 @@ class EndToEnd(E2EBase):
         first = json.loads((out / "units" / "U1-normalize" / "attempt_1.json").read_text(encoding="utf-8"))
         self.assertIn("scope", first["failed_gates"])
         self.assertIn(".agents/hooks.json", json.dumps(first["gates"]))
+
+
+class SealTests(unittest.TestCase):
+    """Hidden tests at rest: Windows seals them with DPAPI, macOS with a key kept in the login Keychain."""
+
+    def setUp(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, True)
+        spec = d / "spec"
+        shutil.copytree(PLAN.parent, spec, ignore=shutil.ignore_patterns(".agy_outsource", "audit.json"))
+        self.plan = outsource.load_plan(spec / "plan.json")
+        self.files = sorted({f for u in self.plan["units"] for f in u["hidden_tests"]})
+        self.clear = {f: (spec / f).read_bytes() for f in self.files}
+
+    def test_keychain_cipher_round_trips_and_rejects_tampering(self):
+        key, data = bytes(range(32)), b"def test_secret():\n    assert slugify('A b') == 'a-b'\n" * 50
+        blob = outsource._kc_encrypt(key, data)
+        self.assertNotIn(data[:40], blob)
+        self.assertNotEqual(blob, outsource._kc_encrypt(key, data), "a fresh nonce per seal")
+        self.assertEqual(outsource._kc_decrypt(key, blob), data)
+        for bad in (blob[:-1] + bytes([blob[-1] ^ 1]), blob[:30] + bytes([blob[30] ^ 1]) + blob[31:], blob[:10]):
+            with self.assertRaises(outsource.PlanError):
+                outsource._kc_decrypt(key, bad)
+        with self.assertRaises(outsource.PlanError):
+            outsource._kc_decrypt(bytes(32), blob)
+
+    def test_a_keychain_that_will_not_answer_is_a_plan_error_not_a_hang(self):
+        for side in (subprocess.CompletedProcess([], 51, "", "User interaction is not allowed."),
+                     subprocess.TimeoutExpired("security", 30)):
+            with self.subTest(side=side), mock.patch.object(outsource, "_KC_KEY", None), \
+                    mock.patch.object(outsource.subprocess, "run", side_effect=[side]):
+                with self.assertRaises(outsource.PlanError):
+                    outsource._keychain_key(create=False)
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS Keychain")
+    def test_macos_seal_leaves_no_plaintext_and_unseal_restores_it(self):
+        self.assertTrue(outsource.can_seal())
+        res = outsource.seal_plan(self.plan)
+        self.assertEqual(res["sealed"], self.files)
+        spec = self.plan["_dir"]
+        for f, clear in self.clear.items():
+            self.assertFalse((spec / f).exists(), f"plaintext {f} left on disk")
+            self.assertEqual(outsource.hidden_src(self.plan, f), clear)
+        on_disk = b"".join(p.read_bytes() for p in spec.rglob("*") if p.is_file())
+        for clear in self.clear.values():
+            line = max(clear.splitlines(), key=len)
+            self.assertNotIn(line, on_disk, "a hidden test line is readable on disk")
+            self.assertNotIn(line.hex().encode(), on_disk)
+        cp = subprocess.run(["security", "find-generic-password", "-s", os.environ["AGY_OUTSOURCE_KEYCHAIN_SERVICE"]],
+                            capture_output=True, text=True)
+        self.assertEqual(cp.returncode, 0, "the seal key lives in the Keychain")
+        outsource.seal_plan(self.plan, "unseal")
+        self.assertFalse((spec / outsource.SEALED).exists())
+        self.assertEqual({f: (spec / f).read_bytes() for f in self.files}, self.clear)
 
 
 class Processes(unittest.TestCase):

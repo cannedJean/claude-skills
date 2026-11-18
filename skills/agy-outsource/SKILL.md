@@ -163,8 +163,9 @@ its code comes only from `outsource.py run`.
 - agy can only reach its job dir: agy-delegate installs a `PreToolUse` hook that denies every tool call on a path
   outside it (also hard links and `..` look-alikes) and every shell, browser and MCP tool, and reports whether the
   hook really saw every tool call; if not, the attempt counts as `unconfined`.
-- As a second layer, on Windows `run` seals the hidden tests (once the plan, the arguments and the audit passed;
-  milliseconds, no tokens): they move into `<spec>/hidden.sealed` (DPAPI-encrypted) and the plaintext is deleted.
+- As a second layer, on Windows and macOS `run` seals the hidden tests (once the plan, the arguments and the audit
+  passed; milliseconds, no tokens): they move into `<spec>/hidden.sealed` (Windows: DPAPI; macOS: a random key kept
+  in the login Keychain) and the plaintext is deleted. On macOS a locked Keychain makes `run` fail, not wait.
   They are decrypted into a verify, red or integration dir only while no contractor session of the run is live
   (with `-j` > 1 a unit's test gate waits for the running sessions), and deleted right after the gate. To edit them:
   `outsource.py unseal PLAN`, edit `hidden/`, then `outsource.py seal PLAN`.
@@ -216,7 +217,7 @@ integration failed / integrate conflict / audit failed, 3 agy quota or runtime e
   accepted/                        accepted deliverables, project layout
   integration/                     assembled tree the integration tests ran in
 <spec>/audit.json                  audit verdicts per unit (they quote hidden tests: keep the file with them)
-<spec>/hidden.sealed               the sealed hidden tests (Windows, after the first run)
+<spec>/hidden.sealed               the sealed hidden tests (Windows/macOS, after the first run)
 ```
 
 Self-test of this skill without agy: `python -m unittest discover -s scripts/tests`.

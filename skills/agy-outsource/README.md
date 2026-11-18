@@ -93,8 +93,9 @@ tamper gate and the result-line check; this version has not been re-measured.
   `scripts/pytest_nonce/` plugin for its nonce'd result line).
 - For `audit`, `triage` and `--contractor claude:<model>`: the `claude` CLI (or `OUTSOURCE_CLAUDE`).
 
-Try it on a **copy** of the example: `run` seals the hidden tests in place (on Windows it deletes
-`hidden/*.py` and writes a DPAPI `hidden.sealed` only your Windows user can decrypt), and `check --red` / `audit`
+Try it on a **copy** of the example: `run` seals the hidden tests in place (on Windows and macOS it deletes
+`hidden/*.py` and writes a `hidden.sealed` only your user can decrypt: DPAPI on Windows, a key in the login Keychain
+on macOS), and `check --red` / `audit`
 write `.agy_outsource/` and `audit.json` next to the plan.
 
 ```bash
