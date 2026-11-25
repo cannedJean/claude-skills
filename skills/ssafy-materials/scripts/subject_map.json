@@ -1,0 +1,30 @@
+{
+  "_comment": "Maps project.ssafy.com course titles and practice-repo prefixes to the subject folder used under lm/, ws/ and hw/. Course title wins when the project manifest knows the repo's course. Edit freely; unknown prefixes fall back to the raw prefix and are listed in the report.",
+  "course": {
+    "[데이터] Web": "web",
+    "[데이터] Javascript": "js",
+    "[데이터] Vue.js": "vue",
+    "[데이터] Django": "django",
+    "[데이터] Python": "python_adv",
+    "[데이터] DB": "database",
+    "[데이터] 데이터 기초": "stats",
+    "[데이터] 데이터 사이언스 기초": "ds",
+    "[데이터] 데이터 사이언스 활용": "ds",
+    "[데이터] 데이터 엔지니어링 기초": "de",
+    "[데이터] 데이터 엔지니어링 활용 (1)": "de",
+    "[데이터] 데이터 엔지니어링 활용 (2)": "de",
+    "AI 강의 Ⅱ": "ai"
+  },
+  "prefix": {
+    "web": "web",
+    "javascript": "js",
+    "vue": "vue",
+    "django": "django",
+    "python_adv": "python_adv",
+    "db": "database",
+    "data_analysis": "stats",
+    "data_science": "ds",
+    "data_engineering": "de",
+    "chapter": "ai"
+  }
+}

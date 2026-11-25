@@ -15,6 +15,7 @@ Personal [Claude Code](https://claude.com/claude-code) skills. Each skill is a s
 | [lecture-knowledge-pack](skills/lecture-knowledge-pack/) | Turn a whole course's slide analyses (agy-slide-analyzer / agy-pdf-analyzer output, one folder per lecture) into a layered knowledge package for a tutoring agent: verified text first, slide images and region crops as linked evidence. Re-checks what character coverage cannot (code/SQL operators, table cells, arrow direction, formulas, `[?]`, digits on single-OCR-engine slides) with blind Claude subagent reads of whole-block crops and a 2-of-3 vote that never deletes analysis text; builds decks (sections, Bloom objectives, concepts with KO/EN aliases, prerequisites, exam points), an append-only concept registry for stable learner-state keys, per-slide cards with trust labels and a `TUTOR_GUIDE`; publishes only when a deterministic gate (coverage, verbatim preservation, links, ids, read limits, provenance, freshness) passes. Tested on a real 123-slide deck: see [references/trust.md](skills/lecture-knowledge-pack/references/trust.md) | agy-slide-analyzer (shared code); Pillow, numpy recommended |
 | [kaggle-submit](skills/kaggle-submit/) | End-to-end Kaggle competition submission: first-run `doctor`/`setup` (install CLI, place credentials, verify auth), competition info and rules check, data download, `sample_submission` validation, submit with score polling, local submission log, leaderboard | official `kaggle` CLI (PyPI 2.2.x and git main both supported) |
 | [gdrive-bridge](skills/gdrive-bridge/) | Move data bundles and Colab outputs through Google Drive: push a zip into the Drive for Desktop mount, verify a human-made share link for `gdown` (fresh-VM runner path), generate Colab `drive.mount`/`export` cells with manifest verification, and pull results back with sha256 checks | Google Drive for Desktop mount (`G:\` on Windows, `~/Library/CloudStorage` on macOS); stdlib only |
+| [ssafy-materials](skills/ssafy-materials/) | Bring SSAFY course material to a local folder in the `lm` / `ws` / `hw` layout: lecture repos from the lab.ssafy.com course group, plus one repo per project.ssafy.com problem from the user's own GitLab namespace, sorted by the site's 유형 (실습 → `ws`, 과제 → `hw`) into subject folders, with each problem statement saved as the repo's `README.md`. Page scripts run in the user's signed-in Chrome; the project-site collector drives the site's own UI in hidden iframes (never its token or API) and checkpoints to resume. `sync.py` only clones or fast-forwards and never prompts | Claude in Chrome; git (Git Credential Manager); stdlib only |
 
 ## Install
 
@@ -31,6 +32,7 @@ cp -r claude-skills/skills/agy-pdf-analyzer ~/.claude/skills/
 cp -r claude-skills/skills/lecture-knowledge-pack ~/.claude/skills/
 cp -r claude-skills/skills/kaggle-submit ~/.claude/skills/
 cp -r claude-skills/skills/gdrive-bridge ~/.claude/skills/
+cp -r claude-skills/skills/ssafy-materials ~/.claude/skills/
 ```
 
 Windows PowerShell:
@@ -65,6 +67,8 @@ skills/
                            prompts/{struct_read,integrate_lecture,merge_concepts}.md, references/{trust,schemas,tutor_guide,eval}.md
   kaggle-submit/           SKILL.md, README.md, scripts/kaggle_submit.py, references/{kaggle-cli-competitions,troubleshooting}.md
   gdrive-bridge/           SKILL.md, README.md, scripts/gdrive_bridge.py
+  ssafy-materials/         SKILL.md, README.md, scripts/{lab_lister,project_collector,project_poll,project_export}.js,
+                           scripts/{sync.py,subject_map.json}
 docs/
   ocr-evaluation-design.md  why and how the analyzers verify agy's transcriptions without a second LLM look
 ```
