@@ -282,3 +282,39 @@ Claude Code
 - 앱 외부 진입 경로는 없다(main.js 읽기 전용 조사): 명령줄 처리는 `--hide`, `--open-minichat`, `--check-for-updates`, `--open-settings`, `--switch-account`, `--sign-out`, `--open-logs`, `--start-dictation`, 테스트 크래시 플래그뿐이다. 대화 URL 인자·프로토콜 핸들러는 없고, 시작 URL은 prod에서 `https://gemini.google.com/app` 고정이다.
 - 후보(미검증, 구현 보류): (a) 앱 안 「채팅 검색」에 job 대화 제목(우리가 만든 계획 카드 제목)을 넣고, 결과 Hyperlink를 URL 값으로만 매칭한다(결과 이름은 기록하지 않음). 입력이 필요하므로 별도 무쿼터 스파이크 후 결정한다. (b) 대화 고정(pin)은 사용자 계정 상태를 바꾸므로 쓰지 않는다(후보로만 기록).
 - 설계 영향: 같은 계정을 쓰는 D2에서도 사용자의 일상 사용이 job 대화를 목록 밖으로 밀어낼 수 있다. 장시간 대기는 "새로고침 없이 살아 있는 화면"(스위치)이 1순위이고, 새로고침 복구는 링크가 보일 때만 쓰는 보조 수단이다.
+
+## 22. 현재 상태 (2026-11-26 17:50, 사용자 지시로 작업 종료)
+
+이어받는 사람은 이 절만 읽고 시작하면 된다. 상세 기록은 `C:\Users\SSAFY\w\PROGRESS.md`, 스파이크 원자료는 `C:\Users\SSAFY\w\spike\`(레포 밖), 교차검증은 `C:\Users\SSAFY\w\reviews\`에 있다.
+
+**끝난 것**
+- Phase 0·G2 스파이크: 숨은 데스크톱 + 전용 프로필 + UIA로 창·문서 바인딩, Deep Research 켜기, 프롬프트 SetValue(12k자 정확), 전송, 계획 카드, 카운트다운 취소, 계획 추출, 계획 수정 전송, 연구 시작까지 실측. 기본 데스크톱 포그라운드 변화 0(11:23–13:23 134회 중 Gemini 0). 앱 폴더 해시는 시작부터 종료까지 동일.
+- 설계(이 문서 §1–§21), builder check(§17b), X1 agy Neon high 45건 처분(`reviews\REVIEW_LOG.md`, §20), G3 사용자 결정(§21.1).
+- 구현 계획 `docs/superpowers/plans/2026-11-26-agy-deep-research-uia-core.md`(Task 1–8).
+- Task 1(`uitree.py`, `tests/test_uitree.py`): 구현자 서브에이전트가 작성하고 테스트 5개 통과까지 됐으나 **task review 전에 중단**했다. 미검토 상태로 커밋되어 있다.
+
+**안 끝난 것**
+- 계획 Task 1 리뷰, Task 2–8(privacy, locators, gemini_host, 정적 검사, 패처·Chrome 제거, confinement, plan/edit 단계), X2.
+- 계획 밖: `uia_backend.py`, gemini_host의 Win32 부분, `run_deep_research.py` 재작성, approve/collect/장시간 대기, `report_md.py`, doctor/signin/app CLI, 문서(SKILL.md·references) 재작성, G4 E2E.
+- 기존 코드는 아직 패처·Chrome 모드 그대로다(설치본 교체 금지).
+
+**미해결 위험**
+1. **숨은 창에서 연구 완료 미입증.** 12:04 연구는 완료되지 못했다. 사용자가 보이는 Gemini에서 확인한 상태는 "오류·중단·대화 없음"(셋 중 어느 것인지는 미확정)이고, 보고서는 없었다. 숨은 창에서는 12:07 이후 "웹사이트 45개 조사 중"으로 고정돼 보였다. 원인 후보는 셋이다. (a) 숨은 창에서 클라이언트가 멈춰 연구가 실패했다. (b) 연구 중 약 1분 간격으로 반복한 새로고침·재진입이 연구를 중단시켰다. (c) 무관한 서버 오류. 이 위험이 숨은 데스크톱 방식의 장시간 단계 성패를 가른다.
+2. **재진입이 사이드바 최근 목록에 의존한다.** 앱 밖에서 대화로 들어가는 경로는 없다(§21.3). 불변식은 "돌아올 링크가 보이기 전에는 새로고침하지 않는다"이다. 「채팅 검색」 경로는 미검증.
+3. **스위치 3개의 효과는 판정 불가.** 가드 통과·명령줄 반영은 확인했다. 그러나 판정용 전송 #3이 Gemini 오류 응답을 받았고, 무전송 반응 시험으로는 차이가 없었다.
+4. **S8(보고서 트리 → Markdown)은 미측정.** 시험 변환기는 `spike\s8_md.py`에 있다.
+
+**사용자 결정과 허용 범위** (§21.1)
+- 앱 스위치는 `--user-data-dir=<전용 경로>`, `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`, `--disable-features=CalculateNativeWinOcclusion`만 허용한다.
+- `auto`는 경로를 통일한다. 모델 기본값은 Neon + 사고 수준 높음이다(pro→Neon, flash→Hydrogen, argon→카본). 보고서 검증은 구조 검사로 하고, 클립보드는 선택 기능이다.
+
+**쓴 예산**
+- 계획까지 간 전송 3회(#1, #2 정상, #3 오류 응답), 연구 1회.
+- 승인됐다가 종료 지시로 무효가 된 추가 예산: 연구 1회, 계획 전송 2회.
+
+**계정에 남은 테스트 대화**: 테스트 대화 1(사용자 확인: 오류·중단·대화 없음 중 하나), 테스트 대화 2(오류 응답 1개). 전용 프로필 `%LOCALAPPDATA%\agy-deep-research\gemini-profile`에는 로그인 상태가 남아 있다. 대화 URL은 공개 저장소에 싣지 않고 `PROGRESS.md`(레포 밖)에만 둔다.
+
+**재개 시 첫 작업**
+1. 위험 1을 먼저 가른다. 스위치 3개 구성으로, 연구 중 새로고침 0회·창 조작 없이 트리 읽기만 하며 연구 1회를 끝까지 관찰한다. 60분 무변화일 때만 재진입 링크가 보이는지 확인한 뒤 1회 새로고침한다. 시작 전에 계획 전송 2회(스위치 있음/없음)로 계획 단계를 비교한다(예산은 사용자 재승인 필요).
+2. 그래도 연구가 완료되지 않으면 숨은 데스크톱 방식의 장시간 단계는 NO-GO 후보로 본다. 대안을 평가한다: 입력·승인은 숨은 데스크톱에서 하고, 연구 대기·수집 동안만 보이는 데스크톱에 최소 방해로 두거나, 수집 시점에만 보이게 띄우는 구성.
+3. S7·S8 비의존 구현은 계획 Task 1 리뷰부터 이어간다(`.superpowers/sdd/2026-11-26-agy-deep-research-uia-core/progress.md` ledger가 있다).
