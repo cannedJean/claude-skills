@@ -259,3 +259,26 @@ Claude Code
 12. **confinement 강화**: `job.json`·`relay/foreground.jsonl`을 deep-research 보호 목록에 추가한다(S5-3, 사실 확인). venv는 `-I`/`-s -E`로 실행하고 `comtypes`는 `--require-hashes`로 설치한다. 앱 실행 환경에서 `NODE_*`/`ELECTRON_*`를 제거한다(S9, S11).
 13. **보고서 완전성**: 완료 = 완료 신호 + 길이 2회 안정 + 복구 후 재판독 일치. 여기에 구조 검사(제목·출처 링크·표 행 일관성)를 더한다. 클립보드 교차 확인은 기본 꺼짐 + 사용자 확인 + 클립보드 기록 제외(F17, F23, S8). R3의 "복사 경로 교차 확인"을 구조 검사로 대체할지는 G3 결정.
 14. **doctor 한계 명시**: 무쿼터 doctor는 지금 화면에서 확인 가능한 로케이터만 검증한다. 나머지는 마지막 성공 실행의 해석 기록과 비교해 표시한다(U8, F7).
+
+## 21. G3 결정과 후속 수정 (2026-11-26, 사용자 승인: 조건부)
+
+설계는 **조건부 승인**이다. 구조와 독립 단위(UiTree·Fake, 로케이터, privacy, gemini_host 결정 로직, 제거·정적 검사, confinement, plan/edit 단계 로직)는 구현에 들어간다. 장시간 대기·완료 감지·보고서 추출(§11-9/10, report_md의 최종 규칙)은 위험 1이 풀린 뒤 확정한다.
+
+### 21.1 사용자 결정 (원문 선택지)
+- **갱신 정지 대책 — "스위치 시험 허용 (Recommended)"**: R1 허용 스위치를 `--user-data-dir=<전용 경로>` + `--disable-backgrounding-occluded-windows` + `--disable-renderer-backgrounding` + `--disable-features=CalculateNativeWinOcclusion`로 한정한다. 효과가 확인되면 기본으로 켜고, 막히면(가드 종료·무시) 새로고침 방식으로 후퇴한다. 정적 검사는 이 4개 외의 스위치 문자열이 실행 코드에 들어오면 실패한다.
+- **auto (B1) — "유지하되 경로 통일 (Recommended)"**: `auto` = plan 단계(카운트다운 취소 + 계획 저장) → `--reason` 필수 자동 승인 → approve 경로. 연구 시작 코드는 approve 한 곳뿐이다.
+- **모델 (B2) — "Neon 높음 기본 (Recommended)"**: 기본 = 심층 분석 4 Neon + 사고 수준 높음. `pro`→Neon, `flash`→Hydrogen, `argon`→카본(Argon용 긴 시간 설정을 카본이 물려받음). 예전 job의 `Pro`는 Neon으로 읽는다. 일치는 유일 일치만 인정하고, 여럿이면 `MODEL_AMBIGUOUS`, 없으면 `MODEL_NOT_AVAILABLE`.
+- **보고서 검증 (R3) — "구조 검사로 대체 (Recommended)"**: 트리 경로 + 구조 검사(제목 수, 출처 링크 수, 표 행 일관성, 길이 안정)를 기본으로 한다. 클립보드 비교는 명시적으로 켤 때만 쓰는 선택 기능이며, 쓰면 결과에 기록한다.
+
+### 21.2 스위치 시험 결과 (진행 중)
+- 가드 차단 목록(main.js에서 읽기만 함): remote-debugging-port/pipe, remote-allow-origins, inspect*, proxy-server/pac-url, host-rules, host-resolver-rules, ignore-certificate-errors*, allow-running-insecure-content, disable-web-security, load-extension, disable-extensions-except, bundled-web-dir. 시험한 3개와 `--user-data-dir`은 목록에 없다.
+- 실측(17:14): 3개를 붙여 실행하면 가드를 통과하고, 3개 모두 브라우저 명령줄에 반영되며, 렌더러에는 feature 플래그가 반영된다. 로그인도 유지된다.
+- 전송 #3(17:15)은 계획 카드 대신 Gemini 오류 응답을 받았다. 숨은 창은 이 응답을 새로고침 없이 표시했다. 앞선 연구가 아직 진행 중이라 막혔을 가능성이 있다. → 갱신 정지 해소 여부는 **미판정**이다(추가 전송 예산 대기).
+- 사용자 조작 반응(도구 메뉴 열기·닫기 6.5분)은 스위치 유무에 차이가 없다(열기 2.15–2.18초, 닫기 0.14–0.17초). 이 시험으로는 판별할 수 없다.
+
+### 21.3 재진입 (§11-12 수정, 미해결 1)
+- **불변식**: 돌아올 수단(job URL과 정확히 일치하는 Hyperlink)이 **지금 트리에 보이는지 확인하기 전에는 새로고침하지 않는다.** 보이지 않으면 복구를 시도하지 않고 현재 화면을 유지한 채 `RECOVERY_UNAVAILABLE`로 기록한다(단계는 계속 기다리거나 시간 초과로 끝낸다). 스위치로 새로고침이 드물어져도 이 불변식은 유지한다.
+- 근거(17:02–17:04): 연구 시작 5시간 뒤 새로고침했더니 job 대화가 사이드바 최근 목록(대화형 링크 4개)에서 빠져 있었고, 「더보기」를 두 번 눌러도 나타나지 않았다. 12:01에는 목록에 있었다. 같은 계정의 새 대화에 밀려났을 수 있다.
+- 앱 외부 진입 경로는 없다(main.js 읽기 전용 조사): 명령줄 처리는 `--hide`, `--open-minichat`, `--check-for-updates`, `--open-settings`, `--switch-account`, `--sign-out`, `--open-logs`, `--start-dictation`, 테스트 크래시 플래그뿐이다. 대화 URL 인자·프로토콜 핸들러는 없고, 시작 URL은 prod에서 `https://gemini.google.com/app` 고정이다.
+- 후보(미검증, 구현 보류): (a) 앱 안 「채팅 검색」에 job 대화 제목(우리가 만든 계획 카드 제목)을 넣고, 결과 Hyperlink를 URL 값으로만 매칭한다(결과 이름은 기록하지 않음). 입력이 필요하므로 별도 무쿼터 스파이크 후 결정한다. (b) 대화 고정(pin)은 사용자 계정 상태를 바꾸므로 쓰지 않는다(후보로만 기록).
+- 설계 영향: 같은 계정을 쓰는 D2에서도 사용자의 일상 사용이 job 대화를 목록 밖으로 밀어낼 수 있다. 장시간 대기는 "새로고침 없이 살아 있는 화면"(스위치)이 1순위이고, 새로고침 복구는 링크가 보일 때만 쓰는 보조 수단이다.
