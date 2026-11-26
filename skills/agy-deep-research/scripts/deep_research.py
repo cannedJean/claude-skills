@@ -44,17 +44,26 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
 DEFAULT_AGY_TASK = SKILL_DIR.parent / "agy-delegate" / "scripts" / "agy_task.py"
 DEFAULT_TARGET_SKILL_DIR = Path.home() / ".gemini" / "config" / "skills" / "local-gemini-deep-research"
-BUNDLED_SCRIPTS = ("relay_step.py", "run_deep_research.py", "patch_gemini_app.py")
+BUNDLED_SCRIPTS = ("relay_step.py", "run_deep_research.py", "patch_gemini_app.py", "chrome_launcher.py")
 BUNDLED_REF_SKILL = SKILL_DIR / "references" / "SKILL.md"
 RELAY_TASK_TEMPLATE = SKILL_DIR / "prompts" / "agy_relay_task.md"
 
 RELAY_VERSION = 2
+BROWSERS = ("chrome", "app")    # chrome: visible Chrome window on its own profile (no app patch); app: patched desktop app
+DEFAULT_BROWSER = "chrome"      # for new jobs; a job created before `--browser` existed has no field and stays on "app"
+APP_CDP_RECOVERY = (
+    '2. If and only if `relay/result.json` reports `status: "error"` with `code: "CDP_NOT_READY"` or `"CDP_CONNECT_FAILED"` and `prompt_sent: false`, run `python "{dr_skill_dir}/scripts/patch_gemini_app.py"` once and re-run `relay_step.py --job "{job_dir}"` once.'
+)
+CHROME_CDP_RECOVERY = (
+    "2. Never run `patch_gemini_app.py`: this job uses a Chrome window on gemini.google.com, not the desktop app. "
+    "On any error code (including `CHROME_NOT_FOUND` / `CHROME_CDP_NOT_READY`), report it without retrying."
+)
 REPORT_MIN_CHARS = 400
 MIN_REASON_CHARS = 20
 DEFAULT_TIMEOUT = 1200
-DEFAULT_PLAN_DEADLINE = 420
+DEFAULT_PLAN_DEADLINE = 960  # > driver plan-wait cap (GEMINI_DR_PLAN_MAX_WAIT, default 900s)
 ARGON_TIMEOUT = 1800
-ARGON_PLAN_DEADLINE = 600
+ARGON_PLAN_DEADLINE = 1200
 SENSITIVE_KEYWORDS = ("민주주의", "선거", "정치", "대통령", "정당", "투표")
 REQUIRED_PROMPT_XML_TAGS = (
     "research_objective",
@@ -77,6 +86,14 @@ JSON_ONLY_TRAPS = (
     re.compile(r"\bjson\s+only\b", re.I),
     re.compile(r"\bno\s+markdown\b", re.I),
     re.compile(r"순수\s*JSON만|마크다운\s*(?:헤더\s*)?없이", re.I),
+)
+# Report warnings: decided without reading for meaning; an accepted report is flagged, never refused, after the quota
+# was spent. Whether the report meets goal.md is the caller's review (SKILL.md step 7).
+REFUSAL_SCAN_CHARS = 600
+REFUSAL_PATTERNS = (
+    re.compile(r"\b(?:I\s+can(?:no|')t|I\s+am\s+unable\s+to|I'm\s+unable\s+to|I\s+won't)\s+(?:help|assist|provide|do)\b", re.I),
+    re.compile(r"\b(?:something\s+went\s+wrong|an\s+error\s+occurred|try\s+again\s+later)\b", re.I),
+    re.compile(r"도와드릴\s*수\s*없|도움을\s*드릴\s*수\s*없|답변(?:을|해)\s*드릴\s*수\s*없|문제가\s*발생했|다시\s*시도해\s*주"),
 )
 # Gemini conversation url -> id; the same parser lives in relay_step.py and run_deep_research.py
 _CONVERSATION_PATH_RE = re.compile(r"(?:^|/)app/([A-Za-z0-9_-]+)(?:/|$)", re.IGNORECASE)
@@ -867,6 +884,21 @@ def enforce_report_quality_gate(markdown: str) -> dict:
     return {"report_chars": chars, "has_heading": has_heading, "sources_count": sources_count}
 
 
+def compute_report_warnings(markdown: str, sources_count: int, job: dict, job_dir: Path) -> list[str]:
+    """Deterministic flags for an accepted report (see REFUSAL_PATTERNS); order is stable."""
+    warnings: list[str] = []
+    if int(sources_count or 0) <= 0:
+        warnings.append("NO_SOURCES")
+        head = (markdown or "")[:REFUSAL_SCAN_CHARS]
+        if any(p.search(head) for p in REFUSAL_PATTERNS):
+            warnings.append("REFUSAL_SUSPECTED")
+    goal_path = job_dir / "goal.md"
+    recorded = job.get("goal_sha256")
+    if recorded and goal_path.is_file() and sha256_file(goal_path) != recorded:
+        warnings.append("GOAL_CHANGED_SINCE_INIT")
+    return warnings
+
+
 # --------------------------------------------------------------------------- skill sync & preflight
 def resolve_target_skill_dir(explicit: str | None = None) -> Path:
     cand = explicit or os.environ.get("AGY_DR_SKILL_DIR") or os.environ.get("AGY_CONFINE_DR_DIR")
@@ -964,6 +996,29 @@ def cmd_setup(a) -> int:
     return 0
 
 
+def read_patch_status(port: int) -> dict:
+    """Read-only app patch diagnostics from the bundled patch_gemini_app.py (installed version, patched, whether the
+    guard pattern still matches, whether an update undid an earlier patch). Never writes, never launches the app."""
+    try:
+        sys.path.insert(0, str(SCRIPT_DIR))
+        try:
+            import patch_gemini_app
+        finally:
+            sys.path.remove(str(SCRIPT_DIR))
+        return patch_gemini_app.patch_status(port=port)
+    except Exception as e:   # diagnostics only: a broken patcher must not hide the rest of preflight
+        return {"error": str(e)}
+
+
+def read_chrome_status() -> dict:
+    """Read-only Chrome-mode facts: chrome.exe path, dedicated profile, debugging port liveness. Never launches."""
+    try:
+        from chrome_launcher import check
+        return check()
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def cmd_preflight(a) -> int:
     target_dir = resolve_target_skill_dir(getattr(a, "target_dir", None))
     sync_info = check_sync_status(target_dir)
@@ -998,8 +1053,11 @@ def cmd_preflight(a) -> int:
 
     # Check Gemini Desktop App & CDP
     cdp_port = int(os.environ.get("GEMINI_CDP_PORT", 9223))
-    gemini_base = os.path.expandvars(r"%LOCALAPPDATA%\Google\Gemini") if IS_WINDOWS else ""
+    gemini_base = os.environ.get("GEMINI_APP_BASE_DIR") or (os.path.expandvars(r"%LOCALAPPDATA%\Google\Gemini") if IS_WINDOWS else "")
     app_dirs = sorted(glob.glob(os.path.join(gemini_base, "app-*"))) if gemini_base else []
+    patch = read_patch_status(cdp_port) if app_dirs else None
+    if patch and patch.get("asar_path"):   # numeric version order (app-1.9 < app-1.21), as the patcher picks it
+        app_dirs.append(str(Path(patch["asar_path"]).parent.parent))
     cdp_alive = False
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{cdp_port}/json/version", timeout=1.5) as resp:
@@ -1011,7 +1069,9 @@ def cmd_preflight(a) -> int:
         "latest_app_dir": app_dirs[-1] if app_dirs else None,
         "cdp_port": cdp_port,
         "cdp_alive": cdp_alive,
+        "patch": patch,
     }
+    checks["chrome"] = read_chrome_status()
 
     bundled_ok = all((SCRIPT_DIR / name).is_file() for name in BUNDLED_SCRIPTS) and BUNDLED_REF_SKILL.is_file()
     checks["bundled_files"] = {"ok": bundled_ok}
@@ -1041,12 +1101,32 @@ def save_job(job_dir: Path, job: dict) -> None:
     write_json_atomic(job_dir / "job.json", job)
 
 
-def build_relay_task_prompt(step: str, seq: int, job_dir: Path, dr_skill_dir: Path) -> str:
+def job_browser(job: dict) -> str:
+    return job.get("browser") or "app"
+
+
+def chrome_cdp_url() -> str:
+    from chrome_launcher import chrome_port   # stdlib-only sibling script
+    return f"http://127.0.0.1:{chrome_port()}"
+
+
+def apply_browser(req: dict, job: dict) -> dict:
+    """Tell the relay and driver which browser this job drives (the driver defaults to the app when unset)."""
+    browser = job_browser(job)
+    req.setdefault("env", {})["GEMINI_DR_BROWSER"] = browser
+    if browser == "chrome":
+        req["cdp_url"] = chrome_cdp_url()
+    return req
+
+
+def build_relay_task_prompt(step: str, seq: int, job_dir: Path, dr_skill_dir: Path, browser: str = "app") -> str:
     job_str = str(job_dir).replace("\\", "/")
     dr_str = str(dr_skill_dir).replace("\\", "/")
+    recovery = CHROME_CDP_RECOVERY if browser == "chrome" else APP_CDP_RECOVERY
     if RELAY_TASK_TEMPLATE.is_file():
         tpl = read_text(RELAY_TASK_TEMPLATE)
-        return tpl.format(step=step, seq=seq, job_dir=job_str, dr_skill_dir=dr_str)
+        return tpl.format(step=step, seq=seq, job_dir=job_str, dr_skill_dir=dr_str,
+                          cdp_recovery=recovery.format(job_dir=job_str, dr_skill_dir=dr_str))
     return (
         f"Run `python \"{dr_str}/scripts/relay_step.py\" --job \"{job_str}\"` to execute step '{step}' (seq {seq}), "
         "then read `relay/result.json` (or `relay/started.json`) and report the structured result."
@@ -1065,9 +1145,10 @@ def invoke_agy_relay(
     if not agy_task.is_file():
         die(f"agy_task.py not found at {agy_task}", 3, code="AGY_TASK_NOT_FOUND")
     dr_skill_dir = resolve_active_dr_skill_dir(target_skill_dir)
-    task_prompt = build_relay_task_prompt(step, seq, job_dir, dr_skill_dir)
-
     job_data = read_json_safe(job_dir / "job.json") or {}
+    browser = job_browser(job_data)
+    task_prompt = build_relay_task_prompt(step, seq, job_dir, dr_skill_dir, browser=browser)
+
     if not agy_model:
         agy_model = job_data.get("agy_model") or normalize_agy_model(
             os.environ.get("AGY_DR_MODEL") or os.environ.get("AGY_MODEL") or os.environ.get("AGY_TASK_MODEL")
@@ -1093,7 +1174,7 @@ def invoke_agy_relay(
         "-t",
         task_prompt,
     ]
-    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1", GEMINI_DR_BROWSER=browser)
     cp = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     agy_summary = {}
     if cp.stdout and cp.stdout.strip():
@@ -1212,6 +1293,7 @@ def write_output_meta(
     url: str,
     conversation_id: str = "",
     report_title: str = "",
+    report_warnings: list[str] | None = None,
 ) -> Path:
     meta_path = Path(str(out_path) + ".meta.json")
     meta = {
@@ -1220,6 +1302,7 @@ def write_output_meta(
         "completed_at": completed_at,
         "prompt": read_text(job_dir / "prompt.md").strip() if (job_dir / "prompt.md").is_file() else "",
         "goal": read_text(job_dir / "goal.md").strip() if (job_dir / "goal.md").is_file() else "",
+        "goal_sha256": sha256_file(job_dir / "goal.md") if (job_dir / "goal.md").is_file() else None,
         "approved_plan": job.get("latest_plan") or "",
         "plan_iterations": int(job.get("plan_iterations") or 0),
         "approval_reason": job.get("approval_reason") or "",
@@ -1230,6 +1313,7 @@ def write_output_meta(
         "meta_file": str(meta_path),
         "report_chars": gate_stats["report_chars"],
         "sources_count": int(sources_count),
+        "report_warnings": list(report_warnings or []),
         "elapsed_s": float(elapsed_s),
         "progress_highlights": highlights,
         "confinement": job.get("last_confinement") or {"mode": "deep-research", "enabled": True},
@@ -1286,6 +1370,9 @@ def finalize_completed_report(
     report_title = str(res.get("report_title") or "")
     if res.get("plan") and not job.get("latest_plan"):
         job["latest_plan"] = res["plan"]
+    report_warnings = compute_report_warnings(markdown, int(sources_count), job, job_dir)
+    for w in report_warnings:
+        log(f"WARNING: report accepted with {w}; check it before reporting (SKILL.md step 7)")
 
     meta_path = write_output_meta(
         job_dir=job_dir,
@@ -1300,6 +1387,7 @@ def finalize_completed_report(
         url=url,
         conversation_id=conversation_id,
         report_title=report_title,
+        report_warnings=report_warnings,
     )
 
     job.update({
@@ -1312,6 +1400,7 @@ def finalize_completed_report(
         "meta_file": str(meta_path),
         "report_chars": gate_stats["report_chars"],
         "sources_count": int(sources_count),
+        "report_warnings": report_warnings,
         "elapsed_s": float(elapsed_s),
         "progress_highlights": highlights,
         "agy_model": job.get("agy_model", DEFAULT_AGY_MODEL),
@@ -1334,6 +1423,7 @@ def finalize_completed_report(
         "meta_file": str(meta_path),
         "report_chars": gate_stats["report_chars"],
         "sources_count": int(sources_count),
+        "report_warnings": report_warnings,
         "plan_iterations": int(job.get("plan_iterations") or 0),
         "elapsed_s": float(elapsed_s),
         "progress_highlights": highlights,
@@ -1384,7 +1474,7 @@ def cmd_plan(a) -> int:
     }
     if getattr(a, "show", False):
         req["show"] = True
-    write_json_atomic(relay_dir / "request.json", req)
+    write_json_atomic(relay_dir / "request.json", apply_browser(req, job))
 
     rc, agy_summary, dr_res = invoke_agy_relay(
         job_dir, "plan", seq, getattr(a, "dr_skill_dir", None),
@@ -1492,7 +1582,7 @@ def cmd_edit(a) -> int:
     }
     if getattr(a, "show", False):
         req["show"] = True
-    write_json_atomic(relay_dir / "request.json", req)
+    write_json_atomic(relay_dir / "request.json", apply_browser(req, job))
 
     rc, agy_summary, dr_res = invoke_agy_relay(
         job_dir, "edit", seq, getattr(a, "dr_skill_dir", None),
@@ -1599,7 +1689,7 @@ def cmd_approve(a) -> int:
     }
     if getattr(a, "show", False):
         req["show"] = True
-    write_json_atomic(relay_dir / "request.json", req)
+    write_json_atomic(relay_dir / "request.json", apply_browser(req, job))
 
     rc, agy_summary, dr_res = invoke_agy_relay(
         job_dir, "approve", seq, getattr(a, "dr_skill_dir", None),
@@ -1657,6 +1747,9 @@ def _init_job_internal(a) -> tuple[str, Path, dict]:
         raw_gemini_model = os.environ.get("GEMINI_DR_MODEL") or os.environ.get("GEMINI_MODEL") or os.environ.get("GEMINI_DR_MODE")
     gemini_model, default_thinking = normalize_gemini_model(raw_gemini_model)
     gemini_thinking = os.environ.get("GEMINI_DR_THINKING") or default_thinking
+    browser = (getattr(a, "browser", None) or os.environ.get("AGY_DR_BROWSER") or DEFAULT_BROWSER).strip().lower()
+    if browser not in BROWSERS:
+        die(f"invalid browser {browser!r}: choose from {', '.join(BROWSERS)}", 5, code="INVALID_BROWSER")
 
     prompt_raw = resolve_text_input(a.prompt, a.prompt_file, "prompt")
     goal_raw = resolve_text_input(a.goal, a.goal_file, "goal")
@@ -1730,6 +1823,8 @@ def _init_job_internal(a) -> tuple[str, Path, dict]:
         "agy_effort": agy_effort,
         "gemini_model": gemini_model,
         "gemini_thinking": gemini_thinking,
+        "goal_sha256": sha256_file(job_dir / "goal.md"),
+        "browser": browser,
     }
     save_job(job_dir, job)
     return job_id, job_dir, job
@@ -1884,7 +1979,7 @@ def cmd_collect(a) -> int:
     }
     if job.get("approval_reason"):
         req["allow_probe_error"] = False
-    write_json_atomic(relay_dir / "request.json", req)
+    write_json_atomic(relay_dir / "request.json", apply_browser(req, job))
 
     rc, agy_summary, dr_res = invoke_agy_relay(
         job_dir, "collect", seq, getattr(a, "dr_skill_dir", None),
@@ -1923,6 +2018,7 @@ def run_cmd_init(a) -> int:
         "agy_effort": job["agy_effort"],
         "gemini_model": job["gemini_model"],
         "gemini_thinking": job["gemini_thinking"],
+        "browser": job["browser"],
     }
     print(json.dumps(res, ensure_ascii=False, indent=2))
     return 0
@@ -2020,7 +2116,7 @@ def run_cmd_auto(a) -> int:
     }
     if getattr(a, "show", False):
         req["show"] = True
-    write_json_atomic(relay_dir / "request.json", req)
+    write_json_atomic(relay_dir / "request.json", apply_browser(req, job))
 
     rc, agy_summary, dr_res = invoke_agy_relay(
         job_dir, "auto", seq, getattr(a, "dr_skill_dir", None),
@@ -2110,13 +2206,16 @@ def build_parser() -> argparse.ArgumentParser:
     ini.add_argument("--prompt-file", help="UTF-8 file containing the research prompt")
     ini.add_argument("--goal", "-g", help="acceptance criteria / review rubric text (goal.md)")
     ini.add_argument("--goal-file", help="UTF-8 file containing acceptance criteria (goal.md)")
+    ini.add_argument("--browser", choices=BROWSERS, default=None,
+                     help="where Deep Research runs: chrome (visible Chrome window, own profile, no app patch; default "
+                          "for new jobs) or app (patched Gemini desktop app); fixed for the job")
     ini.add_argument("--out", "-o", help="default output path for the final Markdown report")
     ini.add_argument("--raw-prompt", action="store_true", default=True, help="preserve exact prompt text")
     _add_prompt_composer_options(ini)
 
     pl = sub.add_parser("plan", help="generate initial research plan via agy-delegate --deep-research")
     pl.add_argument("--job", "--job-dir", "-j", dest="job", required=True, help="job ID or directory path")
-    pl.add_argument("--deadline", type=int, default=None, help="plan timeout in seconds (default: 420, or 600 for Argon)")
+    pl.add_argument("--deadline", type=int, default=None, help="plan timeout in seconds (default: 960, or 1200 for Argon)")
     pl.add_argument("--strict-xml", action="store_true", help="require all 5 XML blocks in prompt.md before running plan")
     pl.add_argument("--dr-skill-dir", help="override local-gemini-deep-research skill directory")
     pl.add_argument("--show", action="store_true", help="show Gemini desktop app window")
@@ -2126,7 +2225,7 @@ def build_parser() -> argparse.ArgumentParser:
     ed.add_argument("--feedback", "-f", help="plan modification instructions (imperative delta only)")
     ed.add_argument("--feedback-file", help="UTF-8 file with plan modification instructions")
     ed.add_argument("--allow-questions", action="store_true", help="bypass interrogative feedback check")
-    ed.add_argument("--deadline", type=int, default=None, help="edit timeout in seconds (default: 420, or 600 for Argon)")
+    ed.add_argument("--deadline", type=int, default=None, help="edit timeout in seconds (default: 960, or 1200 for Argon)")
     ed.add_argument("--dr-skill-dir", help="override local-gemini-deep-research skill directory")
     ed.add_argument("--show", action="store_true", help="show Gemini desktop app window")
 
@@ -2148,6 +2247,9 @@ def build_parser() -> argparse.ArgumentParser:
     au.add_argument("--goal-file", help="UTF-8 file containing acceptance criteria (goal.md)")
     au.add_argument("--reason", "-r", default="Auto mode: unattended end-to-end execution requested by caller.",
                     help="reason recorded in metadata")
+    au.add_argument("--browser", choices=BROWSERS, default=None,
+                     help="where Deep Research runs: chrome (visible Chrome window, own profile, no app patch; default "
+                          "for new jobs) or app (patched Gemini desktop app); fixed for the job")
     au.add_argument("--out", "-o", help="output Markdown report path")
     au.add_argument("--no-wait", action="store_true", help="return immediately after detached worker starts")
     au.add_argument("--timeout", type=int, default=None, help="research timeout in seconds (default: 1200, or 1800 for Argon)")

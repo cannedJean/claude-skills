@@ -6,15 +6,19 @@ description: >-
   or automate the locally installed Windows Gemini desktop app (`Gemini.exe`).
 ---
 
+<!-- This file is the body of the agy-side skill `local-gemini-deep-research`. It lives in the Claude skill
+     `agy-deep-research` as `references/SKILL.md` only as the source that `deep_research.py setup` copies to
+     `~/.gemini/config/skills/local-gemini-deep-research/SKILL.md`. Its reader is the agy agent, not Claude. -->
+
 # Local Gemini App Deep Research Skill
 
-This skill automates the locally installed **Google Gemini Windows Desktop App** (`%LOCALAPPDATA%\Google\Gemini\app-*\Gemini.exe`) via Chrome DevTools Protocol (CDP port 9223) and Playwright to execute **Gemini Deep Research** using the user's logged-in Google account without requiring an API key.
+When called by the Claude skill `agy-deep-research`, the default is **Chrome mode**: `run_deep_research.py` drives gemini.google.com in a visible Chrome window on a dedicated profile (`scripts/chrome_launcher.py`, CDP port 9224) and nothing is patched. Otherwise this skill automates the locally installed **Google Gemini Windows Desktop App** (`%LOCALAPPDATA%\Google\Gemini\app-*\Gemini.exe`) via Chrome DevTools Protocol (CDP port 9223) and Playwright to execute **Gemini Deep Research** using the user's logged-in Google account without requiring an API key.
 
 ## Compatibility & Prerequisites
 
 - **Supported Operating Systems**: Windows 11 / Windows 10 (x64).
 - **Google Gemini Desktop App**: Version **v1.18.0+** (patch verified on v1.19.0; tested on Electron 44.6.0+, Chromium 152.0.7977.130+). Installed at `%LOCALAPPDATA%\Google\Gemini\app-*\Gemini.exe`.
-- **Python Runtime**: Python 3.10+ (tested on Python 3.12).
+- **Python Runtime**: Python 3.9+ (developed and tested on Python 3.12).
 - **Runtime Dependency**: `playwright` must be installed:
   ```powershell
   python -m pip install --user playwright
@@ -117,7 +121,7 @@ When modifying a research plan via `--step edit --edit-prompt "..."`, **never su
 `run_deep_research.py` reads `GEMINI_DR_MODE` (`Pro` default, `Flash`, or `Argon`) and `GEMINI_DR_THINKING` (`high` default):
 - **`Pro` (`3.8 Pro`)**: Default balanced mode for standard multi-hop web & Workspace synthesis.
 - **`Flash`**: Fast survey mode for broad scouting.
-- **`Argon` (`Gemini 4 Argon`)**: Frontier 1M-context reasoning & strongest indirect prompt injection defense. Consumes **35% of the daily Google AI Pro quota per single execution** and requires longer planning (`--deadline 600`) and execution (`--timeout 1800`) budgets. Always use the supervised plan review loop (`--step plan` → `edit` → `approve`) rather than unattended auto mode when running `Argon`.
+- **`Argon` (`Gemini 4 Argon`)**: Frontier 1M-context reasoning & strongest indirect prompt injection defense. A single run uses a large share of the subscription quota and needs longer planning and execution budgets (the calling `deep_research.py` raises its plan deadline and research timeout for Argon automatically). Always use the supervised plan review loop (`--step plan` → `edit` → `approve`) rather than unattended auto mode when running `Argon`.
 
 ---
 
@@ -209,7 +213,7 @@ python "$HOME\.gemini\config\skills\local-gemini-deep-research\scripts\run_deep_
 ```
 
 * Omit `--raw-prompt` if the calling agent was asked to expand/enrich a brief user topic into a comprehensive research prompt.
-* **Prompt Guidelines**: Avoid sensitive political/election keywords (e.g., `민주주의`, `선거`, `정치`) in Korean prompts when possible, as Gemini Web's Korean content filter may block plan generation.
+* **Prompt Guidelines**: Korean political/election keywords (e.g., `선거`, `정치`) may make Gemini Web's content filter block plan generation. Do not reword the user's topic yourself; report the block to the caller.
 * When `run_command` backgrounds the task, **do not poll in a loop**. End your turn and wait for the system notification when the background task finishes.
 
 ---
@@ -233,7 +237,10 @@ names a job directory holding `relay/request.json`. Then:
    `<job>/relay/result.json` (or `started.json`, see below).
 2. Read the result file and report its `status`, `code`, `url`, `plan_count` / `report_chars` in your summary. The plan
    text is in the file; never retype it and never paraphrase it.
-3. On `status: "error"` with `CDP_NOT_READY` / `CDP_CONNECT_FAILED` and `prompt_sent: false` you may run
+3. **Chrome mode** (`request.json` `env.GEMINI_DR_BROWSER` is `"chrome"`; the task says so): the research runs in a Chrome
+   window, not the desktop app. Never run `patch_gemini_app.py` (it refuses anyway); report every error code, including
+   `CHROME_NOT_FOUND` / `CHROME_CDP_NOT_READY`, without retrying.
+   **App mode**: on `status: "error"` with `CDP_NOT_READY` / `CDP_CONNECT_FAILED` and `prompt_sent: false` you may run
    `patch_gemini_app.py` once and run the relay once more. The relay never acts twice for one request: a re-run after
    the prompt or feedback reached the conversation is refused as `STEP_ALREADY_ACTED`, and a page timeout after the
    prompt went in is `PAGE_TIMEOUT_AFTER_SEND` (not an environment code). `GEMINI_PAGE_NOT_FOUND` /
@@ -300,7 +307,7 @@ driver's provenance: the conversation the report was extracted from.
 
 | Issue / Symptom | Root Cause | Resolution |
 | :--- | :--- | :--- |
-| **Premature Page Reload During Deep Thinking** | When Gemini 2.0 Pro / Flash takes >60s to think (`has-thoughts`), a generic page reload would cancel the generation. | `run_deep_research.py` incorporates `is_generation_in_progress(page)` to inspect for active stop buttons (`button[aria-label*="중지"]`, `button[aria-label*="Stop"]`, `[data-mat-icon-name="stop"]`) and `thinking-overlay`. Page reloads are strictly suppressed while reasoning is active, and timeout is extended to 300s. |
+| **Premature Page Reload During Deep Thinking** | When the model takes >60s to think (`has-thoughts`), a generic page reload would cancel the generation. | `run_deep_research.py` incorporates `is_generation_in_progress(page)` to inspect for active stop buttons (`button[aria-label*="중지"]`, `button[aria-label*="Stop"]`, `[data-mat-icon-name="stop"]`) and `thinking-overlay`. Page reloads are strictly suppressed while reasoning is active, and timeout is extended to 300s. |
 | **Angular / Quill Prompt Unsubmitted** | DOM `.click()` sometimes bypasses Angular MDC event listeners in new chat interfaces. | `submit_prompt` dispatches native pointer events via `send_btn.click(force=True)` with automatic fallback to focusing the Quill `textbox` and dispatching keyboard `Enter`. |
 | **New Chat Navigation Stalls** | Page navigation in single-page apps can stall if a previous conversation state persists. | `run_deep_research.py` uses a top-level `new_chat_clicked` selector checking for visible `'새 채팅'` buttons before falling back to `page.goto("https://gemini.google.com/app")`. |
 | **CDP Port Connection Refused (`CDP_NOT_READY`)** | `Gemini.exe` is not running or CDP port 9223 is not listening. | Run `python scripts/patch_gemini_app.py --check` or start the patched app via `python scripts/patch_gemini_app.py`. Test endpoint: `Invoke-RestMethod -Uri 'http://127.0.0.1:9223/json/version'`. |

@@ -21,12 +21,12 @@ request.json fields
   resume_url      edit/approve/collect: the conversation URL returned by the plan step
   output          approve/collect: where the Markdown report goes
   timeout         approve/collect: seconds to wait for the report (driver --timeout, default 1200)
-  deadline        plan/edit: seconds before the driver is killed (default 420)
+  deadline        plan/edit: seconds before the driver is killed (deep_research.py sets it)
   mode            approve/collect: "wait" (default: block until the report is in) or "detach" (start a worker
                   that keeps running after this process exits; result.json appears when the research is done)
   show            true to show the Gemini window if the driver (re)starts the app
   env             {NAME: value} added to the driver's environment (a detached worker does not inherit the caller's)
-  cdp_url         CDP endpoint for the read-only page probe (default http://127.0.0.1:9223)
+  cdp_url         CDP endpoint for the read-only page probe (default http://127.0.0.1:9223; Chrome mode sets its own)
 
 `collect` never starts a research: before running the driver it probes the page (read-only, through the driver's
 Python and playwright) and refuses with COLLECT_WOULD_START when the plan card still has an active start button.
@@ -102,10 +102,14 @@ FAILURES = [
     ("No Gemini app-* directory", "APP_NOT_INSTALLED", 3, "install the Google Gemini desktop app for Windows and sign in once"),
     ("Target pattern not found in main.js", "ASAR_PATTERN_MISMATCH", 3,
      "this Gemini app version is not supported by patch_gemini_app.py; Gemini.exe was killed and NOT relaunched: start it by hand, do not retry"),
+    ("Chrome executable not found", "CHROME_NOT_FOUND", 3,
+     "Chrome mode needs Google Chrome: install it or set GEMINI_DR_CHROME_PATH (or start a new job with --browser app); do not run patch_gemini_app.py"),
+    ("Chrome debugging port did not answer", "CHROME_CDP_NOT_READY", 3,
+     "close every Chrome window of the agy-deep-research profile (it was opened without the debugging port), then repeat the step; do not run patch_gemini_app.py"),
     ("did not become ready in time", "CDP_NOT_READY", 3, "Gemini was (re)started but port 9223 stayed silent for 20 s; retry once, then check powershell/taskkill on PATH"),
     ("connect_over_cdp", "CDP_CONNECT_FAILED", 3, "CDP answered the liveness check but refused the connection; retry once"),
     ("Could not find a gemini.google.com page", "GEMINI_PAGE_NOT_FOUND", 3,
-     "the app is not on gemini.google.com (not signed in?) or another browser owns port 9223; start the app with --show and sign in"),
+     "the app/Chrome window is not on gemini.google.com (not signed in?) or another browser owns the port; the user signs in (app: start it with --show; Chrome mode: in the opened window)"),
     ("Could not activate 'Deep Research' mode", "DEEP_RESEARCH_TOGGLE_NOT_FOUND", 3, "the Tools menu did not offer Deep Research; UI changed or the account lacks it"),
     ("safety/keyword filter blocked", "SAFETY_BLOCKED", 2, "Gemini refused the prompt; the caller must rephrase in a new job"),
     ("Research Plan confirmation button did not appear", "PLAN_TIMEOUT", 2,
@@ -113,7 +117,7 @@ FAILURES = [
     ("Deep Research did not finish within", "REPORT_TIMEOUT", 2, "the research keeps running in the app; a collect step later fetches the report"),
     ("No active '연구 시작'", "NO_CONFIRM_BUTTON", 2, "the plan card has no active start button (countdown fired, already started, or wrong conversation)"),
     ("Stdin closed while waiting", "DRIVER_STDIN_WAIT", 3, "the driver entered its stdin review loop; relay mode never asks for it"),
-    ("playwright._impl._errors.TimeoutError", "UI_SELECTOR_TIMEOUT", 3, "a page element did not appear: most often not signed in; start the app with --show and sign in"),
+    ("playwright._impl._errors.TimeoutError", "UI_SELECTOR_TIMEOUT", 3, "a page element did not appear: most often not signed in; the user signs in (app: start it with --show; Chrome mode: in the opened window)"),
     ("Timeout 30000ms exceeded", "UI_SELECTOR_TIMEOUT", 3, "same as above"),
     ("Timeout 20000ms exceeded", "UI_SELECTOR_TIMEOUT", 3, "the tools button did not appear; UI changed or not signed in"),
 ]
@@ -290,8 +294,25 @@ with sync_playwright() as p:
 """
 
 
+def ensure_chrome_for(req):
+    """Chrome mode: (re)open the dedicated Chrome window before the probe, as the driver would; the user may have
+    closed it between steps. Returns an error text, or None."""
+    if str((req.get("env") or {}).get("GEMINI_DR_BROWSER") or "").lower() != "chrome":
+        return None
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import chrome_launcher
+        chrome_launcher.ensure_chrome_running_with_cdp()
+        return None
+    except Exception as e:
+        return str(e)
+
+
 def probe_page(req, py, timeout=45):
     """Read-only look at the Gemini tab (navigating to req.resume_url when the tab is elsewhere). {"error": ...} when unavailable."""
+    chrome_error = ensure_chrome_for(req)
+    if chrome_error:
+        return {"error": chrome_error}
     cdp = (req.get("cdp_url") or os.environ.get("GEMINI_CDP_URL", "http://127.0.0.1:9223")).rstrip("/")
     try:
         r = subprocess.run([py, "-c", PROBE_SRC, cdp, req.get("resume_url") or ""], capture_output=True, text=True, encoding="utf-8",

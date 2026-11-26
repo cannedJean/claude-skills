@@ -24,6 +24,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from patch_gemini_app import CDP_PORT, ensure_gemini_running_with_cdp
+from chrome_launcher import GEMINI_URL, ensure_chrome_running_with_cdp
 
 
 HTML_TO_MARKDOWN_JS = r"""
@@ -468,7 +469,7 @@ def validate_edit_instructions(edit_prompt: str, allow_questions: bool = False) 
     return clean
 
 
-def get_gemini_page(browser, timeout_sec=15):
+def get_gemini_page(browser, timeout_sec=15, open_if_missing=False):
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         for ctx in browser.contexts:
@@ -476,7 +477,25 @@ def get_gemini_page(browser, timeout_sec=15):
                 if "gemini.google.com" in pg.url:
                     return pg
         time.sleep(0.5)
-    raise RuntimeError("Could not find a gemini.google.com page in the local Gemini app.")
+    if open_if_missing and browser.contexts:
+        # Chrome mode: the user may have closed the Gemini tab; the dedicated profile's window is ours to use
+        log("No Gemini tab open in the Chrome window; opening one...")
+        page = browser.contexts[0].new_page()
+        page.goto(GEMINI_URL, wait_until="domcontentloaded")
+        return page
+    raise RuntimeError("Could not find a gemini.google.com page in the local Gemini app or Chrome window.")
+
+
+def browser_mode():
+    """'chrome' (visible Chrome window on its own profile) or 'app' (patched desktop app, the default when unset)."""
+    mode = (os.environ.get("GEMINI_DR_BROWSER") or "app").strip().lower()
+    return "chrome" if mode == "chrome" else "app"
+
+
+def ensure_browser_with_cdp(show=False):
+    if browser_mode() == "chrome":
+        return ensure_chrome_running_with_cdp()   # never patches or restarts the desktop app
+    return ensure_gemini_running_with_cdp(port=CDP_PORT, hide=not show)
 
 
 def prevent_background_throttling(page):
@@ -522,6 +541,101 @@ def log_current_model_mode(page):
         log(f"Warning: composer shows '{shown}' but job was locked to '{want}' at plan time. "
             "Not switching mid-conversation; verify the conversation's model in the app.")
     return shown
+
+
+_THINKING_WORDS = {
+    "high": ("높음", "high"),
+    "medium": ("보통", "중간", "medium"),
+    "low": ("낮음", "low"),
+}
+
+
+def thinking_level_of(label):
+    """Canonical thinking level ('high'/'medium'/'low') shown in a control label, else None.
+    The 2026-11 UI shows it on the mode button itself, e.g. 'Pro\\n보통'."""
+    low = str(label or "").lower()
+    for level, words in _THINKING_WORDS.items():
+        for w in words:
+            if w.isascii():
+                if re.search(rf"\b{w}\b", low):
+                    return level
+            elif w in low:
+                return level
+    return None
+
+
+_PICK_THINKING_ITEM_JS = """(targets) => {
+    const items = Array.from(document.querySelectorAll('[role="menuitemradio"]'));
+    const hit = items.find(el => {
+        const txt = (el.innerText || '').trim().toLowerCase();
+        return targets.some(t => txt.startsWith(t)) && !el.disabled
+            && el.getAttribute('aria-disabled') !== 'true';
+    });
+    if (hit) { (hit.querySelector('button') || hit).click(); return true; }
+    return false;
+}"""
+
+
+_READ_CHECKED_THINKING_JS = """() => {
+    const words = ['낮음', '보통', '중간', '높음', 'low', 'medium', 'high'];
+    const items = Array.from(document.querySelectorAll('[role="menuitemradio"]'));
+    const hit = items.find(el => el.getAttribute('aria-checked') === 'true'
+        && words.some(w => (el.innerText || '').trim().toLowerCase().startsWith(w)));
+    return hit ? (hit.innerText || '').trim() : null;
+}"""
+
+
+def _close_menu(page):
+    try:
+        if page.locator('[role="menu"]').first.count() > 0:
+            page.keyboard.press("Escape")
+    except Exception:
+        pass
+
+
+def _menu_checked_level(page, mode_btn):
+    """Open the mode menu, read the checked thinking-level item, close the menu.
+    Some modes (e.g. Argon, 2026-11) show no level on the button itself."""
+    mode_btn.evaluate("el => el.click()")
+    time.sleep(0.8)
+    txt = page.evaluate(_READ_CHECKED_THINKING_JS)
+    _close_menu(page)
+    return thinking_level_of(txt)
+
+
+def _set_thinking_via_mode_menu(page, mode_btn, thinking_target):
+    """Thinking level lives inside the model-mode menu (menuitemradio ' 높음 매우 철저함')."""
+    canon = thinking_target.lower()
+    canon = next((k for k, ws in _THINKING_WORDS.items() if canon == k or canon in ws), canon)
+    label = str(mode_btn.inner_text() or mode_btn.get_attribute("aria-label") or "").strip()
+    current = thinking_level_of(label)
+    source = "button"
+    if current is None:
+        source = "menu"
+        current = _menu_checked_level(page, mode_btn)
+        if current is None:
+            log(f"Notice: no thinking level offered for mode '{label}'; left unchanged.")
+            return
+    if current == canon:
+        log(f"Thinking level already set to: {current} ({source})")
+        return
+    log(f"Current thinking level is '{current}' ({source}). Switching to '{canon}'...")
+    mode_btn.evaluate("el => el.click()")
+    time.sleep(0.8)
+    clicked = page.evaluate(_PICK_THINKING_ITEM_JS, list(_THINKING_WORDS.get(canon, (canon,))))
+    time.sleep(0.8)
+    _close_menu(page)
+    after = None
+    if source == "button":
+        after = thinking_level_of(str(mode_btn.inner_text() or mode_btn.get_attribute("aria-label") or ""))
+    if after is None:
+        # Argon (2026-11) shows the level on its button only for some levels: after switching
+        # 높음 -> 낮음 the button reads just 'Argon', so verify from the menu's checked item.
+        after = _menu_checked_level(page, mode_btn)
+    if clicked and after == canon:
+        log(f"Switched thinking level to: {canon}")
+    else:
+        log(f"WARNING: thinking level is '{after}' after trying to select '{canon}' (clicked={clicked}).")
 
 
 def ensure_pro_mode(page):
@@ -651,6 +765,8 @@ def ensure_pro_mode(page):
                     page.keyboard.press("Escape")
             else:
                 log(f"Thinking level already set to: {current_thinking}")
+        elif mode_btn is not None and mode_btn.count() > 0:
+            _set_thinking_via_mode_menu(page, mode_btn, thinking_target)
     except Exception as e:
         log(f"Notice: Thinking level selection check skipped ({e})")
 
@@ -800,15 +916,51 @@ def is_generation_in_progress(page):
         return False
 
 
-def wait_for_new_plan(page, prev_plan_count=0, timeout_sec=300, new_chat_prompt=None):
+def plan_max_wait_default():
+    """Hard cap (s) for a plan wait while Gemini is visibly generating. GEMINI_DR_PLAN_MAX_WAIT, default 900."""
+    try:
+        return max(1, int(os.environ.get("GEMINI_DR_PLAN_MAX_WAIT", "900")))
+    except ValueError:
+        return 900
+
+
+_CONFIRM_SELECTOR = (
+    '[data-test-id="confirm-button"]:not(.gem-button-disabled) button:not([disabled]), '
+    '[data-test-id="confirm-button"]:not(.gem-button-disabled), '
+    'button[aria-label="연구 시작"]:not([disabled]), '
+    'button[aria-label="Start research"]:not([disabled]), '
+    'button:has-text("연구 시작"):not([disabled]), '
+    'button:has-text("Start research"):not([disabled])'
+)
+
+
+def _plan_card_ready(page, prev_plan_count):
+    """True when a new Research Plan card with an active confirm button is on the page."""
+    current = page.locator('[data-test-id="research-steps"], .research-steps').count()
+    return current > prev_plan_count and page.locator(_CONFIRM_SELECTOR).count() > 0
+
+
+def wait_for_new_plan(page, prev_plan_count=0, timeout_sec=300, new_chat_prompt=None, max_wait_sec=None):
     """Wait until a new Research Plan card with an active confirm button appears. The conversation is pinned the
     first time the url carries an id (a new chat gets one after the prompt is sent); the plan is read only there.
     For a new chat (new_chat_prompt) that conversation must hold this run's prompt before the plan is touched."""
+    if max_wait_sec is None:
+        max_wait_sec = plan_max_wait_default()
+    max_wait_sec = max(max_wait_sec, timeout_sec)
     start_time = time.time()
     last_reload_at = 0
+    extended_logged = False
     conversation_id = conversation_id_from_url(_page_url(page))
-    while time.time() - start_time < timeout_sec:
+    while True:
         elapsed = time.time() - start_time
+        if elapsed >= max_wait_sec:
+            break
+        if elapsed >= timeout_sec:
+            if not is_generation_in_progress(page):
+                break
+            if not extended_logged:
+                extended_logged = True
+                log(f"Plan not ready after {timeout_sec}s but Gemini is still generating; waiting up to {max_wait_sec}s...")
         if conversation_id:
             assert_conversation(page, conversation_id, "plan wait")
         else:
@@ -823,17 +975,8 @@ def wait_for_new_plan(page, prev_plan_count=0, timeout_sec=300, new_chat_prompt=
                     "Avoid sensitive political/election keywords (e.g., '민주주의', '선거', '정치')."
                 )
 
-        current_plan_count = page.locator('[data-test-id="research-steps"], .research-steps').count()
-        active_confirm = page.locator(
-            '[data-test-id="confirm-button"]:not(.gem-button-disabled) button:not([disabled]), '
-            '[data-test-id="confirm-button"]:not(.gem-button-disabled), '
-            'button[aria-label="연구 시작"]:not([disabled]), '
-            'button[aria-label="Start research"]:not([disabled]), '
-            'button:has-text("연구 시작"):not([disabled]), '
-            'button:has-text("Start research"):not([disabled])'
-        )
-
-        if current_plan_count > prev_plan_count and active_confirm.count() > 0:
+        if _plan_card_ready(page, prev_plan_count):
+            current_plan_count = page.locator('[data-test-id="research-steps"], .research-steps').count()
             time.sleep(0.8)
             # identity before the countdown cancel / plan expand: never touch another job's plan card
             if new_chat_prompt is not None:
@@ -867,7 +1010,9 @@ def wait_for_new_plan(page, prev_plan_count=0, timeout_sec=300, new_chat_prompt=
 
         time.sleep(1.5)
 
-    raise TimeoutError(f"Research Plan confirmation button did not appear within {timeout_sec}s.")
+    raise TimeoutError(
+        f"Research Plan confirmation button did not appear within {timeout_sec}s "
+        f"(waited {int(time.time() - start_time)}s; cap {max_wait_sec}s while generating).")
 
 
 def apply_plan_edit(page, edit_feedback, timeout_sec=300, conversation_id=None):
@@ -1293,15 +1438,16 @@ def main():
         )
         log("Composed 5-block XML Deep Research prompt.")
 
-    app_info = ensure_gemini_running_with_cdp(port=CDP_PORT, hide=not args.show)
-    log(f"Local Gemini app ready via CDP ({app_info['cdp_url']}, status={app_info['status']})")
+    app_info = ensure_browser_with_cdp(show=args.show)
+    where = "Chrome window" if app_info.get("browser") == "chrome" else "Local Gemini app"
+    log(f"{where} ready via CDP ({app_info['cdp_url']}, status={app_info['status']})")
 
     if sync_playwright is None:
         raise RuntimeError("Playwright is not installed. Run: pip install playwright")
 
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(app_info["cdp_url"])
-        page = get_gemini_page(browser)
+        page = get_gemini_page(browser, open_if_missing=app_info.get("browser") == "chrome")
         prevent_background_throttling(page)
 
         # Conversation identity: an existing conversation is bound before anything is read or clicked;

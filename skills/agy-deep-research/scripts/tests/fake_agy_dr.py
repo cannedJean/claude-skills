@@ -31,6 +31,8 @@ Scenarios (via `FAKE_AGY_SCENARIO` env var, default `perfect`):
   auto_report_timeout worker pins its conversation, then fails with `REPORT_TIMEOUT`
   plan_owned          every job's plan lands on the same conversation (`shared_conv_777`)
   plan_no_id          `plan` returns a plan whose url names no conversation
+  no_sources_report   approve/auto/collect report passes the quality gate but cites no source (sources_count 0)
+  refusal_report      approve/auto/collect report is a headed refusal / error message with no sources
 """
 from __future__ import annotations
 
@@ -81,8 +83,23 @@ FOREIGN_PROGRESS = ("foreign_conversation", "foreign_progress_relay_error")
 FOREIGN_REPORT_MD = VALID_REPORT_MD.replace("Cloud-Native Vector Indexing", "FOREIGN Agent Sandboxing Strategy").strip() + "\n"
 
 
+NO_SOURCES_REPORT_MD = VALID_REPORT_MD.split("---")[0].strip() + "\n"
+REFUSAL_REPORT_MD = (
+    "# 응답\n\n죄송합니다. 이 요청은 도와드릴 수 없습니다. I can't help with that request. "
+    + "Please try a different topic or rephrase the research question. " * 6
+).strip() + "\n"
+
+
 def report_body(scenario: str) -> str:
+    if scenario == "no_sources_report":
+        return NO_SOURCES_REPORT_MD
+    if scenario == "refusal_report":
+        return REFUSAL_REPORT_MD
     return FOREIGN_REPORT_MD if scenario == "foreign_conversation" else VALID_REPORT_MD.strip() + "\n"
+
+
+def fake_sources_count(scenario: str) -> int:
+    return 0 if scenario in ("no_sources_report", "refusal_report") else 3
 
 
 def now_iso() -> str:
@@ -205,7 +222,7 @@ def run_bg_worker(job_dir: Path, scenario: str) -> int:
         **report_provenance(req, job_dir, scenario),
         "report_file": str(out_file),
         "report_chars": len(report_md),
-        "sources_count": 3,
+        "sources_count": fake_sources_count(scenario),
         "elapsed_s": 92.4,
         "finished_at": now_iso(),
     }
@@ -370,7 +387,7 @@ def main(argv=None) -> int:
                 **report_provenance(req, job_dir, scenario),
                 "report_file": str(out_file),
                 "report_chars": len(report_md),
-                "sources_count": 3,
+                "sources_count": fake_sources_count(scenario),
                 "elapsed_s": 65.0,
                 "finished_at": now_iso(),
             }

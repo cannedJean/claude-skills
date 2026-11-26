@@ -11,7 +11,14 @@ import sys
 import time
 import urllib.request
 
-GEMINI_BASE_DIR = os.path.expandvars(r"%LOCALAPPDATA%\Google\Gemini")
+GEMINI_BASE_DIR = os.environ.get("GEMINI_APP_BASE_DIR") or os.path.expandvars(r"%LOCALAPPDATA%\Google\Gemini")
+# Records the app version this script last patched, so an update (new unpatched app-<version>) can be told apart
+# from a never-patched install. Outside the app directory, which every update replaces.
+PATCH_STATE_FILE = os.environ.get("AGY_DR_PATCH_STATE") or os.path.join(
+    os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "agy-deep-research", "patch_state.json")
+CONTEXT_ANCHORS = (b'"security"', b"isPackaged", b".app.exit(1)")
+CONTEXT_RADIUS = 160
+CONTEXT_MAX_SNIPPETS = 6
 CDP_PORT = int(os.environ.get("GEMINI_CDP_PORT", 9223))
 CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
 
@@ -30,6 +37,73 @@ def find_latest_app_dir():
         raise FileNotFoundError(f"No Gemini app-* directory found in {GEMINI_BASE_DIR}")
     dirs.sort(key=lambda p: [int(x) if x.isdigit() else x for x in os.path.basename(p).replace("app-", "").split(".")])
     return dirs[-1]
+
+
+def app_version_of(app_dir):
+    name = os.path.basename(os.path.normpath(app_dir))
+    return name[len("app-"):] if name.startswith("app-") else name
+
+
+def read_patch_state():
+    try:
+        with open(PATCH_STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def write_patch_state(asar_path, port):
+    app_dir = os.path.dirname(os.path.dirname(os.path.abspath(asar_path)))
+    state = {"app_version": app_version_of(app_dir), "asar_path": os.path.abspath(asar_path), "port": port,
+             "patched_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    try:
+        os.makedirs(os.path.dirname(PATCH_STATE_FILE), exist_ok=True)
+        tmp = PATCH_STATE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+        os.replace(tmp, PATCH_STATE_FILE)
+    except OSError:
+        pass   # the state file only feeds diagnostics; never fail a patch over it
+    return state
+
+
+def guard_context_snippets(main_bytes):
+    """Text around the guard's anchors, for a human to see how a reshaped guard looks (read-only)."""
+    snippets = []
+    for anchor in CONTEXT_ANCHORS:
+        start = 0
+        while len(snippets) < CONTEXT_MAX_SNIPPETS:
+            i = main_bytes.find(anchor, start)
+            if i < 0:
+                break
+            lo, hi = max(0, i - CONTEXT_RADIUS), min(len(main_bytes), i + len(anchor) + CONTEXT_RADIUS)
+            snippets.append({"anchor": anchor.decode("ascii"), "offset": i,
+                             "snippet": main_bytes[lo:hi].decode("utf-8", errors="replace")})
+            start = i + len(anchor)
+    return snippets
+
+
+def patch_status(port=CDP_PORT):
+    """Read-only: installed version, patched, whether SECURITY_GUARD_RE still matches, and whether an update undid an
+    earlier patch. Never raises for a missing install."""
+    state = read_patch_state()
+    last = state.get("app_version")
+    try:
+        app_dir = find_latest_app_dir()
+    except FileNotFoundError:
+        return {"installed": False, "app_version": None, "asar_path": None, "patched": False, "pattern_match": None,
+                "last_patched_version": last, "update_needs_repatch": False, "cdp_alive": is_cdp_alive(port)}
+    asar_path = os.path.join(app_dir, "resources", "app.asar")
+    version = app_version_of(app_dir)
+    patched = is_asar_patched(asar_path, port=port)
+    try:
+        pattern_match = bool(dry_run_patch(asar_path, port=port).get("can_patch"))
+    except Exception:
+        pattern_match = False
+    return {"installed": True, "app_version": version, "asar_path": asar_path, "patched": patched,
+            "pattern_match": pattern_match, "last_patched_version": last,
+            "update_needs_repatch": bool(last) and not patched and last != version,
+            "cdp_alive": is_cdp_alive(port)}
 
 
 def is_cdp_alive(port=CDP_PORT):
@@ -122,6 +196,7 @@ def patch_asar(asar_path, port=CDP_PORT):
     with open(asar_path, "wb") as f:
         f.write(data)
 
+    write_patch_state(asar_path, port)
     return True
 
 
@@ -188,6 +263,7 @@ def dry_run_patch(asar_path, port=CDP_PORT):
             "cdp_url": f"http://127.0.0.1:{port}",
             "cdp_alive": is_cdp_alive(port=port),
             "error": "Target pattern not found in main.js; app version structure may have changed.",
+            "context_snippets": guard_context_snippets(check_bytes),
         }
 
     target = match.group(0)
@@ -324,6 +400,12 @@ def main():
     args = parser.parse_args()
 
     port = args.port
+    if os.environ.get("GEMINI_DR_BROWSER", "").strip().lower() == "chrome" and not (args.check or args.dry_run or args.restore):
+        # Chrome mode drives gemini.google.com in Chrome; the installed app is not used and must not be modified
+        print(json.dumps({"status": "refused_chrome_mode",
+                          "error": "GEMINI_DR_BROWSER=chrome: this job uses the Chrome window, not the desktop app; "
+                                   "nothing was patched or restarted (run chrome_launcher.py, or unset it for the app)"}, indent=2))
+        sys.exit(1)
     hide_flag = not args.show
 
     if args.check:
@@ -335,6 +417,8 @@ def main():
             status = "ready" if (alive and patched) else ("running_unpatched" if alive else ("patched" if patched else "unpatched"))
             res = {
                 "status": status,
+                "app_version": app_version_of(app_dir),
+                "last_patched_version": read_patch_state().get("app_version"),
                 "app_dir": app_dir,
                 "asar_path": asar_path,
                 "patched": patched,

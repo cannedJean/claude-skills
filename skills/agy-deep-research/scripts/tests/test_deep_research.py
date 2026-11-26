@@ -107,16 +107,17 @@ class DeepResearchTestCase(DeepResearchTestBase):
         self.assertEqual(rc, 0, st)
         self.assertEqual(st["status"], "ok")
         self.assertEqual(st["sync_status"], "in_sync")
-        self.assertEqual(len(st["copied"]), 4)
+        self.assertEqual(len(st["copied"]), 5)   # 4 scripts + SKILL.md
         self.assertTrue((self.target_skill_dir / "scripts" / "relay_step.py").is_file())
         self.assertTrue((self.target_skill_dir / "scripts" / "run_deep_research.py").is_file())
         self.assertTrue((self.target_skill_dir / "scripts" / "patch_gemini_app.py").is_file())
+        self.assertTrue((self.target_skill_dir / "scripts" / "chrome_launcher.py").is_file())
         self.assertTrue((self.target_skill_dir / "SKILL.md").is_file())
 
-        # Re-running setup reports all 4 files unchanged
+        # Re-running setup reports all 5 files unchanged
         rc, st2, _ = self.run_dr(["setup", "--target-dir", str(self.target_skill_dir)])
         self.assertEqual(rc, 0)
-        self.assertEqual(len(st2["unchanged"]), 4)
+        self.assertEqual(len(st2["unchanged"]), 5)
 
         # Modify one target file -> preflight detects out_of_sync, setup restores it
         (self.target_skill_dir / "SKILL.md").write_text("# modified\n", encoding="utf-8")
@@ -1190,11 +1191,11 @@ class PromptEngineeringAndGatesTestCase(DeepResearchTestBase):
         self.assertTrue(any("LOCAL_PATH_REFERENCE" in w for w in warnings))
         self.assertTrue(any("JSON_ONLY_OUTPUT_TRAP" in w for w in warnings))
 
-        # 2. Plan with Argon automatically extends default 180s deadline to 600s
+        # 2. Plan with Argon automatically extends the default plan deadline (960s) to 1200s
         rc_plan, _, _ = self.run_dr(["plan", "--job", "argon_warn_job"])
         self.assertEqual(rc_plan, 0)
         req_plan = json.loads((self.jobs_dir / "argon_warn_job" / "relay" / "request.json").read_text(encoding="utf-8"))
-        self.assertEqual(req_plan["deadline"], 600)
+        self.assertEqual(req_plan["deadline"], 1200)
 
         # 3. Approve with Argon automatically extends default 900s timeout to 1800s
         report_out = self.out_dir / "argon_report.md"

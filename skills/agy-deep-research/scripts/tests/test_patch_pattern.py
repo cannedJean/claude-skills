@@ -60,6 +60,8 @@ CASES = {
     "dollar_msg": ("sh", "zm", "h", "k", "$m", "Pt", "pb"),
     # `$` in every identifier slot, including the app and continuation names
     "dollar_all": ("$s", "z$", "$h", "k$", "$m", "$P", "p$"),
+    # 1.21.1 (installed 2026-11): identifiers read from a --dry-run of the real app.asar
+    "v1_21_1": ("ob", "vw", "w", "N", "Cw", "cn", "cx"),
 }
 
 
@@ -67,6 +69,10 @@ class TestSecurityGuardPattern(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        # patch_asar records the version it patched; keep that inside the temp dir, never the real state file
+        saved = patch_gemini_app.PATCH_STATE_FILE
+        patch_gemini_app.PATCH_STATE_FILE = os.path.join(self.tmp.name, "patch_state.json")
+        self.addCleanup(setattr, patch_gemini_app, "PATCH_STATE_FILE", saved)
 
     def _asar(self, name, ids):
         res = os.path.join(self.tmp.name, name, "resources")
