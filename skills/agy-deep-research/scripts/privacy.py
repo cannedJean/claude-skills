@@ -65,26 +65,40 @@ def _merge(spans):
     return merged
 
 
+def _strip_marks(text: str) -> str:
+    """Detection form only: combining marks must not split an address."""
+    return "".join(c for c in text if not unicodedata.category(c).startswith("M"))
+
+
 def _scrub_long(text: str) -> str:
     """Redact e-mail/account spans, returning the ORIGINAL text otherwise.
 
-    Matching also runs on a per-character NFKC form (mapped back to original
-    offsets). If the whole-string NFKC form has more matches than could be
-    mapped back exactly, the whole string is redacted (fail closed).
+    Matching also runs on a per-run NFKC form without combining marks (a base character plus its
+    combining marks is one run) mapped back to original offsets. Fail closed:
+    if the whole-string NFKC form differs from the per-run form and still
+    contains a match, the span cannot be mapped back exactly, so the whole
+    string is redacted.
     """
-    chars, idx = [], []
+    runs = []  # [start, end) of each base character with its combining marks
     for i, ch in enumerate(text):
-        for c in unicodedata.normalize("NFKC", ch):
+        if runs and unicodedata.combining(ch):
+            runs[-1][1] = i + 1
+        else:
+            runs.append([i, i + 1])
+    chars, idx = [], []
+    for r, (st, en) in enumerate(runs):
+        for c in _strip_marks(unicodedata.normalize("NFKC", text[st:en])):
             chars.append(c)
-            idx.append(i)
+            idx.append(r)
+    per_run = "".join(chars)
     spans = _spans(text)
-    for st, en, kind in _spans("".join(chars)):
-        spans.append((idx[st], idx[en - 1] + 1, kind))
-    merged = _merge(spans)
-    if len(_merge(_spans(unicodedata.normalize("NFKC", text)))) > len(merged):
+    for st, en, kind in _spans(per_run):
+        spans.append((runs[idx[st]][0], runs[idx[en - 1]][1], kind))
+    whole = _strip_marks(unicodedata.normalize("NFKC", text))
+    if whole != per_run and _spans(whole):
         return "<redacted:account>"
     out, pos = [], 0
-    for st, en, kind in merged:
+    for st, en, kind in _merge(spans):
         out.append(text[pos:st])
         out.append("<redacted:%s>" % kind)
         pos = en

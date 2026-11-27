@@ -355,5 +355,26 @@ class ScrubKeepsOriginalTests(unittest.TestCase):
         self.assertNotIn(unicodedata.normalize("NFD", "홍"), out)
 
 
+class ScrubCombiningMarkTests(unittest.TestCase):
+    PAD = "본문 " * 80
+
+    def test_combining_mark_in_local_part_leaks_nothing(self):
+        for label, local in (("first letter", "álice"), ("middle letter", "aĺice"),
+                             ("last letter", "aliće"), ("two marks", "ạ́lice")):
+            with self.subTest(label):
+                out = privacy.scrub(self.PAD + "연락 " + local + "@example.com 끝")
+                self.assertNotIn("@", out)
+                for frag in ("a", "l", "i", "c", "e", "́", "example"):
+                    self.assertNotIn(frag, out.replace("<redacted:email>", "")
+                                     .replace("<redacted:account>", ""), label)
+                self.assertTrue(out.startswith(self.PAD) or out == "<redacted:account>")
+
+    def test_combining_mark_elsewhere_is_unchanged(self):
+        text = self.PAD + "café ① １２３ 끝"
+        self.assertEqual(privacy.scrub(text), text)
+        text2 = self.PAD + "álice 은 é 만 있다"
+        self.assertEqual(privacy.scrub(text2), text2)
+
+
 if __name__ == "__main__":
     unittest.main()
