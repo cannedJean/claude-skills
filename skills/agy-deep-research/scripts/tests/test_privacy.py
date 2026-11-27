@@ -330,5 +330,29 @@ class PrivacyReviewFixTests(unittest.TestCase):
             "Close sidebar", "더보기", "Show more", "메인 메뉴", "Main menu"}))
 
 
+class ScrubKeepsOriginalTests(unittest.TestCase):
+    def test_long_text_unchanged_except_redacted_span(self):
+        body = "① 본문 １２３ ｱ " * 30
+        text = body + "연락 a@b.invalid 끝 " + body
+        out = privacy.scrub(text)
+        self.assertEqual(out, body + "연락 <redacted:email> 끝 " + body)
+        self.assertEqual(privacy.scrub(body), body)
+
+    def test_fullwidth_email_in_long_text_is_redacted(self):
+        body = "① 본문 １２３ " * 30
+        out = privacy.scrub(body + "ｕ＠ｅｘ．ｃｏｍ 끝")
+        self.assertNotIn("ｅｘ", out)
+        self.assertNotIn("＠", out)
+        self.assertIn("<redacted:email>", out)
+        self.assertTrue(out.startswith(body))
+        self.assertTrue(out.endswith(" 끝"))
+
+    def test_unmappable_nfd_account_fails_closed(self):
+        nfd = unicodedata.normalize("NFD", "Google 계정: 홍길동")
+        out = privacy.scrub("본문 " * 80 + nfd)
+        self.assertNotIn("홍", out)
+        self.assertNotIn(unicodedata.normalize("NFD", "홍"), out)
+
+
 if __name__ == "__main__":
     unittest.main()

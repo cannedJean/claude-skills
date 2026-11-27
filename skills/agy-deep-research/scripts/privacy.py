@@ -15,7 +15,8 @@ Two layers, both required:
 Roles are compared case-insensitively and whitespace-stripped.
 
 Deliberate fail-closed hardening (broader than the minimal spec):
-- scrub tests/redacts on the NFKC-normalised text, so decomposed Hangul and
+- scrub detects on NFKC-normalised text (long strings keep their original text,
+  only matched spans are replaced; unmappable matches redact the whole string), so decomposed Hangul and
   fullwidth look-alikes (e.g. a fullwidth at-sign) cannot evade it.
 - The long-string patterns are intentionally broad: any `x@y` (`*` repeats, so
   `react@18` also matches) is replaced, and `Google<ws>Account:` is matched
@@ -45,6 +46,50 @@ GENERIC_LABELS = frozenset({
     "새 채팅", "New chat", "사이드바 열기", "사이드바 닫기", "Open sidebar",
     "Close sidebar", "더보기", "Show more", "메인 메뉴", "Main menu",
 })
+
+
+def _spans(text: str):
+    out = [(m.start(), m.end(), "email") for m in _EMAIL_RE.finditer(text)]
+    out += [(m.start(), m.end(), "account") for m in _ACCOUNT_RE.finditer(text)]
+    return out
+
+
+def _merge(spans):
+    merged = []
+    for st, en, kind in sorted(spans):
+        if merged and st < merged[-1][1]:
+            pst, pen, pk = merged[-1]
+            merged[-1] = (pst, max(pen, en), "account" if "account" in (pk, kind) else "email")
+        else:
+            merged.append((st, en, kind))
+    return merged
+
+
+def _scrub_long(text: str) -> str:
+    """Redact e-mail/account spans, returning the ORIGINAL text otherwise.
+
+    Matching also runs on a per-character NFKC form (mapped back to original
+    offsets). If the whole-string NFKC form has more matches than could be
+    mapped back exactly, the whole string is redacted (fail closed).
+    """
+    chars, idx = [], []
+    for i, ch in enumerate(text):
+        for c in unicodedata.normalize("NFKC", ch):
+            chars.append(c)
+            idx.append(i)
+    spans = _spans(text)
+    for st, en, kind in _spans("".join(chars)):
+        spans.append((idx[st], idx[en - 1] + 1, kind))
+    merged = _merge(spans)
+    if len(_merge(_spans(unicodedata.normalize("NFKC", text)))) > len(merged):
+        return "<redacted:account>"
+    out, pos = [], 0
+    for st, en, kind in merged:
+        out.append(text[pos:st])
+        out.append("<redacted:%s>" % kind)
+        pos = en
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def _scrub_dict(value: dict) -> dict:
@@ -77,8 +122,7 @@ def scrub(value: Any) -> Any:
             if SENSITIVE_RE.search(value) or SENSITIVE_RE.search(norm):
                 return "<redacted:account len=%d>" % len(value)
             return value
-        value = _EMAIL_RE.sub("<redacted:email>", norm)
-        return _ACCOUNT_RE.sub("<redacted:account>", value)
+        return _scrub_long(value)
     return value
 
 
