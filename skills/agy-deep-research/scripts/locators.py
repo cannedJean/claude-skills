@@ -1,0 +1,283 @@
+"""Data-driven locator engine with UI_LOCATOR_MISS hints.
+
+Locators live in locators.json (bundled) and may be overridden field by field
+from %LOCALAPPDATA%\\agy-deep-research\\locators.local.json. A miss raises
+LocatorMiss whose payload lists similar candidate names (only from the
+privacy-allowed region or GENERIC_LABELS) and an exact override snippet.
+Stdlib only; imports on any OS.
+"""
+import copy
+import difflib
+import json
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import List, Optional
+from urllib.parse import urlparse
+
+from uitree import Node, PATTERNS
+import privacy
+
+TOP_KEYS = ("version", "scopes", "locators", "surfaces_allowed", "status_phrases",
+            "safety_phrases", "error_phrases", "model_aliases")
+LOCATOR_FIELDS = ("ct", "role", "names", "scope", "expect", "patterns", "href_host")
+SCOPE_KINDS = {
+    "document": (), "main": (), "popup": (), "desktop": (),
+    "composer": ("anchor", "min_buttons"),
+    "plan_card": ("ancestor_automation_id_prefix",),
+    "top_bar": ("url_prefix",),
+}
+EXPECTS = ("unique", "at_least_one", "optional")
+HREF_HOST = "gemini.google.com"
+MAX_CANDIDATES = 5
+MIN_SIMILARITY = 0.4
+REQUIRED = ("ct", "names", "scope", "expect")
+
+
+class LocatorConfigError(ValueError):
+    pass
+
+
+class LocatorMiss(Exception):
+    def __init__(self, payload: dict):
+        super().__init__("%s: %s" % (payload.get("code"), payload.get("locator")))
+        self.payload = payload
+
+
+@dataclass
+class LocatorContext:
+    tree: object
+    doc: Node
+    locs: dict
+    allowed: set
+    anchor_cache: dict = field(default_factory=dict)
+
+
+def _norm(s: str) -> str:
+    return " ".join((s or "").split())
+
+
+def _compile(pat: str, where: str):
+    try:
+        return re.compile(pat[3:])
+    except re.error as exc:
+        raise LocatorConfigError("%s: invalid regex %r (%s)" % (where, pat, exc))
+
+
+def match_name(name: str, patterns: list) -> bool:
+    n = _norm(name)
+    for p in patterns:
+        if p.startswith("re:"):
+            if re.fullmatch(p[3:], n):
+                return True
+        elif _norm(p) == n:
+            return True
+    return False
+
+
+def _is_strlist(v) -> bool:
+    return isinstance(v, list) and all(isinstance(x, str) for x in v)
+
+
+def _validate(cfg: dict, where: str) -> None:
+    for k in cfg:
+        if k not in TOP_KEYS:
+            raise LocatorConfigError("%s: unknown top-level field %r" % (where, k))
+    if "version" in cfg and (cfg["version"] != 1 or isinstance(cfg["version"], bool)):
+        raise LocatorConfigError("%s: field 'version' must be 1" % where)
+    if "scopes" in cfg:
+        if not isinstance(cfg["scopes"], dict):
+            raise LocatorConfigError("%s: field 'scopes' must be an object" % where)
+        for sname, sval in cfg["scopes"].items():
+            if sname not in SCOPE_KINDS:
+                raise LocatorConfigError("%s: unknown scope %r" % (where, sname))
+            if not isinstance(sval, dict) or any(f not in SCOPE_KINDS[sname] for f in sval):
+                raise LocatorConfigError("%s: scope %r has unknown fields or wrong type" % (where, sname))
+    for lk in ("surfaces_allowed", "status_phrases", "safety_phrases", "error_phrases"):
+        if lk in cfg:
+            if not _is_strlist(cfg[lk]):
+                raise LocatorConfigError("%s: field %r must be a list of strings" % (where, lk))
+            for p in cfg[lk]:
+                if p.startswith("re:"):
+                    _compile(p, "%s field %r" % (where, lk))
+    if "model_aliases" in cfg:
+        m = cfg["model_aliases"]
+        if not isinstance(m, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in m.items()):
+            raise LocatorConfigError("%s: field 'model_aliases' must map strings to strings" % where)
+    locs = cfg.get("locators", {})
+    if not isinstance(locs, dict):
+        raise LocatorConfigError("%s: field 'locators' must be an object" % where)
+    for key, ent in locs.items():
+        w = "%s locator %r" % (where, key)
+        if not isinstance(ent, dict):
+            raise LocatorConfigError("%s: must be an object" % w)
+        for f, v in ent.items():
+            if f not in LOCATOR_FIELDS:
+                raise LocatorConfigError("%s: unknown field %r" % (w, f))
+            if f in ("ct", "role", "scope", "expect", "href_host") and not isinstance(v, str):
+                raise LocatorConfigError("%s: field %r must be a string" % (w, f))
+            if f in ("names", "patterns") and not _is_strlist(v):
+                raise LocatorConfigError("%s: field %r must be a list of strings" % (w, f))
+        if "expect" in ent and ent["expect"] not in EXPECTS:
+            raise LocatorConfigError("%s: field 'expect' must be one of %s" % (w, ", ".join(EXPECTS)))
+        if "scope" in ent and ent["scope"] not in SCOPE_KINDS:
+            raise LocatorConfigError("%s: field 'scope' unknown scope %r" % (w, ent["scope"]))
+        if "href_host" in ent and ent["href_host"] != HREF_HOST:
+            raise LocatorConfigError("%s: field 'href_host' must be %s" % (w, HREF_HOST))
+        for p in ent.get("patterns", []):
+            if p not in PATTERNS:
+                raise LocatorConfigError("%s: field 'patterns' unknown pattern %r" % (w, p))
+        for p in ent.get("names", []):
+            if p.startswith("re:"):
+                _compile(p, w + " field 'names'")
+
+
+def _read(path: Path, where: str) -> dict:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise LocatorConfigError("%s: cannot read %s (%s)" % (where, path, exc))
+    if not isinstance(cfg, dict):
+        raise LocatorConfigError("%s: top level must be an object" % where)
+    _validate(cfg, where)
+    return cfg
+
+
+def _require(cfg: dict) -> None:
+    for key, ent in cfg.get("locators", {}).items():
+        for f in REQUIRED:
+            if f not in ent:
+                raise LocatorConfigError("locator %r: missing field %r" % (key, f))
+
+
+def load_locators(bundled: Path, override: Optional[Path] = None) -> dict:
+    cfg = _read(Path(bundled), "bundled")
+    _require(cfg)
+    if override is not None and Path(override).exists():
+        ov = _read(Path(override), "override")
+        for k, v in ov.items():
+            if k == "locators":
+                for key, ent in v.items():
+                    cfg["locators"].setdefault(key, {}).update(copy.deepcopy(ent))
+            elif k == "scopes":
+                cfg["scopes"].update(copy.deepcopy(v))
+            else:
+                cfg[k] = copy.deepcopy(v)
+        _require(cfg)
+    cfg.setdefault("error_phrases", [])
+    return cfg
+
+
+# -- scope resolution -----------------------------------------------------
+def _scope_roots(scope: str, ctx: LocatorContext) -> List[Node]:
+    conf = ctx.locs.get("scopes", {}).get(scope, {})
+    doc = ctx.doc
+    if scope == "document":
+        return [doc]
+    if scope == "main":
+        return doc.find_all(lambda n, a: (n.role or "").lower() == "main")[:1]
+    if scope in ("popup", "desktop"):
+        return [ctx.tree.desktop_root()]
+    if scope == "top_bar":
+        prefix = conf.get("url_prefix", "app://bundle/src/top_bar/")
+        return [ctx.tree.snapshot(d.id) for d in ctx.tree.documents()
+                if (d.value or "").startswith(prefix)][:1]
+    if scope == "plan_card":
+        prefix = conf.get("ancestor_automation_id_prefix", "model-response-message-content")
+        turns = doc.find_all(lambda n, a: n.automation_id.startswith(prefix))
+        return turns[-1:]  # newest conversation turn
+    if scope == "composer":
+        akey = conf.get("anchor", "prompt_input")
+        anchor = ctx.anchor_cache.get(akey)
+        if anchor is None:
+            anchor = resolve(akey, ctx)[0]
+            ctx.anchor_cache[akey] = anchor
+        need = conf.get("min_buttons", 3)
+        for n, anc in doc.walk():
+            if n.id == anchor.id:
+                for a in reversed(anc):
+                    if sum(1 for x, _ in a.walk() if x.ct == "Button") >= need:
+                        return [a]
+                return []
+        return []
+    raise LocatorConfigError("unknown scope %r" % scope)
+
+
+def _host_ok(node: Node, host: str) -> bool:
+    href = (node.aria or {}).get("href") or node.value or ""
+    return urlparse(href).hostname == host
+
+
+def _base_match(n: Node, ent: dict) -> bool:
+    if n.ct != ent["ct"]:
+        return False
+    if ent.get("role") and (n.role or "").lower() != ent["role"].lower():
+        return False
+    return True
+
+
+def _matches(n: Node, ent: dict) -> bool:
+    if not _base_match(n, ent) or not match_name(n.name, ent["names"]):
+        return False
+    if not set(ent.get("patterns") or ()) <= set(n.patterns):
+        return False
+    if ent.get("href_host") and not _host_ok(n, ent["href_host"]):
+        return False
+    return True
+
+
+def _sim(name: str, pats: list) -> float:
+    best = 0.0
+    for p in pats:
+        ref = p[3:].replace(".*", "").replace(".+", "") if p.startswith("re:") else _norm(p)
+        best = max(best, difflib.SequenceMatcher(None, name, ref).ratio())
+    return best
+
+
+def _candidates(ent: dict, roots: List[Node], ctx: LocatorContext) -> list:
+    seen, out = set(), []
+    for root in roots:
+        for n, _ in root.walk():
+            if not _base_match(n, ent):
+                continue
+            name = _norm(n.name)
+            if not name or name in seen:
+                continue
+            if not (n.id in ctx.allowed or name in privacy.GENERIC_LABELS):
+                continue
+            sim = round(_sim(name, ent["names"]), 2)
+            if sim < MIN_SIMILARITY:
+                continue
+            seen.add(name)
+            out.append({"name": name, "ct": n.ct, "role": n.role, "similarity": sim})
+    out.sort(key=lambda c: -c["similarity"])
+    return out[:MAX_CANDIDATES]
+
+
+def resolve(key: str, ctx: LocatorContext) -> List[Node]:
+    ent = ctx.locs["locators"].get(key)
+    if ent is None:
+        raise LocatorConfigError("unknown locator %r" % key)
+    roots = _scope_roots(ent["scope"], ctx)
+    found, seen = [], set()
+    for root in roots:
+        for n, _ in root.walk():
+            if n.id not in seen and _matches(n, ent):
+                seen.add(n.id)
+                found.append(n)
+    expect = ent["expect"]
+    ok = (expect == "optional" or (expect == "unique" and len(found) == 1)
+          or (expect == "at_least_one" and len(found) >= 1))
+    if ok:
+        return found
+    cands = _candidates(ent, roots, ctx)
+    names = list(ent["names"])
+    if cands and cands[0]["name"] not in names:
+        names.append(cands[0]["name"])
+    payload = {
+        "code": "UI_LOCATOR_MISS", "locator": key, "scope": ent["scope"],
+        "expect": expect, "found": len(found), "candidates": cands,
+        "override_snippet": {"version": 1, "locators": {key: {"names": names}}},
+    }
+    raise LocatorMiss(privacy.scrub(payload))

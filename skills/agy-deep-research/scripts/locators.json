@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "scopes": {
+    "document": {},
+    "main": {},
+    "composer": {"anchor": "prompt_input", "min_buttons": 3},
+    "plan_card": {"ancestor_automation_id_prefix": "model-response-message-content"},
+    "popup": {},
+    "desktop": {},
+    "top_bar": {"url_prefix": "app://bundle/src/top_bar/"}
+  },
+  "locators": {
+    "prompt_input": {"ct": "Edit", "names": ["Gemini 프롬프트 입력", "Enter a prompt for Gemini"], "scope": "main", "expect": "unique", "patterns": []},
+    "send": {"ct": "Button", "names": ["메시지 보내기", "Send message"], "scope": "composer", "expect": "optional", "patterns": ["invoke"]},
+    "stop_response": {"ct": "Button", "names": ["대답 생성 중지", "Stop response"], "scope": "composer", "expect": "optional", "patterns": ["invoke"]},
+    "tools": {"ct": "Button", "names": ["업로드 및 도구", "Upload and tools"], "scope": "composer", "expect": "unique", "patterns": ["invoke"]},
+    "more_tools": {"ct": "MenuItem", "names": ["도구 더보기", "More tools"], "scope": "popup", "expect": "optional", "patterns": ["invoke"]},
+    "dr_item": {"ct": "MenuItem", "names": ["Deep Research"], "scope": "popup", "expect": "optional", "patterns": ["invoke"]},
+    "dr_on": {"ct": "Button", "names": ["Deep Research 선택 해제", "Deselect Deep Research"], "scope": "composer", "expect": "optional", "patterns": ["invoke"]},
+    "mode_button": {"ct": "Button", "names": ["re:모드 선택 도구 열기.*", "re:Open mode picker.*"], "scope": "composer", "expect": "optional", "patterns": ["invoke"]},
+    "mode_item": {"ct": "MenuItem", "names": ["re:.+"], "scope": "popup", "expect": "optional", "patterns": []},
+    "thinking_menu": {"ct": "MenuItem", "names": ["생각 모드", "Thinking"], "scope": "popup", "expect": "optional", "patterns": []},
+    "new_chat": {"ct": "Hyperlink", "names": ["새 채팅", "New chat"], "scope": "document", "expect": "optional", "patterns": []},
+    "sidebar_open": {"ct": "Button", "names": ["사이드바 열기", "Open sidebar"], "scope": "document", "expect": "optional", "patterns": ["invoke"]},
+    "sidebar_close": {"ct": "Button", "names": ["사이드바 닫기", "Close sidebar"], "scope": "document", "expect": "optional", "patterns": ["invoke"]},
+    "sidebar_more": {"ct": "Button", "names": ["더보기", "Show more"], "scope": "document", "expect": "optional", "patterns": ["invoke"]},
+    "plan_start": {"ct": "Button", "names": ["연구 시작", "Start research"], "scope": "plan_card", "expect": "unique", "patterns": ["invoke"]},
+    "plan_edit": {"ct": "Button", "names": ["연구 계획 수정", "Edit the research plan", "Edit plan"], "scope": "plan_card", "expect": "optional", "patterns": ["invoke"]},
+    "plan_cancel_countdown": {"ct": "Button", "names": ["취소", "Cancel"], "scope": "plan_card", "expect": "optional", "patterns": ["invoke"]},
+    "plan_retry_without_dr": {"ct": "Button", "names": ["Deep Research 없이 다시 시도", "Retry without Deep Research"], "scope": "plan_card", "expect": "optional", "patterns": ["invoke"]},
+    "app_menu": {"ct": "Button", "names": ["메인 메뉴", "Main menu"], "scope": "top_bar", "expect": "optional", "patterns": ["invoke"]},
+    "app_menu_file": {"ct": "MenuItem", "names": ["파일", "File"], "scope": "popup", "expect": "optional", "patterns": []},
+    "app_menu_quit": {"ct": "MenuItem", "names": ["re:종료.*", "re:(Quit|Exit).*"], "scope": "popup", "expect": "optional", "patterns": []},
+    "app_menu_view": {"ct": "MenuItem", "names": ["보기", "View"], "scope": "popup", "expect": "optional", "patterns": []},
+    "app_menu_reload": {"ct": "MenuItem", "names": ["re:새로고침.*", "re:Reload.*"], "scope": "popup", "expect": "optional", "patterns": []},
+    "sign_in": {"ct": "Hyperlink", "names": ["로그인", "Sign in"], "scope": "document", "expect": "optional", "patterns": []}
+  },
+  "surfaces_allowed": ["re:^https://gemini\\.google\\.com/app(/[0-9a-f]{8,})?$", "re:^app://bundle/src/top_bar/", "re:^blob:"],
+  "status_phrases": ["조사 계획 생성 중"],
+  "safety_phrases": ["도와드릴 수가 없습니다", "단지 언어 모델일 뿐"],
+  "error_phrases": ["요청하신 작업을 처리하는 중에 오류가 발생했습니다"],
+  "model_aliases": {"pro": "Neon", "flash": "Hydrogen", "argon": "카본", "carbon": "카본"}
+}

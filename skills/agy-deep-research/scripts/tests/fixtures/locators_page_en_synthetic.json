@@ -1,0 +1,319 @@
+{
+ "state": "s",
+ "states": {
+  "s": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat"
+              },
+              {
+               "id": "sb_open",
+               "ct": "Button",
+               "name": "Open sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "sb_more",
+               "ct": "Button",
+               "name": "Show more",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "signin",
+               "ct": "Hyperlink",
+               "name": "Sign in"
+              }
+             ]
+            },
+            {
+             "id": "acct",
+             "ct": "Hyperlink",
+             "name": "Google 계정: 테스트(test@example.invalid)"
+            },
+            {
+             "id": "nav2",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "chat1",
+               "ct": "Hyperlink",
+               "name": "비밀 대화 제목 1"
+              },
+              {
+               "id": "chat2",
+               "ct": "Hyperlink",
+               "name": "비밀 대화 제목 2"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "turn0",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-old",
+             "children": [
+              {
+               "id": "t0text",
+               "ct": "Text",
+               "name": "Answer body"
+              }
+             ]
+            },
+            {
+             "id": "turn1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-new",
+             "children": [
+              {
+               "id": "plan_start",
+               "ct": "Button",
+               "name": "Start research",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "plan_edit",
+               "ct": "Button",
+               "name": "Edit the research plan",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "plan_cancel",
+               "ct": "Button",
+               "name": "Cancel",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "plan_retry",
+               "ct": "Button",
+               "name": "Retry without Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "other_btn",
+             "ct": "Button",
+             "name": "Cancel",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": ""
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker: Pro",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_send",
+               "ct": "Button",
+               "name": "Send message",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/index.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ],
+   "desktop": {
+    "id": "desktop",
+    "ct": "Pane",
+    "name": "",
+    "children": [
+     {
+      "id": "pop",
+      "ct": "Menu",
+      "name": "",
+      "children": [
+       {
+        "id": "pm_more",
+        "ct": "MenuItem",
+        "name": "More tools",
+        "patterns": [
+         "invoke"
+        ]
+       },
+       {
+        "id": "pm_dr",
+        "ct": "MenuItem",
+        "name": "Deep Research",
+        "patterns": [
+         "invoke"
+        ]
+       },
+       {
+        "id": "pm_think",
+        "ct": "MenuItem",
+        "name": "Thinking",
+        "patterns": []
+       },
+       {
+        "id": "pm_mode",
+        "ct": "MenuItem",
+        "name": "Pro",
+        "patterns": []
+       },
+       {
+        "id": "pm_file",
+        "ct": "MenuItem",
+        "name": "File",
+        "patterns": []
+       },
+       {
+        "id": "pm_quit",
+        "ct": "MenuItem",
+        "name": "Quit (Ctrl+Q)",
+        "patterns": []
+       },
+       {
+        "id": "pm_view",
+        "ct": "MenuItem",
+        "name": "View",
+        "patterns": []
+       },
+       {
+        "id": "pm_reload",
+        "ct": "MenuItem",
+        "name": "Reload (Ctrl+R)",
+        "patterns": []
+       }
+      ]
+     }
+    ]
+   }
+  }
+ },
+ "transitions": [],
+ "_note": "synthetic: Korean recording with labels substituted"
+}
