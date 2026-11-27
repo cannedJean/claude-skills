@@ -125,20 +125,20 @@ class DeepResearchTestCase(DeepResearchTestBase):
         self.assertEqual(rc, 0, st)
         self.assertEqual(st["status"], "ok")
         self.assertEqual(st["sync_status"], "in_sync")
-        self.assertEqual(len(st["copied"]), 11)   # 10 bundled files + SKILL.md
+        self.assertEqual(len(st["copied"]), 12)   # 11 bundled files + SKILL.md
         self.assertTrue((self.target_skill_dir / "scripts" / "relay_step.py").is_file())
         self.assertTrue((self.target_skill_dir / "scripts" / "run_deep_research.py").is_file())
         for name in ("gemini_host.py", "uitree.py", "privacy.py", "locators.py", "locators.json", "steps.py",
-                     "uia_backend.py", "report_md.py"):
+                     "uia_backend.py", "report_md.py", "fg_tracer.py"):
             self.assertTrue((self.target_skill_dir / "scripts" / name).is_file(), name)
         for gone in ("patch_gemini_app.py", "chrome_launcher.py"):
             self.assertFalse((self.target_skill_dir / "scripts" / gone).exists(), gone)
         self.assertTrue((self.target_skill_dir / "SKILL.md").is_file())
 
-        # Re-running setup reports all 11 files unchanged
+        # Re-running setup reports all 12 files unchanged
         rc, st2, _ = self.run_dr(["setup", "--target-dir", str(self.target_skill_dir)])
         self.assertEqual(rc, 0)
-        self.assertEqual(len(st2["unchanged"]), 11)
+        self.assertEqual(len(st2["unchanged"]), 12)
 
         # Modify one target file -> preflight detects out_of_sync, setup restores it
         (self.target_skill_dir / "SKILL.md").write_text("# modified\n", encoding="utf-8")

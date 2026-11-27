@@ -23,6 +23,7 @@ import deep_research as dr  # noqa: E402
 import gemini_host as gh  # noqa: E402
 from test_gemini_host_win32 import (APP, OURS, PROFILE, STUB, UDD, FakeOS, add_user_instance,  # noqa: E402
                                     make_host, start_d2_instance)
+from test_fg_tracer import FakeFg, window  # noqa: E402
 from test_plan_steps import locs as bundled_locs  # noqa: E402
 from uitree import FakeTree  # noqa: E402
 
@@ -117,7 +118,7 @@ class CliHarness(unittest.TestCase):
         self.tree = None
         self.factory_calls = 0
 
-    def parts(self, tree=None, quit_via_menu=None, locs=None):
+    def parts(self, tree=None, quit_via_menu=None, locs=None, fg_os=None):
         self.tree = tree
 
         def tree_on(desktop, pids):
@@ -128,7 +129,7 @@ class CliHarness(unittest.TestCase):
 
         return dr.CliParts(host=self.host, open_tree=lambda s: self.tree, tree_on=tree_on,
                            locs=locs or bundled_locs(), clock=self.fake.clock, sleep=self.fake.sleep,
-                           tool_dir=self.tmp / "tool", quit_via_menu=quit_via_menu)
+                           tool_dir=self.tmp / "tool", quit_via_menu=quit_via_menu, fg_os=fg_os)
 
     def run_cli(self, argv, parts=None, platform="win32", runner=None):
         def factory(a):
@@ -331,7 +332,7 @@ class DoctorTests(CliHarness):
         for key in ("status", "command", "foreground", "host_mode", "host_reason", "app_version", "instances",
                     "binding", "privacy_region", "signed_in", "locators", "summary", "snapshot", "locators_override"):
             self.assertIn(key, res)
-        self.assertIsNone(res["foreground"])   # the R6 tracer fills it (Task B5)
+        self.assertEqual(res["foreground"], {"measured": False, "reason": "no_tracer", "violated": False})
         self.assertEqual((res["host_mode"], res["host_reason"], res["app_version"]), ("D2", "reused", "1.2.3"))
         self.assertEqual([i["browser_pid"] for i in res["instances"]], [7000])   # never the user's instance
         self.assertEqual(res["binding"], {"conversation_documents": 1, "bindable": True, "kind": "fresh"})
@@ -358,6 +359,47 @@ class DoctorTests(CliHarness):
         self.assertEqual(self.fake.launches(), [])
         self.assertEqual((res["started"], res["closed"]), (False, None))   # a reused instance stays
         self.assertIn(7000, self.fake.procs)
+
+    def test_doctor_foreground_trace_shape_user_gemini_is_not_ours(self):
+        add_our_instance(self.fake)
+        add_user_instance(self.fake)
+        fg = FakeFg()
+        fg.fg = (1000, 100)   # the user's Gemini (pid 100) is the default desktop's foreground
+        fg.images[100] = "Gemini.exe"
+        fg.windows = [window(100)]
+        rc, res, text, _ = self.run_cli(["doctor"], parts=self.parts(FakeTree(page()), fg_os=fg))
+        self.assertEqual(rc, 0, res)
+        f = res["foreground"]
+        for key in ("gemini_foreground_events", "ours", "visible_windows", "samples", "started_at", "ended_at",
+                    "violated", "measured"):
+            self.assertIn(key, f)
+        self.assertTrue(f["measured"])
+        self.assertGreaterEqual(f["gemini_foreground_events"], 1)
+        self.assertGreaterEqual(f["visible_windows"], 1)
+        self.assertEqual((f["ours"]["foreground_events"], f["ours"]["visible_window_samples"]), (0, 0))
+        self.assertTrue(f["ours"]["pids_known"])
+        self.assertFalse(f["violated"])
+        self.assertEqual(res["status"], "ok")
+        self.assert_no_secrets(text)
+
+    def test_doctor_our_instance_in_the_foreground_fails_with_exit_2(self):
+        add_our_instance(self.fake)
+        fg = FakeFg()
+        fg.fg = (70000, 7001)   # a window of our verified tree (renderer pid) has the foreground
+        rc, res, text, _ = self.run_cli(["doctor"], parts=self.parts(FakeTree(page()), fg_os=fg))
+        self.assertEqual((rc, res["status"], res["code"], res["exit_code"]),
+                         (2, "error", "FOREGROUND_INVARIANT_VIOLATED", 2))
+        self.assertTrue(res["foreground"]["violated"])
+        self.assertIn("locators", res)   # the diagnostic report is still there
+        self.assert_no_secrets(text)
+
+    def test_doctor_our_window_visible_on_the_default_desktop_fails(self):
+        add_our_instance(self.fake)
+        fg = FakeFg()
+        fg.windows = [window(7000)]
+        rc, res, _, _ = self.run_cli(["doctor"], parts=self.parts(FakeTree(page()), fg_os=fg))
+        self.assertEqual((rc, res["code"]), (2, "FOREGROUND_INVARIANT_VIOLATED"))
+        self.assertGreaterEqual(res["foreground"]["ours"]["visible_window_samples"], 1)
 
     def test_doctor_closes_the_instance_it_started(self):
         add_user_instance(self.fake)

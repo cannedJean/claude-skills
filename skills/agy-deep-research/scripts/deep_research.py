@@ -51,6 +51,7 @@ import locators  # noqa: E402
 import privacy  # noqa: E402
 import steps  # noqa: E402
 import uitree  # noqa: E402
+import fg_tracer  # noqa: E402  (stdlib only on import; Win32FgOS loads ctypes on first use, refused in the sandbox)
 
 for _s in (sys.stdout, sys.stderr):
     if hasattr(_s, "reconfigure"):
@@ -63,7 +64,7 @@ SKILL_DIR = SCRIPT_DIR.parent
 DEFAULT_AGY_TASK = SKILL_DIR.parent / "agy-delegate" / "scripts" / "agy_task.py"
 DEFAULT_TARGET_SKILL_DIR = Path.home() / ".gemini" / "config" / "skills" / "local-gemini-deep-research"
 BUNDLED_SCRIPTS = ("relay_step.py", "run_deep_research.py", "gemini_host.py", "uitree.py", "privacy.py", "locators.py",
-                   "locators.json", "steps.py", "uia_backend.py", "report_md.py")
+                   "locators.json", "steps.py", "uia_backend.py", "report_md.py", "fg_tracer.py")
 # scripts an earlier release installed into the target; setup deletes exactly these names, preflight flags them
 OBSOLETE_SCRIPTS = ("patch_gemini_app.py", "chrome_launcher.py")
 BUNDLED_REF_SKILL = SKILL_DIR / "references" / "SKILL.md"
@@ -1255,7 +1256,8 @@ class CliParts:
     (it moves the calling thread there for good: the process ends after the command);
     `run_on(desktop, pids, fn)`: fn(tree) with a UiTree of those pids' windows, run in a fresh thread put on
     `desktop` (the calling thread's desktop is never changed); tests inject `tree_on(desktop, pids)` instead, which
-    is called in the caller's thread; `quit_via_menu`: override of the app-menu quit."""
+    is called in the caller's thread; `quit_via_menu`: override of the app-menu quit; `fg_os`: the R6 tracer's
+    fg_tracer.FgOS (None: doctor reports the foreground as not measured)."""
     host: Any
     open_tree: Callable[[Any], Any]
     tree_on: Optional[Callable[[str, list], Any]] = None
@@ -1265,6 +1267,7 @@ class CliParts:
     tool_dir: Optional[Path] = None
     quit_via_menu: Optional[Callable[[str, list, list], None]] = None
     run_on: Optional[Callable[[str, list, Callable[[Any], Any]], Any]] = None
+    fg_os: Optional[Any] = None
 
 
 def _with_tree(parts: CliParts, desktop: str, pids: list, fn: Callable[[Any], Any]):
@@ -1325,7 +1328,7 @@ def run_on_desktop(desktop: str, pids: list, fn: Callable[[Any], Any]):
 def default_cli_parts(a) -> CliParts:
     """The real host and trees, built by the driver's factory (refused inside the test sandbox first)."""
     dp = _rdr().default_driver_factory(a)
-    return CliParts(host=dp.host, open_tree=dp.open_tree, run_on=run_on_desktop)
+    return CliParts(host=dp.host, open_tree=dp.open_tree, run_on=run_on_desktop, fg_os=fg_tracer.Win32FgOS())
 
 
 def _parts(a) -> CliParts:
@@ -1583,6 +1586,27 @@ def _doctor_close(parts: CliParts, locs: dict, session) -> tuple[bool, dict]:
         return False, {"error": type(exc).__name__}
 
 
+def _doctor_tracer(parts: CliParts):
+    """R6 in doctor: a short in-process trace of the default desktop's foreground for the whole command. `ours` are
+    the pids of the instances Host lists (never the user's); doctor adds them (tracer.add_pids) as it learns them."""
+    if parts.fg_os is None:
+        return None
+    tracer = fg_tracer.FgTracer(parts.fg_os)
+    try:
+        tracer.start()
+    except gemini_host.HostRefused:
+        return None
+    return tracer
+
+
+def _doctor_tracer_stop(tracer) -> dict:
+    if tracer is None:
+        return {"measured": False, "reason": "no_tracer", "violated": False}
+    res = tracer.stop()
+    res["measured"] = res.get("samples", 0) > 0
+    return res
+
+
 def cmd_doctor(a) -> int:
     rc = _unsupported("doctor", a)
     if rc is not None:
@@ -1594,37 +1618,12 @@ def cmd_doctor(a) -> int:
         parts = _parts(a)
         locs = _locs(parts)
         host = parts.host
-        out: dict = {"status": "ok", "command": "doctor", "foreground": None}   # foreground: the R6 tracer (B5)
-        with host.lock():
-            if a.no_start:
-                ours = [i for i in host.instances(active_job_ids()) if i.desktop == host.cfg.desktop]
-                session = (gemini_host.HostSession(ours[0].mode, ours[0].desktop, ours[0].browser_pid, "reused")
-                           if ours else None)
-            else:
-                session = host.ensure(None)
-            started = session is not None and session.reason != "reused"
-            snap = None
-            try:
-                insts = host.instances(active_job_ids())
-                state = host.load_state() or {}
-                out.update(host_mode=session.mode if session else None,
-                           host_reason=session.reason if session else None,
-                           app_version=state.get("app_version") if session else None,
-                           instances=[instance_json(i) for i in insts],
-                           locators_override=_override_keys(), started=started, closed=None)
-                if session is None:
-                    out.update(binding=None, privacy_region=None, signed_in=None, locators=None,
-                               message="no instance of ours on the hidden desktop (run doctor without --no-start)")
-                else:
-                    mine = [i for i in insts if i.browser_pid == session.browser_pid]
-                    if len(mine) != 1:
-                        raise gemini_host.HostError("HOST_DESKTOP_LOST", "our Gemini instance is gone")
-                    report, snap = _with_tree(parts, session.desktop, mine[0].pids,
-                                              lambda tree: doctor_report(tree, locs))
-                    out.update(report)
-            finally:
-                if started:  # doctor never leaves behind an instance it started itself; a reused one stays
-                    out["closed"], out["close"] = _doctor_close(parts, locs, session)
+        out: dict = {"status": "ok", "command": "doctor", "foreground": None}
+        tracer = _doctor_tracer(parts)
+        try:
+            snap = _doctor_run(a, parts, locs, host, out, tracer.add_pids if tracer is not None else None)
+        finally:
+            out["foreground"] = _doctor_tracer_stop(tracer)
         if a.snapshot and snap is not None:
             base = Path(parts.tool_dir) if parts.tool_dir is not None else tool_dir()
             path = base / "doctor" / ("snapshot-%s.json" % _dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
@@ -1633,10 +1632,54 @@ def cmd_doctor(a) -> int:
             out["snapshot"] = str(path)
         else:
             out["snapshot"] = None
+        if out["foreground"].get("violated"):   # R6 (spec 20-11): our instance was the foreground or visible
+            out.update(status="error", code="FOREGROUND_INVARIANT_VIOLATED", exit_code=2,
+                       message="our Gemini instance became the foreground window or showed a window on the default "
+                               "desktop")
+            _emit(out)
+            return 2
         _emit(out)
         return 0
     except Exception as exc:  # noqa: BLE001 - every failure becomes one scrubbed error record
         return _fail("doctor", exc)
+
+
+def _doctor_run(a, parts: CliParts, locs: dict, host, out: dict, add_pids: Optional[Callable[[list], None]]):
+    """Fills `out` (instances, locators, ...) under host.lock; returns the snapshot (or None). `add_pids` gets the
+    pids of every instance of ours it sees, for the R6 tracer."""
+    with host.lock():
+        if a.no_start:
+            ours = [i for i in host.instances(active_job_ids()) if i.desktop == host.cfg.desktop]
+            session = (gemini_host.HostSession(ours[0].mode, ours[0].desktop, ours[0].browser_pid, "reused")
+                       if ours else None)
+        else:
+            session = host.ensure(None)
+        started = session is not None and session.reason != "reused"
+        snap = None
+        try:
+            insts = host.instances(active_job_ids())
+            if add_pids is not None:
+                add_pids([pid for i in insts for pid in i.pids])
+            state = host.load_state() or {}
+            out.update(host_mode=session.mode if session else None,
+                       host_reason=session.reason if session else None,
+                       app_version=state.get("app_version") if session else None,
+                       instances=[instance_json(i) for i in insts],
+                       locators_override=_override_keys(), started=started, closed=None)
+            if session is None:
+                out.update(binding=None, privacy_region=None, signed_in=None, locators=None,
+                           message="no instance of ours on the hidden desktop (run doctor without --no-start)")
+            else:
+                mine = [i for i in insts if i.browser_pid == session.browser_pid]
+                if len(mine) != 1:
+                    raise gemini_host.HostError("HOST_DESKTOP_LOST", "our Gemini instance is gone")
+                report, snap = _with_tree(parts, session.desktop, mine[0].pids,
+                                          lambda tree: doctor_report(tree, locs))
+                out.update(report)
+        finally:
+            if started:  # doctor never leaves behind an instance it started itself; a reused one stays
+                out["closed"], out["close"] = _doctor_close(parts, locs, session)
+    return snap
 
 
 # --- signin -----------------------------------------------------------------------------------------------------

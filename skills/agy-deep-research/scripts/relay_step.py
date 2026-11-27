@@ -42,7 +42,10 @@ REPORT_PROVENANCE_MISSING; a report file left over from an earlier run is never 
 
 result.json: status (plan_ready | plan_revised | completed | started | error), code, message, hint, rc, event, url,
 conversation_id, report_title, plan, plan_count, edit_button_clicked, confirm_clicked, app_status, navigated,
-report_file, report_chars, sources_count, elapsed_s, stdout_log, stderr_log, pid. For a completed report `url` /
+report_file, report_chars, sources_count, elapsed_s, stdout_log, stderr_log, pid, and for plan / edit
+foreground_invariant (the R6 tracer's summary: fg_tracer.py runs detached around the driver run and appends to
+relay/foreground.jsonl) and foreground_invariant_violated (true: our instance became the default desktop's foreground
+or showed a window there -> FOREGROUND_INVARIANT_VIOLATED, exit 2). For a completed report `url` /
 `conversation_id` are the driver's provenance (where the report came from), never a later look at the page.
 
 Privacy: the driver's stdout/stderr logs and progress.jsonl in relay/ are written line by line scrubbed (the relay parses
@@ -300,6 +303,106 @@ def kill_tree(proc):
         proc.kill()
     except Exception:
         pass
+
+
+FG_TRACER = "fg_tracer.py"
+FG_JSONL = "foreground.jsonl"
+FG_START_WAIT_S = 5.0     # wait this long for the tracer's start record before the driver runs (else late_start)
+FG_STOP_WAIT_S = 5.0
+FG_DETACHED_FLAGS = 0x00000008 | 0x00000200   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: no console window, ever
+
+
+def _fg_lines(path, run_id):
+    out = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict) and rec.get("run") == run_id:
+                    out.append(rec)
+    except OSError:
+        pass
+    return out
+
+
+def start_fg_tracer(job, relay_dir, run_id, max_s):
+    """R6: start fg_tracer.py detached on this (default) desktop, watching this relay process; list argv, no shell,
+    same interpreter, cwd = the job. Never started inside the test sandbox. Returns the handle stop_fg_tracer takes."""
+    h = {"run_id": run_id, "path": os.path.join(relay_dir, FG_JSONL), "proc": None}
+    script = os.path.join(_HERE, FG_TRACER)
+    if os.environ.get("AGY_DR_TEST_SANDBOX") == "1":
+        h["reason"] = "sandbox"
+    elif os.name != "nt":
+        h["reason"] = "platform"
+    elif not os.path.isfile(script):
+        h["reason"] = "tracer_missing"
+    if h.get("reason"):
+        return h
+    argv = [sys.executable, script, "--job", job, "--watch-pid", str(os.getpid()), "--run-id", run_id,
+            "--max-s", str(int(max_s)), "--stop-on-eof"]
+    try:
+        h["proc"] = subprocess.Popen(argv, cwd=job, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, close_fds=True, creationflags=FG_DETACHED_FLAGS)
+    except OSError as e:
+        h["reason"] = f"start_failed: {type(e).__name__}"
+        return h
+    t_end = time.time() + FG_START_WAIT_S
+    while time.time() < t_end and h["proc"].poll() is None:
+        if any(r.get("event") == "start" for r in _fg_lines(h["path"], run_id)):
+            h["started"] = True
+            break
+        time.sleep(0.05)
+    return h
+
+
+def fg_summary_from_lines(lines):
+    """The tracer's end record, or (it was killed) a summary rebuilt from its change records."""
+    ends = [r for r in lines if r.get("event") == "end"]
+    if ends:
+        end = {k: v for k, v in ends[-1].items() if k not in ("event", "run")}
+        end["complete"] = end.get("reason") != "refused"
+        return end
+    fg = [r for r in lines if r.get("event") == "foreground"]
+    vis = [r for r in lines if r.get("event") == "visible"]
+    ours_fg = sum(1 for r in fg if r.get("ours"))
+    ours_vis = sum(1 for r in vis if r.get("ours"))
+    return {"gemini_foreground_events": sum(1 for r in fg if r.get("gemini") or r.get("ours")),
+            "foreground_changes": len(fg), "visible_windows": sum(1 for r in vis if r.get("gemini_windows")),
+            "ours": {"foreground_events": ours_fg, "visible_window_samples": ours_vis},
+            "violated": bool(ours_fg or ours_vis), "complete": False, "reason": "no_end_record"}
+
+
+def stop_fg_tracer(h):
+    """Stop the tracer (close its stdin; kill it after FG_STOP_WAIT_S) and read this run's records. Returns the
+    result's `foreground_invariant` value: {"measured": False, "reason"} when nothing was traced."""
+    proc = h.get("proc")
+    if proc is None:
+        return {"measured": False, "reason": h.get("reason") or "not_started", "violated": False}
+    try:
+        if proc.stdin:
+            proc.stdin.close()
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=FG_STOP_WAIT_S)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+            proc.wait(timeout=FG_STOP_WAIT_S)
+        except Exception:  # noqa: BLE001 - the summary below is rebuilt from the records written so far
+            pass
+    lines = _fg_lines(h["path"], h["run_id"])
+    if not lines:
+        return {"measured": False, "reason": "no_records", "violated": False}
+    out = {"measured": True, "late_start": not h.get("started")}
+    out.update(fg_summary_from_lines(lines))
+    if out.get("reason") == "refused":
+        out["measured"] = False
+    out["violated"] = bool(out.get("violated"))
+    return out
 
 
 def resolve_driver(req):
@@ -761,19 +864,27 @@ def do_step(job, req, relay_dir, result_path):
     conv_kw = {"conversation_path": os.path.join(relay_dir, "conversation.json"), "conversation_meta": {"seq": seq, "step": step}}
     drv_env = dict(req.get("env") or {}) if isinstance(req.get("env"), dict) else {}
     drv_env[STEP_DEADLINE_ENV] = str(deadline)
-    run = run_driver(argv, job, out_log, err_log, deadline, allow_missing, progress_path=progress, extra_env=drv_env, **conv_kw)
-    err = classify(run, step)
-    retried = False
-    if err and err.code in RETRY_ONCE and step in ("plan", "auto") and not run.prompt_sent:
-        # Observed live: right after "Opening new chat..." the Tools menu sometimes does not open within the driver's
-        # five attempts; a second run finds the tab already on the new-chat page and succeeds. One retry, same request.
-        retried = True
-        out_log = os.path.join(relay_dir, prefix + "b.stdout.txt")
-        err_log = os.path.join(relay_dir, prefix + "b.stderr.txt")
+    # R6: the default desktop's foreground is traced around the plan / edit driver runs (spec section 14, 20-11)
+    tracer = start_fg_tracer(job, relay_dir, f"{prefix}-{os.getpid()}-{int(time.time() * 1000)}",
+                             2 * deadline + 60) if step in ("plan", "edit") else None
+    try:
         run = run_driver(argv, job, out_log, err_log, deadline, allow_missing, progress_path=progress, extra_env=drv_env, **conv_kw)
         err = classify(run, step)
+        retried = False
+        if err and err.code in RETRY_ONCE and step in ("plan", "auto") and not run.prompt_sent:
+            # Observed live: right after "Opening new chat..." the Tools menu sometimes does not open within the driver's
+            # five attempts; a second run finds the tab already on the new-chat page and succeeds. One retry, same request.
+            retried = True
+            out_log = os.path.join(relay_dir, prefix + "b.stdout.txt")
+            err_log = os.path.join(relay_dir, prefix + "b.stderr.txt")
+            run = run_driver(argv, job, out_log, err_log, deadline, allow_missing, progress_path=progress, extra_env=drv_env, **conv_kw)
+            err = classify(run, step)
+    finally:
+        fg = stop_fg_tracer(tracer) if tracer is not None else None
     res = base_result(req, run)
     res.update({"stdout_log": out_log, "stderr_log": err_log, "retried": retried})
+    if fg is not None:
+        res.update({"foreground_invariant": fg, "foreground_invariant_violated": bool(fg.get("violated"))})
     pinned = run.conversation or {}
     if pinned:   # the conversation this run bound, on every result (errors too), so the caller can collect later
         res.update({"conversation_id": pinned["conversation_id"], "conversation_url": pinned["url"]})
@@ -784,6 +895,15 @@ def do_step(job, req, relay_dir, result_path):
         res.update({"status": "error", "code": "COLLECT_STARTED_RESEARCH", "exit_code": 2,
                     "message": "collect clicked '연구 시작': a research started that the caller had not approved in this step",
                     "hint": "the research is now running in the app; the caller records it and may collect later"})
+        write_result(result_path, res)
+        return res, 2
+    if fg is not None and fg.get("violated"):
+        # our instance became the default desktop's foreground or showed a window there: the step fails (exit 2)
+        if err:
+            res["driver_code"] = err.code
+        res.update({"status": "error", "code": "FOREGROUND_INVARIANT_VIOLATED", "exit_code": 2,
+                    "message": "our Gemini instance became the foreground window or showed a window on the default desktop",
+                    "hint": "nothing from this step is used; report it (R6), do not retry until the cause is known"})
         write_result(result_path, res)
         return res, 2
     if err:
