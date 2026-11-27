@@ -44,7 +44,106 @@ class ScrubTests(unittest.TestCase):
         self.assertEqual(out["b"]["n"], 5)
 
 
+class ScrubHardeningTests(unittest.TestCase):
+    def test_scrub_dict_keys(self):
+        out = privacy.scrub({"Google 계정: 테스트(t@e.invalid)": 1, "ok": 2})
+        self.assertEqual(sorted(out.values()), [1, 2])
+        self.assertNotIn("테스트", json.dumps(out, ensure_ascii=False))
+        self.assertIn("ok", out)
+
+    def test_scrub_bytes(self):
+        out = privacy.scrub("Google 계정: 테스트(t@e.invalid)".encode("utf-8"))
+        self.assertIsInstance(out, str)
+        self.assertTrue(out.startswith("<redacted:account"))
+        out2 = privacy.scrub(bytearray(b"\xff\xfe plain"))
+        self.assertIsInstance(out2, str)
+
+    def test_scrub_sets(self):
+        out = privacy.scrub({"a@b.invalid", "fine"})
+        self.assertIsInstance(out, set)
+        self.assertNotIn("a@b.invalid", out)
+        self.assertIn("fine", out)
+        fout = privacy.scrub(frozenset({"a@b.invalid"}))
+        self.assertIsInstance(fout, frozenset)
+        self.assertNotIn("a@b.invalid", fout)
+
+    def test_scrub_long_text_variants(self):
+        pad = "본문 " * 80
+        out = privacy.scrub(pad + " user@localhost x GOOGLE ACCOUNT: Bob\n끝")
+        self.assertNotIn("user@localhost", out)
+        self.assertNotIn("Bob", out)
+        self.assertIn("끝", out)
+        out = privacy.scrub(pad + " google 계정 : 밥\n끝")
+        self.assertNotIn("밥", out)
+
+    def test_scrub_length_boundary(self):
+        s200 = "u@" + "x" * 198
+        s201 = "u@" + "x" * 199
+        self.assertEqual(len(s200), 200)
+        self.assertEqual(privacy.scrub(s200), "<redacted:account len=200>")
+        out = privacy.scrub(s201)
+        self.assertNotEqual(out, "<redacted:account len=201>")
+        self.assertNotIn("@", out)
+
+
 class AllowListTests(unittest.TestCase):
+    def test_fail_closed_without_nav_region(self):
+        doc = _page()
+        for n, _ in doc.walk():
+            if n.role == "navigation":
+                n.role = "group"
+        self.assertEqual(privacy.region_check(doc), (False, "no_nav_region"))
+        self.assertEqual(privacy.allowed_ids(doc), set())
+
+    def test_uppercase_roles_still_excluded(self):
+        doc = _page()
+        for n, _ in doc.walk():
+            n.role = n.role.upper()
+        ok, reason = privacy.region_check(doc)
+        self.assertTrue(ok, reason)
+        allowed = privacy.allowed_ids(doc)
+        for bad in ("sidebar", "nav1", "acct", "chat1"):
+            self.assertNotIn(bad, allowed)
+        self.assertIn("composer", allowed)
+
+    def test_fail_closed_on_duplicate_ids(self):
+        doc = _page()
+        doc.children[0].children[0].children.append(Node(id="composer", ct="Edit"))
+        self.assertEqual(privacy.region_check(doc), (False, "duplicate_ids"))
+        self.assertEqual(privacy.allowed_ids(doc), set())
+
+    def test_account_under_main_caught_by_scrub(self):
+        doc = _page()
+        main = [n for n, _ in doc.walk() if n.role == "main"][0]
+        main.children.append(Node(id="stray", ct="Hyperlink",
+                                  name="Google 계정: 테스트(test@example.invalid)"))
+        # structural layer does not protect this node ...
+        self.assertIn("stray", privacy.allowed_ids(doc))
+        # ... the scrub backstop does
+        self.assertTrue(privacy.scrub(main.children[-1].name).startswith("<redacted:account"))
+
+    def test_nested_region_in_region_excluded(self):
+        doc = _page()
+        main = [n for n, _ in doc.walk() if n.role == "main"][0]
+        main.children.append(Node(id="outer", ct="Group", role="region", children=[
+            Node(id="inner", ct="Group", role="region", children=[
+                Node(id="n9", ct="Group", role="navigation", children=[
+                    Node(id="deep", ct="Text", name="x")])]),
+            Node(id="sib", ct="Text", name="y")]))
+        allowed = privacy.allowed_ids(doc)
+        for bad in ("outer", "inner", "n9", "deep", "sib"):
+            self.assertNotIn(bad, allowed)
+        self.assertIn("composer", allowed)
+
+    def test_main_inside_excluded_fails_closed(self):
+        doc = Node(id="d", ct="Document", children=[
+            Node(id="b", ct="Group", role="banner", children=[
+                Node(id="m", ct="Group", role="main", children=[
+                    Node(id="r", ct="Group", role="region", children=[
+                        Node(id="n", ct="Group", role="navigation")])])])])
+        self.assertEqual(privacy.region_check(doc), (False, "main_inside_excluded"))
+        self.assertEqual(privacy.allowed_ids(doc), set())
+
     def test_allowed_excludes_sidebar_region_and_account(self):
         doc = _page()
         ok, reason = privacy.region_check(doc)
