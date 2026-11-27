@@ -12,10 +12,17 @@ Import this FIRST in every test module (effective on import, idempotent):
   * Write-type file operations (open in w/a/x/+ mode, os.replace/rename/remove/unlink/makedirs/mkdir/...,
     shutil.copy*/move/rmtree, pathlib write/touch/unlink/mkdir/rename/replace) refuse any target
     under the real Gemini dir or the real %APPDATA%\\gemini. Reads stay allowed.
-  * Child processes: a temp `sitecustomize.py` that imports this module is put first on PYTHONPATH
-    (together with this directory), so every Python child and grandchild is guarded too. Non-Python
-    children (and `python -I` / `-S`, which ignore PYTHONPATH / site) only get the environment
-    redirect, not the guard.
+  * Child processes: a temp `sitecustomize.py` that imports this module (from this directory, baked
+    into the shim) is put first on PYTHONPATH (together with this directory), so every Python child
+    and grandchild is guarded too; if the import fails the child exits at once (code 70) instead of
+    running unguarded. Non-Python children (and `python -I` / `-S`, which ignore PYTHONPATH / site)
+    only get the environment redirect, not the guard. `shim_dir()` gives run_verification.py the same
+    shim for the unit-test subprocess.
+
+Only a plain `import sandbox` (first import) is accepted by run_verification's check. Run one test file
+from scripts/ with tests/ on sys.path:
+    python -m unittest discover -s tests -p test_sandbox.py
+(`python -m unittest tests.test_x` from scripts/ cannot import sandbox without PYTHONPATH=tests.)
 """
 from __future__ import annotations
 
@@ -41,7 +48,12 @@ class SandboxViolation(RuntimeError):
 
 
 def _norm(text: str) -> str:
-    return text.replace("/", "\\").lower()
+    low = text.replace("/", "\\").lower()
+    for prefix in ("\\\\?\\unc\\", "\\\\?\\", "\\??\\", "\\\\.\\"):
+        if low.startswith(prefix):  # Win32 long-path / NT object / device prefixes name the same file
+            low = ("\\\\" if prefix.endswith("unc\\") else "") + low[len(prefix):]
+            break
+    return low
 
 
 def real_gemini_dir() -> str:
@@ -57,14 +69,14 @@ def _real_appdata_gemini() -> str:
 
 
 def _variants(path: str) -> set:
-    """Lower-cased backslash spellings of a path: raw, absolute and (if it exists) real."""
+    """Lower-cased backslash spellings of a path: raw, absolute and real (realpath also for a path that does not
+    exist yet: it still resolves links and 8.3 short names of the existing part)."""
     out = {_norm(path)}
-    try:
-        out.add(_norm(os.path.abspath(path)))
-        if os.path.exists(path):
-            out.add(_norm(os.path.realpath(path)))
-    except (OSError, ValueError):
-        pass
+    for fn in (os.path.abspath, os.path.realpath):
+        try:
+            out.add(_norm(fn(path)))
+        except (OSError, ValueError):
+            pass
     return out
 
 
@@ -85,7 +97,14 @@ def _under(path: str, needles: set) -> bool:
 _BAD_NAMES = ("gemini.exe", "patch_gemini_app.py", "chrome.exe", "msedge.exe")
 _BAD_STEMS = {"chrome", "msedge"}
 _TOKEN_SPLIT = re.compile(r"[\s\"'=;,]+")
-_START_APP = re.compile(r"\bstart(-process)?\b.*google\\gemini")
+_START_APP = re.compile(r"\bstart(-process)?\b.*google\\gemini", re.S)
+# a token right after one of these starts a program: `cmd /c chrome`, `start chrome`, `Start-Process -FilePath x`
+_LAUNCHERS = {"\\c", "\\k", "start", "start-process", "-filepath", "call", "&"}  # after _norm, "/c" reads "\c"
+
+
+def _stem(token: str) -> str:
+    last = token.strip(" \t\"'").rsplit("\\", 1)[-1]
+    return last[:-4] if last.endswith(".exe") else last
 
 
 def _reason(item: str, is_command: bool = False):
@@ -102,9 +121,12 @@ def _reason(item: str, is_command: bool = False):
         if name in low:
             return name
     if is_command:  # bare `chrome` / `msedge` as the program, not as an argument value
-        toks = [t for t in _TOKEN_SPLIT.split(low) if t]
-        if toks and toks[0].rsplit("\\", 1)[-1] in _BAD_STEMS:
+        if _stem(low) in _BAD_STEMS:  # one argv element: a full path with spaces and no .exe
             return "browser"
+        toks = [t for t in _TOKEN_SPLIT.split(low) if t]
+        for i, tok in enumerate(toks):
+            if (i == 0 or toks[i - 1] in _LAUNCHERS) and _stem(tok) in _BAD_STEMS:
+                return "browser"
     return None
 
 
@@ -156,7 +178,7 @@ def _mark(fn):
     return fn
 
 
-def _wrap_write(owner, name, positions, kwnames=("path", "src", "dst", "target", "file")) -> None:
+def _wrap_write(owner, name, positions, kwnames=("path", "src", "dst", "target", "file", "name")) -> None:
     orig = getattr(owner, name, None)
     if orig is None or getattr(orig, "_agy_sandbox", False):
         return
@@ -213,11 +235,16 @@ def _install_exec_guards() -> None:
     orig_init = subprocess.Popen.__init__
 
     def guarded_init(self, args, *a, **kw):
+        # Popen(args, bufsize, executable, stdin, stdout, stderr, preexec_fn, close_fds, shell, cwd, ...)
+        if not isinstance(args, (str, bytes, os.PathLike)):
+            args = list(args)  # an iterator is consumed here: hand the materialised list on
         parts = [args] if isinstance(args, (str, bytes, os.PathLike)) else list(args)
-        executable = kw.get("executable", a[1] if len(a) > 1 else None)
-        if executable is not None:
-            parts.append(executable)
         _check(parts, kw.get("cwd", a[8] if len(a) > 8 else None))
+        executable = _as_text(kw.get("executable", a[1] if len(a) > 1 else None))
+        if executable:
+            why = _reason(executable, True)  # the program that really starts: checked as a command
+            if why:
+                raise SandboxViolation(f"test sandbox refused: {why}: executable={executable!r}")
         return orig_init(self, args, *a, **kw)
 
     subprocess.Popen.__init__ = _mark(guarded_init)
@@ -234,7 +261,11 @@ def _install_exec_guards() -> None:
         orig_startfile = os.startfile
 
         def guarded_startfile(path, *a, **kw):
-            _check([path, *[x for x in a if isinstance(x, str)]])
+            # startfile(path, operation, arguments, cwd, show_cmd): every string, positional or keyword, is checked
+            pos = list(a)
+            cwd = kw.get("cwd", pos[2] if len(pos) > 2 else None)
+            strings = [x for x in pos + [v for k, v in kw.items() if k != "cwd"] if isinstance(x, (str, bytes))]
+            _check([path, *strings], cwd)
             return orig_startfile(path, *a, **kw)
 
         os.startfile = _mark(guarded_startfile)
@@ -255,16 +286,52 @@ def _install_exec_guards() -> None:
         setattr(os, name, make(orig))
 
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+_SHIM_CODE = """import os, sys
+try:
+    sys.path.insert(0, {here!r})
+    import sandbox  # noqa: F401
+except BaseException as exc:  # never run a child unguarded
+    sys.stderr.write("agy-dr test sandbox: cannot load the guard in a child process: %r\\n" % (exc,))
+    sys.stderr.flush()
+    os._exit(70)
+"""
+_shim_dir = None
+
+
+def _build_shim() -> str:
+    """A new temp dir holding the sitecustomize.py shim (removed at exit)."""
+    shim = tempfile.mkdtemp(prefix="agy-dr-shim-")
+    with open(os.path.join(shim, "sitecustomize.py"), "w", encoding="utf-8") as fh:
+        fh.write(_SHIM_CODE.format(here=HERE))
+    atexit.register(_orig_rmtree, shim, True)
+    return shim
+
+
+def shim_dir() -> str:
+    """This process's shim dir (made on first use); the dir to put first on a child's PYTHONPATH."""
+    global _shim_dir
+    if _shim_dir is None or not os.path.isfile(os.path.join(_shim_dir, "sitecustomize.py")):
+        inherited = os.environ.get(_SHIM_VAR)
+        if inherited and os.path.isfile(os.path.join(inherited, "sitecustomize.py")):
+            _shim_dir = inherited
+        else:
+            _shim_dir = _build_shim()
+    return _shim_dir
+
+
+def child_pythonpath(existing: str | None = None) -> str:
+    """PYTHONPATH for a guarded child: the shim and this directory first, then `existing` (deduplicated)."""
+    lead = [shim_dir(), HERE]
+    rest = [p for p in (existing or "").split(os.pathsep) if p and os.path.normcase(p) not in
+            {os.path.normcase(x) for x in lead}]
+    return os.pathsep.join(lead + rest)
+
+
 def _make_shim() -> None:
     """Temp sitecustomize.py so every Python child/grandchild imports this guard."""
-    shim = tempfile.mkdtemp(prefix="agy-dr-shim-")
-    here = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(shim, "sitecustomize.py"), "w", encoding="utf-8") as fh:
-        fh.write("try:\n    import sandbox  # noqa: F401\nexcept ImportError:\n    pass\n")
-    os.environ[_SHIM_VAR] = shim
-    old = os.environ.get("PYTHONPATH")
-    os.environ["PYTHONPATH"] = os.pathsep.join([shim, here] + ([old] if old else []))
-    atexit.register(_orig_rmtree, shim, True)
+    os.environ[_SHIM_VAR] = shim_dir()
+    os.environ["PYTHONPATH"] = child_pythonpath(os.environ.get("PYTHONPATH"))
 
 
 def install() -> None:
@@ -281,6 +348,8 @@ def install() -> None:
     os.environ[_DONE_FLAG] = "1"
     if _SHIM_VAR not in os.environ:
         _make_shim()
+    else:
+        shim_dir()  # adopt the inherited shim
     _install_exec_guards()
     _install_write_guards()
 

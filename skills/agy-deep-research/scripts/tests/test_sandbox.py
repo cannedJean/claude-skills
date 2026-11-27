@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sandbox  # noqa: F401  (must stay the first import: blocks real-app access)
 
+import io
 import os
 import pathlib
 import shutil
@@ -20,6 +21,7 @@ from pathlib import Path
 import run_verification as rv
 
 PROBE = "__sandbox_probe_missing__"
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _probe(*more: str) -> str:
@@ -30,8 +32,15 @@ def _py(code: str, **kw):
     return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, **kw)
 
 
-CHILD_CODE = ("import subprocess, sandbox, os\n"
-              "subprocess.run([os.path.join(sandbox.real_gemini_dir(), %r, 'Gemini' + '.exe')])\n" % PROBE)
+# The child code never imports sandbox: it can only be guarded through the sitecustomize shim on PYTHONPATH.
+# If the guard is missing it exits 3 ("UNGUARDED") before trying anything; the probe path (baked in by the parent)
+# sits under a non-existent folder and names tool.bat, so the directory guard is what has to fire (hex-encoded
+# so that the parent's own guard does not refuse the child command line).
+CHILD_CODE = ("import subprocess, sys\n"
+              "if 'sandbox' not in sys.modules or not getattr(subprocess.Popen.__init__, '_agy_sandbox', False):\n"
+              "    print('UNGUARDED'); sys.exit(3)\n"
+              "subprocess.run([bytes.fromhex(%r).decode()])\n"
+              % os.path.join(sandbox.real_gemini_dir(), PROBE, "tool.bat").encode().hex())
 
 
 class SandboxTests(unittest.TestCase):
@@ -43,6 +52,25 @@ class SandboxTests(unittest.TestCase):
             self.assertTrue(os.path.isdir(cur))
             self.assertIn("agy-dr-sandbox-", cur)
         self.assertEqual(os.environ["AGY_DR_TEST_SANDBOX"], "1")
+
+    def test_real_gemini_dir_value(self):
+        # computed in a fresh interpreter from a known LOCALAPPDATA (not from sandbox's own AGY_DR_REAL_* record)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("AGY_DR_") and k != "PYTHONPATH"}
+        known = os.path.join(tempfile.gettempdir(), "agy-dr-known-localappdata")
+        env["LOCALAPPDATA"] = known
+        code = ("import sys; sys.path.insert(0, %r); import sandbox; print(sandbox.real_gemini_dir())" % TESTS_DIR)
+        cp = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        self.assertEqual(cp.stdout.strip(), os.path.join(known, "Google", "Gemini"))
+        self.assertEqual(sandbox.real_gemini_dir(),
+                         os.path.join(os.environ["AGY_DR_REAL_LOCALAPPDATA"], "Google", "Gemini"))
+
+    def test_popen_refuses_real_gemini_dir_by_path_not_name(self):
+        tool = _probe("tool.bat")  # no bad name in it: only the directory guard can refuse it
+        self.assertNotIn("gemini.exe", tool.lower())
+        with self.assertRaises(sandbox.SandboxViolation) as cm:
+            subprocess.run([tool])
+        self.assertIn("real Gemini app directory", str(cm.exception))
 
     def test_popen_refuses_real_gemini_path(self):
         exe = _probe("Gemini.exe")  # parent does not exist: nothing could start even if unguarded
@@ -67,6 +95,90 @@ class SandboxTests(unittest.TestCase):
             with self.subTest(name):
                 with self.assertRaises(sandbox.SandboxViolation):
                     subprocess.run(argv)
+
+    def test_popen_checks_executable_keyword_and_positional(self):
+        missing = os.path.join(tempfile.gettempdir(), "__agy_dr_missing__")  # never exists: nothing could start
+        for exe in (os.path.join(missing, "chrome"), os.path.join(missing, "msedge"), _probe("tool.bat")):
+            with self.subTest(exe=exe):
+                with self.assertRaises(sandbox.SandboxViolation):
+                    subprocess.Popen(["harmless"], executable=exe)
+                with self.assertRaises(sandbox.SandboxViolation):
+                    subprocess.Popen(["harmless"], -1, exe)
+
+    def test_popen_passes_materialised_iterator_args(self):
+        cp = subprocess.run(iter([sys.executable, "-c", "print('it-ok')"]), capture_output=True, text=True)
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        self.assertEqual(cp.stdout.strip(), "it-ok")
+        with self.assertRaises(sandbox.SandboxViolation):
+            subprocess.run(x for x in ["chrome.exe", "https://x"])
+
+    def test_reason_browser_command_forms(self):
+        for cmd in (r"C:\Program Files\Google\Chrome\Application\chrome",
+                    '"C:\\Program Files\\Microsoft\\Edge\\Application\\msedge"',
+                    "cmd /c chrome https://x", "cmd /k msedge", "start chrome https://x", 'start "" chrome',
+                    "powershell Start-Process chrome", "powershell -c Start-Process -FilePath msedge"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(sandbox._reason(cmd, True))
+        self.assertIsNotNone(sandbox._reason('powershell -Command "Start-Process\n  D:\\x\\Google\\Gemini\\a"'))
+        for ok in ("python x.py --name chrome", "echo msedge", "chromecast-tool", "git log"):
+            with self.subTest(ok=ok):
+                self.assertIsNone(sandbox._reason(ok, True))
+
+    def test_write_guard_long_path_prefix_and_realpath(self):
+        for prefix in ("\\\\?\\", "\\??\\"):
+            with self.subTest(prefix=prefix):
+                with self.assertRaises(sandbox.SandboxViolation):
+                    sandbox._check_write([prefix + _probe()])
+        with self.assertRaises(sandbox.SandboxViolation):
+            subprocess.run(["\\\\?\\" + _probe("tool.bat")])
+        # realpath is applied even when the path does not exist yet (8.3 names / links of a new file)
+        if os.name != "nt":
+            self.skipTest("junctions are Windows-only")
+        with tempfile.TemporaryDirectory() as td:
+            target = os.path.join(td, "target")
+            os.mkdir(target)
+            link = os.path.join(td, "jn")
+            r = subprocess.run(["cmd", "/c", "mklink", "/J", link, target], capture_output=True)
+            if r.returncode != 0:
+                self.skipTest("could not create a junction")
+            try:
+                needles = {sandbox._norm(os.path.realpath(target))}
+                self.assertTrue(sandbox._under(os.path.join(link, "new_file.txt"), needles))
+            finally:
+                os.rmdir(link)
+
+    def test_wrapped_writes_check_keyword_names(self):
+        calls = []
+
+        class Owner:
+            @staticmethod
+            def makedirs(name, mode=0o777, exist_ok=False):
+                calls.append(name)
+
+            @staticmethod
+            def removedirs(name):
+                calls.append(name)
+
+        sandbox._wrap_write(Owner, "makedirs", (0,))
+        sandbox._wrap_write(Owner, "removedirs", (0,))
+        for fn in (Owner.makedirs, Owner.removedirs):
+            with self.subTest(fn=fn.__name__):
+                with self.assertRaises(sandbox.SandboxViolation):
+                    fn(name=_probe("a", "b"))
+        self.assertEqual(calls, [])
+        self.assertTrue(getattr(os.makedirs, "_agy_sandbox", False))
+        self.assertTrue(getattr(os.removedirs, "_agy_sandbox", False))
+
+    @unittest.skipUnless(hasattr(os, "startfile"), "os.startfile is Windows-only")
+    def test_startfile_checks_keywords(self):
+        harmless = os.path.join(tempfile.gettempdir(), "__agy_dr_missing__.txt")
+        for kw in ({"arguments": "--remote-debugging-port=1"}, {"arguments": _probe("tool.bat")},
+                   {"cwd": _probe("sub")}):
+            with self.subTest(kw=kw):
+                with self.assertRaises(sandbox.SandboxViolation):
+                    os.startfile(harmless, "open", **kw)
+        with self.assertRaises(sandbox.SandboxViolation):
+            os.startfile(_probe("tool.bat"))
 
     def test_popen_refuses_cwd_under_real_gemini(self):
         with self.assertRaises(sandbox.SandboxViolation):
@@ -112,7 +224,9 @@ class SandboxTests(unittest.TestCase):
         shim = os.environ["AGY_DR_SHIM_DIR"]
         self.assertTrue(os.path.isfile(os.path.join(shim, "sitecustomize.py")))
         self.assertTrue(os.environ["PYTHONPATH"].startswith(shim))
+        self.assertNotIn("import sandbox", CHILD_CODE)
         cp = _py(CHILD_CODE)
+        self.assertNotIn("UNGUARDED", cp.stdout)
         self.assertNotEqual(cp.returncode, 0)
         self.assertIn("SandboxViolation", cp.stderr)
 
@@ -123,7 +237,8 @@ class SandboxTests(unittest.TestCase):
         cp = _py(outer)
         self.assertEqual(cp.returncode, 0, cp.stderr)
         first, rest = cp.stdout.split("\n", 1)
-        self.assertNotEqual(first.strip(), "0")
+        self.assertNotIn(first.strip(), ("0", "3"))
+        self.assertNotIn("UNGUARDED", rest)
         self.assertIn("SandboxViolation", rest)
 
     def test_writes_under_real_gemini_refused(self):
@@ -131,7 +246,7 @@ class SandboxTests(unittest.TestCase):
             src = os.path.join(td, "src.txt")
             with open(src, "w") as fh:
                 fh.write("x")
-            appdata = os.path.join(os.environ["AGY_DR_REAL_APPDATA"], "gemini", PROBE, "x.txt")
+            appdata = os.path.join(sandbox._real_appdata_gemini(), PROBE, "x.txt")
             attempts = {
                 "open w": lambda: open(_probe(), "w"),
                 "open a": lambda: open(_probe(), "a"),
@@ -150,6 +265,18 @@ class SandboxTests(unittest.TestCase):
                 "touch": lambda: pathlib.Path(_probe()).touch(),
                 "path mkdir": lambda: pathlib.Path(_probe("a", "b")).mkdir(),
                 "os.open": lambda: os.open(_probe(), os.O_WRONLY | os.O_CREAT),
+                "io.open": lambda: io.open(_probe(), "w"),
+                "copy2": lambda: shutil.copy2(src, _probe()),
+                "copytree": lambda: shutil.copytree(td, _probe("tree")),
+                "rename dst": lambda: os.rename(src, _probe()),
+                "unlink": lambda: os.unlink(_probe()),
+                "rmdir": lambda: os.rmdir(_probe("d")),
+                "truncate": lambda: os.truncate(_probe(), 0),
+                "path unlink": lambda: pathlib.Path(_probe()).unlink(),
+                "path rename": lambda: pathlib.Path(src).rename(_probe()),
+                "path replace": lambda: pathlib.Path(src).replace(_probe()),
+                "path open w": lambda: pathlib.Path(_probe()).open("w"),
+                "open r+": lambda: open(_probe(), "r+"),
             }
             for name, fn in attempts.items():
                 with self.subTest(name):
@@ -165,6 +292,12 @@ class SandboxTests(unittest.TestCase):
     def test_reads_and_other_writes_allowed(self):
         with open(__file__, encoding="utf-8") as fh:
             self.assertIn("sandbox", fh.read())
+        # reads of paths under the real Gemini dir are not refused by the guard (they just do not exist here)
+        for read in (lambda: open(_probe(), "r"), lambda: open(_probe(), "rb"), lambda: pathlib.Path(_probe()).read_text(),
+                     lambda: os.open(_probe(), os.O_RDONLY)):
+            with self.subTest(read=read):
+                with self.assertRaises(FileNotFoundError):
+                    read()
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "ok.txt"
             p.write_text("hi")
@@ -195,7 +328,9 @@ class SandboxTests(unittest.TestCase):
                              "print(os.environ['AGY_DR_SHIM_DIR'])"],
                             capture_output=True, text=True, env=env)
         self.assertEqual(cp.returncode, 0, cp.stderr)
-        for d in cp.stdout.split():
+        dirs = [d for d in cp.stdout.splitlines() if d.strip()]
+        self.assertEqual(len(dirs), 2, cp.stdout)
+        for d in dirs:
             self.assertFalse(os.path.exists(d), d)
 
     def test_check_tests_use_sandbox_flags_missing_import(self):
@@ -204,6 +339,7 @@ class SandboxTests(unittest.TestCase):
                 tests = Path(td) / "scripts" / "tests"
                 tests.mkdir(parents=True)
                 for name, text in files.items():
+                    (tests / name).parent.mkdir(parents=True, exist_ok=True)
                     (tests / name).write_text(text)
                 return rv.check_tests_use_sandbox(Path(td))
 
@@ -214,10 +350,11 @@ class SandboxTests(unittest.TestCase):
             "test_try.py": "try:\n    import sandbox\nexcept ImportError:\n    pass\n",
             "test_if.py": "if True:\n    import sandbox\n",
             "test_assign.py": "X = 1\nimport sandbox\n",
+            "sub/test_nested.py": "import os\nimport sandbox\n",
         })
         self.assertFalse(res["passed"])
         joined = " ".join(res["errors"])
-        for bad in ("test_bad.py", "test_none.py", "test_try.py", "test_if.py", "test_assign.py"):
+        for bad in ("test_bad.py", "test_none.py", "test_try.py", "test_if.py", "test_assign.py", "test_nested.py"):
             self.assertIn(bad, joined)
         self.assertNotIn("test_good.py", joined)
 
@@ -231,6 +368,28 @@ class SandboxTests(unittest.TestCase):
         self.assertEqual(env["LOCALAPPDATA"], "X")
         self.assertEqual(env["APPDATA"], "X")
         self.assertIn("AGY_DR_REAL_LOCALAPPDATA", env)
+        # the sitecustomize shim (and the tests dir) lead PYTHONPATH, so a test without `import sandbox` is guarded,
+        # even when the caller's own environment carries no shim (run_verification.py started from a plain shell)
+        from unittest import mock
+        bare = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "AGY_DR_SHIM_DIR")}
+        with mock.patch.dict(os.environ, bare, clear=True):
+            env = rv._sandbox_env("X")
+        first = env["PYTHONPATH"].split(os.pathsep)
+        self.assertTrue(os.path.isfile(os.path.join(first[0], "sitecustomize.py")), first)
+        self.assertEqual(os.path.normcase(first[1]), os.path.normcase(TESTS_DIR))
+
+    def test_sandbox_env_child_without_import_is_guarded(self):
+        env = rv._sandbox_env(tempfile.gettempdir())
+        cp = subprocess.run([sys.executable, "-c", CHILD_CODE], capture_output=True, text=True, env=env)
+        self.assertNotIn("UNGUARDED", cp.stdout)
+        self.assertNotEqual(cp.returncode, 0)
+        self.assertIn("SandboxViolation", cp.stderr)
+
+    def test_shim_fails_loudly_when_sandbox_cannot_import(self):
+        shim = os.environ["AGY_DR_SHIM_DIR"]
+        text = Path(shim, "sitecustomize.py").read_text(encoding="utf-8")
+        self.assertNotIn("pass", text.split())
+        self.assertIn(repr(TESTS_DIR), text)  # the tests dir is baked in, not taken from PYTHONPATH
 
 
 if __name__ == "__main__":

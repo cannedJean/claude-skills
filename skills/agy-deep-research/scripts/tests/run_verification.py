@@ -10,10 +10,21 @@ Executes deterministic automated verification checks:
      and no leaked workflow implementation details.
   4. Static guards: no CDP/browser-automation code or unlisted app switches in `scripts/*.py`,
      and no writes under the Gemini app data folder.
-  5. Offline unit test execution: runs `unittest discover` and verifies exit code 0.
+  5. Every tests/**/test_*.py imports `sandbox` first; only then (5b) the offline unit tests run
+     (`unittest discover`, exit code 0). If the sandbox check fails the unit tests are marked FAILED
+     without being run.
 
 The static guards (4) are textual/AST scans: they catch accidental reintroduction, not
-deliberately obfuscated strings such as "play" + "wright".
+deliberately obfuscated strings such as "play" + "wright". The app-dir write check is deliberately
+broad: a Google/Gemini path literal at module level (a docstring included) taints every function of
+that module, so any write call anywhere in it is flagged (fail-safe; keep such literals out of
+scripts that write files).
+
+This process imports tests/sandbox.py itself; the unit-test and --help subprocesses get a temp
+LOCALAPPDATA/APPDATA, AGY_DR_TEST_SANDBOX=1 and the sandbox's sitecustomize shim first on PYTHONPATH,
+so even a test module that forgot `import sandbox` runs guarded. Only a plain `import sandbox` is
+accepted as the first import; run a single test file from scripts/ with
+    python -m unittest discover -s tests -p test_<name>.py
 
 Outputs a structured JSON report and returns exit code 0 on pass, non-zero on failure.
 """
@@ -38,6 +49,9 @@ try:
     import yaml
 except ImportError:
     yaml = None
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sandbox  # noqa: E402  (guards this process; provides the child shim)
 
 
 def find_skill_root(start_dir: Optional[Path] = None) -> Path:
@@ -305,11 +319,13 @@ ALLOWED_SWITCHES = {
     "--disable-features=CalculateNativeWinOcclusion",
 }
 _SWITCH_LITERAL = re.compile(r"^--[A-Za-z][\w-]*(=.*)?$", re.S)
-_APP_DIR_LITERAL = re.compile(r"Google[\\/]+Gemini")
+# every switch inside a string literal, also after other text ("--user-data-dir=x --no-sandbox", " --no-sandbox")
+_EMBEDDED_SWITCH = re.compile(r"(?:^|(?<=\s))--[A-Za-z][\w-]*(?:=\S*)?")
+_APP_DIR_LITERAL = re.compile(r"Google[\\/]+Gemini", re.I)
 # Receiver-qualified (os.x / shutil.x) so str.replace / dict.copy never count as writes.
 _OS_WRITES = {"replace", "remove", "makedirs", "mkdir", "rename", "unlink", "rmdir", "open"}
 _SHUTIL_WRITES = {"copy", "copy2", "copyfile", "copytree", "move", "rmtree"}
-# Path-style methods, any receiver.
+# Path-style methods, any receiver (Path.replace is handled apart: str.replace takes two arguments).
 _PATH_WRITES = {"write_text", "write_bytes", "mkdir", "rename", "unlink", "touch", "rmdir"}
 
 
@@ -321,8 +337,20 @@ def _script_files(skill_dir: Path) -> List[Path]:
 def _switch_allowed(text: str) -> bool:
     name = text.split("=", 1)[0]
     if name == "--user-data-dir":
-        return True
+        return not re.search(r"\s", text)  # one switch per literal: no "--user-data-dir=x --no-sandbox"
     return text in ALLOWED_SWITCHES
+
+
+def _literal_switch_errors(value: str) -> List[str]:
+    """Unlisted switches in one string literal: the whole literal if it is a switch, and every embedded one."""
+    bad: List[str] = []
+    if _SWITCH_LITERAL.match(value) and not _switch_allowed(value):
+        bad.append(value)
+    for m in _EMBEDDED_SWITCH.finditer(value):
+        sw = m.group(0)
+        if not _switch_allowed(sw) and sw not in bad and value not in bad:
+            bad.append(sw)
+    return bad
 
 
 _OBSOLETE_NAME = re.compile(r"^[A-Za-z0-9_]+\.py$")
@@ -381,16 +409,24 @@ def check_forbidden_automation(skill_dir: Path) -> Dict[str, Any]:
                 errors.append(f"{rel}: syntax error: {e}")
                 continue
             for node in ast.walk(tree):
-                if (isinstance(node, ast.Constant) and isinstance(node.value, str)
-                        and _SWITCH_LITERAL.match(node.value)
-                        and not _switch_allowed(node.value)):
-                    errors.append(f"{rel}:{node.lineno} unlisted app switch {node.value!r}")
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    for sw in _literal_switch_errors(node.value):
+                        errors.append(f"{rel}:{node.lineno} unlisted app switch {sw!r}")
     return {
         "name": "forbidden_automation",
         "passed": not errors,
         "duration_s": round(time.time() - start_time, 3),
         "errors": errors,
     }
+
+
+def _os_open_read_only(call: ast.Call) -> bool:
+    """os.open(path, flags) whose flags are visibly read-only (os.O_RDONLY, O_RDONLY or 0)."""
+    flags = call.args[1] if len(call.args) > 1 else next((k.value for k in call.keywords if k.arg == "flags"), None)
+    if isinstance(flags, ast.Constant):
+        return flags.value == 0
+    name = flags.attr if isinstance(flags, ast.Attribute) else flags.id if isinstance(flags, ast.Name) else None
+    return name == "O_RDONLY"
 
 
 def _is_write_call(call: ast.Call) -> bool:
@@ -401,15 +437,20 @@ def _is_write_call(call: ast.Call) -> bool:
         mode_idx = 1  # builtin open(file, mode)
     elif isinstance(f, ast.Attribute):
         recv = f.value.id if isinstance(f.value, ast.Name) else None
+        if recv == "os" and f.attr == "open":
+            return not _os_open_read_only(call)
         if recv == "os" and f.attr in _OS_WRITES:
             return True
         if recv == "shutil" and f.attr in _SHUTIL_WRITES:
             return True
         if f.attr in _PATH_WRITES:
             return True
+        if f.attr == "replace":  # Path(a).replace(b): one argument; str.replace(old, new[, count]) has two or more
+            return (len(call.args) + len(call.keywords) == 1
+                    and not (isinstance(f.value, ast.Constant) and isinstance(f.value.value, str)))
         if f.attr != "open":
             return False
-        mode_idx = 0  # Path.open(mode)
+        mode_idx = 1 if recv in ("io", "codecs") else 0  # io.open(file, mode) / Path.open(mode)
     else:
         return False
     mode = None
@@ -421,16 +462,24 @@ def _is_write_call(call: ast.Call) -> bool:
     return isinstance(mode, str) and any(c in mode for c in "wax+")
 
 
+def _str_lower(node) -> Optional[str]:
+    return node.value.lower() if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
 def _mentions_app_dir(nodes) -> bool:
-    """A Google/Gemini path literal, or consecutive "Google", "Gemini" string args of one call."""
+    """A Google/Gemini path literal (any case), consecutive "Google", "Gemini" string args of one call, or a
+    `... / "Google" / "Gemini"` path join."""
     for n in nodes:
         if isinstance(n, ast.Constant) and isinstance(n.value, str) and _APP_DIR_LITERAL.search(n.value):
             return True
         if isinstance(n, ast.Call):
-            vals = [a.value if isinstance(a, ast.Constant) and isinstance(a.value, str) else None
-                    for a in n.args]
-            if any(x == "Google" and y == "Gemini" for x, y in zip(vals, vals[1:])):
+            vals = [_str_lower(a) for a in n.args]
+            if any(x == "google" and y == "gemini" for x, y in zip(vals, vals[1:])):
                 return True
+        if (isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div) and _str_lower(n.right) == "gemini"
+                and isinstance(n.left, ast.BinOp) and isinstance(n.left.op, ast.Div)
+                and _str_lower(n.left.right) == "google"):
+            return True
     return False
 
 
@@ -455,14 +504,26 @@ def check_no_app_dir_writes(skill_dir: Path) -> Dict[str, Any]:
         except Exception as e:
             errors.append(f"{rel}: cannot parse: {e}")
             continue
-        scopes = [(tree, "<module>")] + [
-            (n, n.name) for n in ast.walk(tree)
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-        ]
+        funcs = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        parent = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
+
+        def enclosing(fn):
+            # the function itself and every function it is nested in
+            out, cur = [], fn
+            while cur is not None:
+                if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    out.append(cur)
+                cur = parent.get(cur)
+            return out
+
+        scopes = [(tree, "<module>")] + [(n, n.name) for n in funcs]
         module_has_path = _mentions_app_dir(list(_walk_scope(tree)))
         for scope, label in scopes:
             nodes = list(_walk_scope(scope))
-            if not (module_has_path or _mentions_app_dir(nodes)):
+            # a literal anywhere in the function (nested defs included) or in a function enclosing it taints it
+            tainted = module_has_path or _mentions_app_dir(nodes) or (
+                scope is not tree and any(_mentions_app_dir(ast.walk(f)) for f in enclosing(scope)))
+            if not tainted:
                 continue
             for n in nodes:
                 if isinstance(n, ast.Call) and _is_write_call(n):
@@ -488,11 +549,11 @@ def _first_import_is_sandbox(tree: ast.Module) -> bool:
 
 
 def check_tests_use_sandbox(skill_dir: Path) -> Dict[str, Any]:
-    """Fail unless every tests/test_*.py has `import sandbox` as its first import statement."""
+    """Fail unless every tests/**/test_*.py has `import sandbox` as its first import statement."""
     start_time = time.time()
     errors: List[str] = []
     tests = skill_dir / "scripts" / "tests"
-    for fpath in sorted(tests.glob("test_*.py")):
+    for fpath in sorted(tests.rglob("test_*.py")):
         rel = fpath.relative_to(skill_dir).as_posix()
         try:
             tree = ast.parse(fpath.read_text(encoding="utf-8", errors="replace"))
@@ -525,6 +586,9 @@ def _sandbox_env(sandbox_dir: str) -> Dict[str, str]:
     env["LOCALAPPDATA"] = sandbox_dir
     env["APPDATA"] = sandbox_dir
     env["AGY_DR_TEST_SANDBOX"] = "1"
+    # the sandbox's sitecustomize shim (and tests/) first: every Python child is guarded even without `import sandbox`
+    env["AGY_DR_SHIM_DIR"] = sandbox.shim_dir()
+    env["PYTHONPATH"] = sandbox.child_pythonpath(os.environ.get("PYTHONPATH"))
     return env
 
 
@@ -593,7 +657,17 @@ def run_all_verification(skill_dir: Path) -> Dict[str, Any]:
     forbidden_res = check_forbidden_automation(skill_dir)
     appdir_res = check_no_app_dir_writes(skill_dir)
     sandbox_res = check_tests_use_sandbox(skill_dir)
-    unit_res = check_unit_tests(tests_dir)
+    if sandbox_res["passed"]:
+        unit_res = check_unit_tests(tests_dir)
+    else:  # a test module without the sandbox could reach the real app: do not run any of them
+        unit_res = {
+            "passed": False,
+            "duration_s": 0.0,
+            "exit_code": None,
+            "tests_run": 0,
+            "output_snippet": "",
+            "errors": ["not run: the tests_use_sandbox check failed"],
+        }
 
     all_passed = (
         sandbox_res["passed"]
