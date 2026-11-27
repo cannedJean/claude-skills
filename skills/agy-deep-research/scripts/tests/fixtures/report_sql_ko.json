@@ -1,0 +1,2338 @@
+{
+ "_source": "2026-11-27 S8 live dump (allowed region only); every string scrubbed, conversation URL replaced, document root and sidebar region synthetic",
+ "state": "report",
+ "states": {
+  "report": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "role": "RootWebArea",
+     "name": "",
+     "value": "https://gemini.google.com/app/<test>",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "role": "",
+       "name": "",
+       "children": [
+        {
+         "id": "n2",
+         "ct": "Group",
+         "role": "main",
+         "name": "",
+         "children": [
+          {
+           "id": "n3",
+           "ct": "Button",
+           "role": "button",
+           "name": "사이드바 열기",
+           "children": []
+          },
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "role": "region",
+           "name": "",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "role": "navigation",
+             "name": "",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "role": "link",
+               "name": "새 채팅",
+               "value": "https://gemini.google.com/app",
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "n28",
+           "ct": "Group",
+           "role": "group",
+           "name": "",
+           "children": [
+            {
+             "id": "n29",
+             "ct": "Group",
+             "role": "group",
+             "name": "",
+             "children": [
+              {
+               "id": "n30",
+               "ct": "Text",
+               "role": "heading",
+               "name": "Gemini와의 대화",
+               "heading": 1,
+               "children": []
+              },
+              {
+               "id": "n31",
+               "ct": "Group",
+               "role": "group",
+               "name": "",
+               "children": [
+                {
+                 "id": "n32",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n33",
+                   "ct": "Group",
+                   "role": "group",
+                   "name": "",
+                   "children": [
+                    {
+                     "id": "n34",
+                     "ct": "Text",
+                     "role": "heading",
+                     "name": "말씀하신 내용 SQL 표준의 주요 버전 역사(1986년 SQL-86부터 2011년 SQL:2011까지)를 간단히 조사해 주세요. 각 버전의 공개 연도와 대표적인 변화를 짧은 표로 정리하고, 공…",
+                     "heading": 5,
+                     "children": []
+                    },
+                    {
+                     "id": "n35",
+                     "ct": "Text",
+                     "role": "description",
+                     "name": "SQL 표준의 주요 버전 역사(1986년 SQL-86부터 2011년 SQL:2011까지)를 간단히 조사해 주세요.",
+                     "children": []
+                    },
+                    {
+                     "id": "n36",
+                     "ct": "Text",
+                     "role": "description",
+                     "name": "\n",
+                     "children": []
+                    },
+                    {
+                     "id": "n37",
+                     "ct": "Text",
+                     "role": "description",
+                     "name": "각 버전의 공개 연도와 대표적인 변화를 짧은 표로 정리하고, 공개 출처를 인용해 주세요. 분량은 짧게 해 주세요.",
+                     "children": []
+                    },
+                    {
+                     "id": "n38",
+                     "ct": "Button",
+                     "role": "button",
+                     "name": "펼치기",
+                     "children": []
+                    }
+                   ]
+                  }
+                 ]
+                },
+                {
+                 "id": "n39",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n40",
+                   "ct": "Button",
+                   "role": "button",
+                   "name": "프롬프트 복사",
+                   "children": []
+                  }
+                 ]
+                },
+                {
+                 "id": "n41",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n42",
+                   "ct": "Button",
+                   "role": "button",
+                   "name": "수정",
+                   "children": []
+                  }
+                 ]
+                },
+                {
+                 "id": "n43",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n44",
+                   "ct": "Group",
+                   "role": "group",
+                   "name": "",
+                   "children": [
+                    {
+                     "id": "n45",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": [
+                      {
+                       "id": "n46",
+                       "ct": "Group",
+                       "role": "group",
+                       "name": "",
+                       "children": [
+                        {
+                         "id": "n47",
+                         "ct": "Text",
+                         "role": "heading",
+                         "name": "Gemini의 응답",
+                         "heading": 6,
+                         "children": []
+                        }
+                       ]
+                      },
+                      {
+                       "id": "n48",
+                       "ct": "Group",
+                       "role": "group",
+                       "name": "",
+                       "children": [
+                        {
+                         "id": "n49",
+                         "ct": "Text",
+                         "role": "description",
+                         "name": "그 주제에 대한 연구 계획이에요.",
+                         "children": []
+                        },
+                        {
+                         "id": "n50",
+                         "ct": "Text",
+                         "role": "description",
+                         "name": " 업데이트를 해야 하는 부분 있으면 알려 주세요.",
+                         "children": []
+                        },
+                        {
+                         "id": "n51",
+                         "ct": "Text",
+                         "role": "heading",
+                         "name": " SQL 표준 주요 버전 역사 ",
+                         "heading": 3,
+                         "children": []
+                        },
+                        {
+                         "id": "n52",
+                         "ct": "Group",
+                         "role": "group",
+                         "name": "계획은 3단계로 구성되어 있습니다. 1단계",
+                         "children": []
+                        },
+                        {
+                         "id": "n53",
+                         "ct": "Text",
+                         "role": "description",
+                         "name": "연구 웹사이트",
+                         "children": []
+                        },
+                        {
+                         "id": "n54",
+                         "ct": "Text",
+                         "role": "description",
+                         "name": "(1) ISO/IEC 9075 및 ANSI X3.135 표준 기록을 바탕으로 1986년 SQL-86부터 2011년 SQL:2011까지의 주요 버전 연혁(SQL-86, SQL-89, SQL-92, SQL:1999, SQL:2003, SQL:2006, SQL:2008, SQL:2011)을 확인하고, 각 버전의 공식 표준 명칭, 정확한 공개 연도 및 전체 개정과 부분 개정(예: XML 중심의 SQL:2006)의 구분을 파악한다.\n(2) 각 SQL 표준 버전의 핵심적인 기능 추가와 구조적 변화를 조사한다:\n(a) 초기 및 관계형 기반 확립기(SQL-86, SQL-89, SQL-92): 최초 표준화 범위, 참조 무결성 강화, 외부 조인·스키마·준수 수준 도입 등\n(b) 확장 기능 및 분석·XML 도입기(SQL:199",
+                         "children": []
+                        },
+                        {
+                         "id": "n55",
+                         "ct": "Group",
+                         "role": "group",
+                         "name": "2단계",
+                         "children": []
+                        },
+                        {
+                         "id": "n56",
+                         "ct": "Text",
+                         "role": "description",
+                         "name": "결과 분석",
+                         "children": []
+                        },
+                        {
+                         "id": "n57",
+                         "ct": "Group",
+                         "role": "group",
+                         "name": "3단계",
+                         "children": []
+                        },
+                        {
+                         "id": "n58",
+                         "ct": "Text",
+                         "role": "description",
+                         "name": "보고서 생성",
+                         "children": []
+                        },
+                        {
+                         "id": "n59",
+                         "ct": "Group",
+                         "role": "group",
+                         "name": "예상 시간",
+                         "children": []
+                        },
+                        {
+                         "id": "n60",
+                         "ct": "Text",
+                         "role": "description",
+                         "name": "몇 분 후 완료",
+                         "children": []
+                        },
+                        {
+                         "id": "n61",
+                         "ct": "Group",
+                         "role": "group",
+                         "name": "",
+                         "children": [
+                          {
+                           "id": "n62",
+                           "ct": "Button",
+                           "role": "button",
+                           "name": "연구 계획 수정",
+                           "children": []
+                          }
+                         ]
+                        },
+                        {
+                         "id": "n63",
+                         "ct": "Group",
+                         "role": "group",
+                         "name": "",
+                         "children": [
+                          {
+                           "id": "n64",
+                           "ct": "Button",
+                           "role": "button",
+                           "name": "연구 시작",
+                           "children": []
+                          }
+                         ]
+                        }
+                       ]
+                      }
+                     ]
+                    },
+                    {
+                     "id": "n65",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": [
+                      {
+                       "id": "n66",
+                       "ct": "Group",
+                       "role": "group",
+                       "name": "",
+                       "children": [
+                        {
+                         "id": "n67",
+                         "ct": "Button",
+                         "role": "button",
+                         "name": "대답이 마음에 들어요",
+                         "children": []
+                        }
+                       ]
+                      }
+                     ]
+                    },
+                    {
+                     "id": "n68",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": [
+                      {
+                       "id": "n69",
+                       "ct": "Group",
+                       "role": "group",
+                       "name": "",
+                       "children": [
+                        {
+                         "id": "n70",
+                         "ct": "Button",
+                         "role": "button",
+                         "name": "대답이 마음에 들지 않아요",
+                         "children": []
+                        }
+                       ]
+                      }
+                     ]
+                    },
+                    {
+                     "id": "n71",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": [
+                      {
+                       "id": "n72",
+                       "ct": "Button",
+                       "role": "button",
+                       "name": "복사",
+                       "children": []
+                      }
+                     ]
+                    },
+                    {
+                     "id": "n73",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": [
+                      {
+                       "id": "n74",
+                       "ct": "Button",
+                       "role": "button",
+                       "name": "옵션 더보기",
+                       "children": []
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                },
+                {
+                 "id": "n75",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n76",
+                   "ct": "Group",
+                   "role": "group",
+                   "name": "",
+                   "children": [
+                    {
+                     "id": "n77",
+                     "ct": "Text",
+                     "role": "heading",
+                     "name": "말씀하신 내용 연구 시작",
+                     "heading": 5,
+                     "children": []
+                    },
+                    {
+                     "id": "n78",
+                     "ct": "Text",
+                     "role": "description",
+                     "name": "연구 시작",
+                     "children": []
+                    }
+                   ]
+                  }
+                 ]
+                },
+                {
+                 "id": "n79",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n80",
+                   "ct": "Button",
+                   "role": "button",
+                   "name": "프롬프트 복사",
+                   "children": []
+                  }
+                 ]
+                },
+                {
+                 "id": "n81",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n82",
+                   "ct": "Button",
+                   "role": "button",
+                   "name": "수정",
+                   "children": []
+                  }
+                 ]
+                },
+                {
+                 "id": "n83",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n84",
+                   "ct": "Group",
+                   "role": "group",
+                   "name": "",
+                   "children": [
+                    {
+                     "id": "n85",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": [
+                      {
+                       "id": "n86",
+                       "ct": "Group",
+                       "role": "group",
+                       "name": "",
+                       "children": [
+                        {
+                         "id": "n87",
+                         "ct": "Text",
+                         "role": "heading",
+                         "name": "Gemini의 응답",
+                         "heading": 6,
+                         "children": []
+                        }
+                       ]
+                      },
+                      {
+                       "id": "n88",
+                       "ct": "Group",
+                       "role": "group",
+                       "name": "",
+                       "children": [
+                        {
+                         "id": "n89",
+                         "ct": "Text",
+                         "role": "description",
+                         "name": "I've completed your research.",
+                         "children": []
+                        },
+                        {
+                         "id": "n90",
+                         "ct": "Text",
+                         "role": "description",
+                         "name": " Feel free to ask me follow-up questions or request changes.",
+                         "children": []
+                        },
+                        {
+                         "id": "n91",
+                         "ct": "StatusBar",
+                         "role": "status",
+                         "name": "",
+                         "children": [
+                          {
+                           "id": "n92",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "SQL 표준 주요 버전 역사",
+                           "children": []
+                          },
+                          {
+                           "id": "n93",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "11월 27일 오후 1:36",
+                           "children": []
+                          }
+                         ]
+                        }
+                       ]
+                      }
+                     ]
+                    },
+                    {
+                     "id": "n94",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": [
+                      {
+                       "id": "n95",
+                       "ct": "Group",
+                       "role": "group",
+                       "name": "",
+                       "children": [
+                        {
+                         "id": "n96",
+                         "ct": "Button",
+                         "role": "button",
+                         "name": "대답이 마음에 들어요",
+                         "children": []
+                        }
+                       ]
+                      }
+                     ]
+                    },
+                    {
+                     "id": "n97",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": [
+                      {
+                       "id": "n98",
+                       "ct": "Group",
+                       "role": "group",
+                       "name": "",
+                       "children": [
+                        {
+                         "id": "n99",
+                         "ct": "Button",
+                         "role": "button",
+                         "name": "대답이 마음에 들지 않아요",
+                         "children": []
+                        }
+                       ]
+                      }
+                     ]
+                    },
+                    {
+                     "id": "n100",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": [
+                      {
+                       "id": "n101",
+                       "ct": "Button",
+                       "role": "button",
+                       "name": "복사",
+                       "children": []
+                      }
+                     ]
+                    },
+                    {
+                     "id": "n102",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": [
+                      {
+                       "id": "n103",
+                       "ct": "Button",
+                       "role": "button",
+                       "name": "옵션 더보기",
+                       "children": []
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              },
+              {
+               "id": "n104",
+               "ct": "StatusBar",
+               "role": "status",
+               "name": "",
+               "children": []
+              },
+              {
+               "id": "n105",
+               "ct": "Group",
+               "role": "group",
+               "name": "",
+               "children": [
+                {
+                 "id": "n106",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n107",
+                   "ct": "Button",
+                   "role": "button",
+                   "name": "업로드 및 도구",
+                   "children": []
+                  }
+                 ]
+                },
+                {
+                 "id": "n108",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n109",
+                   "ct": "Button",
+                   "role": "button",
+                   "name": "Deep Research 선택 해제",
+                   "children": []
+                  }
+                 ]
+                },
+                {
+                 "id": "n110",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n111",
+                   "ct": "Button",
+                   "role": "button",
+                   "name": "화면 공유",
+                   "children": []
+                  }
+                 ]
+                },
+                {
+                 "id": "n112",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n113",
+                   "ct": "Group",
+                   "role": "group",
+                   "name": "",
+                   "children": [
+                    {
+                     "id": "n114",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": [
+                      {
+                       "id": "n115",
+                       "ct": "Edit",
+                       "role": "textbox",
+                       "name": "Gemini 프롬프트 입력",
+                       "children": [
+                        {
+                         "id": "n116",
+                         "ct": "Text",
+                         "role": "description",
+                         "name": "무엇을 조사하고 싶으신가요?",
+                         "children": []
+                        },
+                        {
+                         "id": "n117",
+                         "ct": "Text",
+                         "role": "description",
+                         "name": "\n",
+                         "children": []
+                        }
+                       ]
+                      },
+                      {
+                       "id": "n118",
+                       "ct": "Group",
+                       "role": "group",
+                       "name": "",
+                       "children": []
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                },
+                {
+                 "id": "n119",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n120",
+                   "ct": "Group",
+                   "role": "group",
+                   "name": "",
+                   "children": [
+                    {
+                     "id": "n121",
+                     "ct": "Button",
+                     "role": "button",
+                     "name": "모드 선택 도구 열기, 현재 Neon 모드 사용 중",
+                     "children": []
+                    }
+                   ]
+                  },
+                  {
+                   "id": "n122",
+                   "ct": "Group",
+                   "role": "group",
+                   "name": "",
+                   "children": [
+                    {
+                     "id": "n123",
+                     "ct": "Button",
+                     "role": "button",
+                     "name": "음성기록 (^⇧D)",
+                     "children": []
+                    }
+                   ]
+                  }
+                 ]
+                },
+                {
+                 "id": "n124",
+                 "ct": "Button",
+                 "role": "button",
+                 "name": "소스, Google Google 검색 선택됨",
+                 "children": [
+                  {
+                   "id": "n125",
+                   "ct": "Text",
+                   "role": "description",
+                   "name": "소스",
+                   "children": []
+                  }
+                 ]
+                },
+                {
+                 "id": "n126",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n127",
+                   "ct": "Button",
+                   "role": "button",
+                   "name": "파일",
+                   "children": []
+                  }
+                 ]
+                }
+               ]
+              },
+              {
+               "id": "n128",
+               "ct": "Text",
+               "role": "description",
+               "name": "Gemini는 AI이며 인물 등에 관한 정보 제공 시 실수를 할 수 있습니다. ",
+               "children": []
+              },
+              {
+               "id": "n129",
+               "ct": "Hyperlink",
+               "role": "link",
+               "name": "개인 정보 보호 및 Gemini 새 창에서 열기",
+               "value": "https://support.google.com/gemini?p=privacy_notice",
+               "children": []
+              }
+             ]
+            },
+            {
+             "id": "n130",
+             "ct": "Group",
+             "role": "group",
+             "name": "",
+             "children": [
+              {
+               "id": "n131",
+               "ct": "Group",
+               "role": "group",
+               "name": "",
+               "children": [
+                {
+                 "id": "n132",
+                 "ct": "Text",
+                 "role": "heading",
+                 "name": "SQL 표준 주요 버전 역사",
+                 "heading": 2,
+                 "children": []
+                },
+                {
+                 "id": "n133",
+                 "ct": "Button",
+                 "role": "button",
+                 "name": "목차 메뉴",
+                 "children": []
+                },
+                {
+                 "id": "n134",
+                 "ct": "Button",
+                 "role": "button",
+                 "name": "공유 및 내보내기",
+                 "children": []
+                },
+                {
+                 "id": "n135",
+                 "ct": "Button",
+                 "role": "button",
+                 "name": "만들기",
+                 "children": [
+                  {
+                   "id": "n136",
+                   "ct": "Text",
+                   "role": "description",
+                   "name": "만들기",
+                   "children": []
+                  }
+                 ]
+                },
+                {
+                 "id": "n137",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n138",
+                   "ct": "Button",
+                   "role": "button",
+                   "name": "패널 닫기",
+                   "children": []
+                  }
+                 ]
+                },
+                {
+                 "id": "n139",
+                 "ct": "Group",
+                 "role": "group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "n140",
+                   "ct": "Group",
+                   "role": "group",
+                   "name": "",
+                   "children": [
+                    {
+                     "id": "n141",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": [
+                      {
+                       "id": "n142",
+                       "ct": "Text",
+                       "role": "heading",
+                       "name": "SQL 표준 주요 버전 역사 (SQL-86 ~ SQL:2011)",
+                       "heading": 1,
+                       "children": []
+                      },
+                      {
+                       "id": "n143",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "SQL 표준은 1986년 미국표준협회(ANSI)가 ",
+                       "children": []
+                      },
+                      {
+                       "id": "n144",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "ANSI X3.135-1986",
+                       "children": []
+                      },
+                      {
+                       "id": "n145",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "으로 최초 제정하고 이듬해 국제표준화기구(ISO)가 ",
+                       "children": []
+                      },
+                      {
+                       "id": "n146",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "ISO 9075:1987",
+                       "children": []
+                      },
+                      {
+                       "id": "n147",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "로 채택하면서 공식 출범했다",
+                       "children": []
+                      },
+                      {
+                       "id": "n148",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": ". 이후 2011년 ",
+                       "children": []
+                      },
+                      {
+                       "id": "n149",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "SQL:2011",
+                       "children": []
+                      },
+                      {
+                       "id": "n150",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "까지 부분 개정을 포함해 총 8개의 주요 버전을 거치며 기본 관계형 질의 언어에서 객체-관계형 확장, 분석(OLAP)·XML 통합, 시계열(Temporal) 데이터 관리로 영역을 넓혀 왔다",
+                       "children": []
+                      },
+                      {
+                       "id": "n151",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": ".",
+                       "children": []
+                      },
+                      {
+                       "id": "n152",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "   ",
+                       "children": []
+                      },
+                      {
+                       "id": "n153",
+                       "ct": "Button",
+                       "role": "button",
+                       "name": "자세히 알아보기",
+                       "children": []
+                      },
+                      {
+                       "id": "n154",
+                       "ct": "Text",
+                       "role": "heading",
+                       "name": "버전별 공개 연도 및 대표적인 변화",
+                       "heading": 2,
+                       "children": []
+                      },
+                      {
+                       "id": "n155",
+                       "ct": "Table",
+                       "role": "grid",
+                       "name": "",
+                       "children": [
+                        {
+                         "id": "n156",
+                         "ct": "DataItem",
+                         "role": "row",
+                         "name": "",
+                         "children": [
+                          {
+                           "id": "n157",
+                           "ct": "DataItem",
+                           "role": "columnheader",
+                           "name": "버전 (통칭)",
+                           "children": []
+                          },
+                          {
+                           "id": "n158",
+                           "ct": "DataItem",
+                           "role": "columnheader",
+                           "name": "공개 연도",
+                           "children": []
+                          },
+                          {
+                           "id": "n159",
+                           "ct": "DataItem",
+                           "role": "columnheader",
+                           "name": "공식 표준 번호",
+                           "children": []
+                          },
+                          {
+                           "id": "n160",
+                           "ct": "DataItem",
+                           "role": "columnheader",
+                           "name": "대표적인 변화",
+                           "children": []
+                          }
+                         ]
+                        },
+                        {
+                         "id": "n161",
+                         "ct": "DataItem",
+                         "role": "row",
+                         "name": "",
+                         "children": [
+                          {
+                           "id": "n162",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "SQL-86 / SQL-87",
+                           "children": []
+                          },
+                          {
+                           "id": "n163",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "1986 (ANSI) 1987 (ISO)",
+                           "children": []
+                          },
+                          {
+                           "id": "n164",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "ANSI X3.135-1986 ISO 9075:1987 (FIPS PUB 127)",
+                           "children": []
+                          },
+                          {
+                           "id": "n165",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "최초의 공식 SQL 표준. 기본 스키마 정의(DDL)·데이터 조작(DML)과 COBOL·FORTRAN·Pascal·PL/I 모듈 언어 바인딩 정의",
+                           "children": []
+                          }
+                         ]
+                        },
+                        {
+                         "id": "n166",
+                         "ct": "DataItem",
+                         "role": "row",
+                         "name": "",
+                         "children": [
+                          {
+                           "id": "n167",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "SQL-89",
+                           "children": []
+                          },
+                          {
+                           "id": "n168",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "1989",
+                           "children": []
+                          },
+                          {
+                           "id": "n169",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "ANSI X3.135-1989 ISO/IEC 9075:1989 (FIPS PUB 127-1)",
+                           "children": []
+                          },
+                          {
+                           "id": "n170",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "소규모 개정. 선택적 무결성 강화(참조 무결성, CHECK , DEFAULT 절) 추가 및 Ada·C 바인딩·임베디드 SQL( X3.168-1989 ) 확장",
+                           "children": []
+                          }
+                         ]
+                        },
+                        {
+                         "id": "n171",
+                         "ct": "DataItem",
+                         "role": "row",
+                         "name": "",
+                         "children": [
+                          {
+                           "id": "n172",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "SQL-92 (SQL2)",
+                           "children": []
+                          },
+                          {
+                           "id": "n173",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "1992 (11월)",
+                           "children": []
+                          },
+                          {
+                           "id": "n174",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "ANSI X3.135-1992 ISO/IEC 9075:1992 (FIPS PUB 127-2)",
+                           "children": []
+                          },
+                          {
+                           "id": "n175",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "최초의 대규모 개정. Entry·Intermediate·Full 3단계 준수 수준 도입, 명시적 외부 조인( OUTER JOIN ), CASE , CAST , INFORMATION_SCHEMA , 동적 SQL, 임시 테이블, 트랜잭션 격리 수준 추가",
+                           "children": []
+                          }
+                         ]
+                        },
+                        {
+                         "id": "n176",
+                         "ct": "DataItem",
+                         "role": "row",
+                         "name": "",
+                         "children": [
+                          {
+                           "id": "n177",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "SQL:1999 (SQL3)",
+                           "children": []
+                          },
+                          {
+                           "id": "n178",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "1999",
+                           "children": []
+                          },
+                          {
+                           "id": "n179",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "ISO/IEC 9075:1999",
+                           "children": []
+                          },
+                          {
+                           "id": "n180",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "다중 파트(Part) 모듈화 구조 재편. 재귀 쿼리( WITH RECURSIVE ), 트리거, 정규식( SIMILAR TO ), 역할(Roles), 세이브포인트, CLOB / BLOB · BOOLEAN · ARRAY · ROW 및 객체-관계형 구조화 타입 도입",
+                           "children": []
+                          }
+                         ]
+                        },
+                        {
+                         "id": "n181",
+                         "ct": "DataItem",
+                         "role": "row",
+                         "name": "",
+                         "children": [
+                          {
+                           "id": "n182",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "SQL:2003",
+                           "children": []
+                          },
+                          {
+                           "id": "n183",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "2003 (12월)",
+                           "children": []
+                          },
+                          {
+                           "id": "n184",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "ISO/IEC 9075:2003",
+                           "children": []
+                          },
+                          {
+                           "id": "n185",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "윈도우 함수(SQL/OLAP 정식 통합), MERGE 문, XML 사양(Part 14: SQL/XML) 신설, 시퀀스 생성기( CREATE SEQUENCE ), 아이덴티티·자동 생성 컬럼, BIGINT · MULTISET · XML 추가( BIT 계열 제거)",
+                           "children": []
+                          }
+                         ]
+                        },
+                        {
+                         "id": "n186",
+                         "ct": "DataItem",
+                         "role": "row",
+                         "name": "",
+                         "children": [
+                          {
+                           "id": "n187",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "SQL:2006",
+                           "children": []
+                          },
+                          {
+                           "id": "n188",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "2006 (6월)",
+                           "children": []
+                          },
+                          {
+                           "id": "n189",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "ISO/IEC 9075-14:2006",
+                           "children": []
+                          },
+                          {
+                           "id": "n190",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "Part 14(SQL/XML) 단독 부분 개정. W3C XQuery 데이터 모델(XDM) 통합 및 XMLQUERY , XMLTABLE , XMLCAST 등 XML 저장·질의·변환 기능 대폭 강화",
+                           "children": []
+                          }
+                         ]
+                        },
+                        {
+                         "id": "n191",
+                         "ct": "DataItem",
+                         "role": "row",
+                         "name": "",
+                         "children": [
+                          {
+                           "id": "n192",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "SQL:2008",
+                           "children": []
+                          },
+                          {
+                           "id": "n193",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "2008 (7월)",
+                           "children": []
+                          },
+                          {
+                           "id": "n194",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "ISO/IEC 9075:2008",
+                           "children": []
+                          },
+                          {
+                           "id": "n195",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "9개 활성 파트 전체 개정. FETCH FIRST n ROWS ONLY 행 제한 구문, TRUNCATE TABLE , INSTEAD OF 트리거, 커서 외부 ORDER BY 허용, MERGE · CASE 구문 및 XQuery 정규식 지원 개선",
+                           "children": []
+                          }
+                         ]
+                        },
+                        {
+                         "id": "n196",
+                         "ct": "DataItem",
+                         "role": "row",
+                         "name": "",
+                         "children": [
+                          {
+                           "id": "n197",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "SQL:2011",
+                           "children": []
+                          },
+                          {
+                           "id": "n198",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "2011 (12월)",
+                           "children": []
+                          },
+                          {
+                           "id": "n199",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "ISO/IEC 9075:2011",
+                           "children": []
+                          },
+                          {
+                           "id": "n200",
+                           "ct": "DataItem",
+                           "role": "gridcell",
+                           "name": "9개 파트 중 5개 파트 부분 개정. 시계열 테이블(Temporal tables: PERIOD FOR , SYSTEM_TIME , FOR PORTION OF ) 표준화가 핵심. OFFSET · WITH TIES · PERCENT 페이징 확장, MERGE 내 DELETE , LAG · NTH_VALUE · FIRST_VALUE · LAST_VALUE 등 윈도우 함수 강화",
+                           "children": []
+                          }
+                         ]
+                        }
+                       ]
+                      },
+                      {
+                       "id": "n201",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "  ",
+                       "children": []
+                      },
+                      {
+                       "id": "n202",
+                       "ct": "Button",
+                       "role": "button",
+                       "name": "자세히 알아보기",
+                       "children": []
+                      },
+                      {
+                       "id": "n203",
+                       "ct": "Document",
+                       "role": "document",
+                       "name": "미리보기",
+                       "children": []
+                      },
+                      {
+                       "id": "n204",
+                       "ct": "Group",
+                       "role": "group",
+                       "name": "",
+                       "children": [
+                        {
+                         "id": "n205",
+                         "ct": "Group",
+                         "role": "group",
+                         "name": "",
+                         "children": [
+                          {
+                           "id": "n206",
+                           "ct": "Button",
+                           "role": "button",
+                           "name": "대답이 마음에 들어요",
+                           "children": []
+                          }
+                         ]
+                        }
+                       ]
+                      },
+                      {
+                       "id": "n207",
+                       "ct": "Group",
+                       "role": "group",
+                       "name": "",
+                       "children": [
+                        {
+                         "id": "n208",
+                         "ct": "Group",
+                         "role": "group",
+                         "name": "",
+                         "children": [
+                          {
+                           "id": "n209",
+                           "ct": "Button",
+                           "role": "button",
+                           "name": "대답이 마음에 들지 않아요",
+                           "children": []
+                          }
+                         ]
+                        }
+                       ]
+                      },
+                      {
+                       "id": "n210",
+                       "ct": "Text",
+                       "role": "heading",
+                       "name": "버전 변천에서 주목할 세 가지 맥락",
+                       "heading": 2,
+                       "children": []
+                      },
+                      {
+                       "id": "n211",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "첫째, ",
+                       "children": []
+                      },
+                      {
+                       "id": "n212",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "표준의 모듈화와 부분 개정 도입",
+                       "children": []
+                      },
+                      {
+                       "id": "n213",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "이다. SQL-92 직후인 1995년(Part 3 SQL/CLI)과 1996년(Part 4 SQL/PSM)에 확장 파트가 추가되며 다중 파트 구조가 자리 잡았고",
+                       "children": []
+                      },
+                      {
+                       "id": "n214",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": ", SQL:1999부터 통칭 표기도 4자리 연도와 콜론(",
+                       "children": []
+                      },
+                      {
+                       "id": "n215",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "SQL:1999",
+                       "children": []
+                      },
+                      {
+                       "id": "n216",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": ") 형태로 바뀌었다",
+                       "children": []
+                      },
+                      {
+                       "id": "n217",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": ". 이후 XML 통합을 앞당긴 ",
+                       "children": []
+                      },
+                      {
+                       "id": "n218",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "SQL:2006",
+                       "children": []
+                      },
+                      {
+                       "id": "n219",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "(Part 14 단독 개정)과 안정화된 4개 파트(CLI·MED·OLB·JRT)를 2008년판으로 유지하고 핵심 5개 파트만 갱신한 ",
+                       "children": []
+                      },
+                      {
+                       "id": "n220",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "SQL:2011",
+                       "children": []
+                      },
+                      {
+                       "id": "n221",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "처럼 부분 개정 방식이 정착되었다",
+                       "children": []
+                      },
+                      {
+                       "id": "n222",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": ".",
+                       "children": []
+                      },
+                      {
+                       "id": "n223",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "   ",
+                       "children": []
+                      },
+                      {
+                       "id": "n224",
+                       "ct": "Button",
+                       "role": "button",
+                       "name": "자세히 알아보기",
+                       "children": []
+                      },
+                      {
+                       "id": "n225",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "둘째, ",
+                       "children": []
+                      },
+                      {
+                       "id": "n226",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "핵심 기능의 정확한 도입 시점 구분",
+                       "children": []
+                      },
+                      {
+                       "id": "n227",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "이 필요하다. 윈도우 함수는 흔히 SQL:2003의 성과로 알려져 있으나 실제로는 2001년 3월 발행된 SQL:1999의 추보(",
+                       "children": []
+                      },
+                      {
+                       "id": "n228",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "ISO/IEC 9075-2:1999/Amd 1:2001",
+                       "children": []
+                      },
+                      {
+                       "id": "n229",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": ", SQL/OLAP)에서 먼저 표준화된 뒤 SQL:2003 본문에 통합되었다",
+                       "children": []
+                      },
+                      {
+                       "id": "n230",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": ". 또한 결과 행 제한 구문 중 ",
+                       "children": []
+                      },
+                      {
+                       "id": "n231",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "FETCH FIRST n ROWS ONLY",
+                       "children": []
+                      },
+                      {
+                       "id": "n232",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "는 SQL:2008에서 도입되었고, 함께 쓰이는 ",
+                       "children": []
+                      },
+                      {
+                       "id": "n233",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "OFFSET",
+                       "children": []
+                      },
+                      {
+                       "id": "n234",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": ", ",
+                       "children": []
+                      },
+                      {
+                       "id": "n235",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "WITH TIES",
+                       "children": []
+                      },
+                      {
+                       "id": "n236",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": ", ",
+                       "children": []
+                      },
+                      {
+                       "id": "n237",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "PERCENT",
+                       "children": []
+                      },
+                      {
+                       "id": "n238",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": " 옵션은 SQL:2011에서 추가되었다",
+                       "children": []
+                      },
+                      {
+                       "id": "n239",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": ".",
+                       "children": []
+                      },
+                      {
+                       "id": "n240",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "   ",
+                       "children": []
+                      },
+                      {
+                       "id": "n241",
+                       "ct": "Button",
+                       "role": "button",
+                       "name": "자세히 알아보기",
+                       "children": []
+                      },
+                      {
+                       "id": "n242",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "셋째, ",
+                       "children": []
+                      },
+                      {
+                       "id": "n243",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "표준과 상용 구현 간의 간극",
+                       "children": []
+                      },
+                      {
+                       "id": "n244",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "이다. ISO/IEC 9075 원문은 유료로 배포되며 수많은 선택 기능을 포함하고 있어 단일 DBMS가 표준 전체를 구현하지는 않는다",
+                       "children": []
+                      },
+                      {
+                       "id": "n245",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": ". 따라서 주요 상용·오픈소스 DBMS는 핵심 표준(Core SQL)을 따르면서 ",
+                       "children": []
+                      },
+                      {
+                       "id": "n246",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "LIMIT",
+                       "children": []
+                      },
+                      {
+                       "id": "n247",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "·",
+                       "children": []
+                      },
+                      {
+                       "id": "n248",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "TOP",
+                       "children": []
+                      },
+                      {
+                       "id": "n249",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": " 같은 고유 방언을 병행하는 형태로 발전해 왔다",
+                       "children": []
+                      },
+                      {
+                       "id": "n250",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": ".",
+                       "children": []
+                      },
+                      {
+                       "id": "n251",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "   ",
+                       "children": []
+                      },
+                      {
+                       "id": "n252",
+                       "ct": "Button",
+                       "role": "button",
+                       "name": "자세히 알아보기",
+                       "children": []
+                      },
+                      {
+                       "id": "n253",
+                       "ct": "Text",
+                       "role": "heading",
+                       "name": "주요 공개 출처",
+                       "heading": 2,
+                       "children": []
+                      },
+                      {
+                       "id": "n254",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "ISO/IEC 9075 표준 원문은 유료이므로",
+                       "children": []
+                      },
+                      {
+                       "id": "n255",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": ", 공개 정부 문서·표준 기구 카탈로그와 SQL 표준 위원회 주요 저자들의 공개 학술 해설 논문이 가장 공신력 있는 1차 참고 자료로 활용된다.",
+                       "children": []
+                      },
+                      {
+                       "id": "n256",
+                       "ct": "Text",
+                       "role": "description",
+                       "name": "   ",
+                       "children": []
+                      },
+                      {
+                       "id": "n257",
+                       "ct": "Button",
+                       "role": "button",
+                       "name": "자세히 알아보기",
+                       "children": []
+                      },
+                      {
+                       "id": "n258",
+                       "ct": "List",
+                       "role": "list",
+                       "name": "",
+                       "children": [
+                        {
+                         "id": "n259",
+                         "ct": "ListItem",
+                         "role": "listitem",
+                         "name": "정부 표준 및 표준 기구 공식 기록: 미국 NIST FIPS PUB 127-1 (SQL-86/89 공식 채택 문서), ANSI 공식 블로그(ISO/IEC 9075·ANSI X3.135 연혁), ISO/IEC 표준 카탈로그(1987·1989·1992·2003·2006·2008·2011년 발행 기록)   ",
+                         "children": [
+                          {
+                           "id": "n260",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "정부 표준 및 표준 기구 공식 기록",
+                           "children": []
+                          },
+                          {
+                           "id": "n261",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": ": 미국 NIST ",
+                           "children": []
+                          },
+                          {
+                           "id": "n262",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "FIPS PUB 127-1",
+                           "children": []
+                          },
+                          {
+                           "id": "n263",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": " (SQL-86/89 공식 채택 문서)",
+                           "children": []
+                          },
+                          {
+                           "id": "n264",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": ", ANSI 공식 블로그(ISO/IEC 9075·ANSI X3.135 연혁)",
+                           "children": []
+                          },
+                          {
+                           "id": "n265",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": ", ISO/IEC 표준 카탈로그(1987·1989·1992·2003·2006·2008·2011년 발행 기록)",
+                           "children": []
+                          },
+                          {
+                           "id": "n266",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "   ",
+                           "children": []
+                          },
+                          {
+                           "id": "n267",
+                           "ct": "Button",
+                           "role": "button",
+                           "name": "자세히 알아보기",
+                           "children": []
+                          }
+                         ]
+                        },
+                        {
+                         "id": "n268",
+                         "ct": "ListItem",
+                         "role": "listitem",
+                         "name": "ACM SIGMOD Record 표준 해설 논문: A. Eisenberg & J. Melton, \"SQL:1999, formerly known as SQL3\" (1999); A. Eisenberg et al., \"SQL:2003 Has Been Published\" (2004); A. Eisenberg & J. Melton, \"Advancements in SQL/XML\" (2004); F. Zemke, \"What's new in SQL:2011\" (2012); K. Kulkarni & J.-E. Michels, \"Temporal features in SQL:2011\" (2012)   ",
+                         "children": [
+                          {
+                           "id": "n269",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "ACM SIGMOD Record 표준 해설 논문",
+                           "children": []
+                          },
+                          {
+                           "id": "n270",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": ": A. Eisenberg & J. Melton, ",
+                           "children": []
+                          },
+                          {
+                           "id": "n271",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "\"SQL:1999, formerly known as SQL3\"",
+                           "children": []
+                          },
+                          {
+                           "id": "n272",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": " (1999)",
+                           "children": []
+                          },
+                          {
+                           "id": "n273",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "; A. Eisenberg et al., ",
+                           "children": []
+                          },
+                          {
+                           "id": "n274",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "\"SQL:2003 Has Been Published\"",
+                           "children": []
+                          },
+                          {
+                           "id": "n275",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": " (2004)",
+                           "children": []
+                          },
+                          {
+                           "id": "n276",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "; A. Eisenberg & J. Melton, ",
+                           "children": []
+                          },
+                          {
+                           "id": "n277",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "\"Advancements in SQL/XML\"",
+                           "children": []
+                          },
+                          {
+                           "id": "n278",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": " (2004)",
+                           "children": []
+                          },
+                          {
+                           "id": "n279",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "; F. Zemke, ",
+                           "children": []
+                          },
+                          {
+                           "id": "n280",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "\"What's new in SQL:2011\"",
+                           "children": []
+                          },
+                          {
+                           "id": "n281",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": " (2012)",
+                           "children": []
+                          },
+                          {
+                           "id": "n282",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "; K. Kulkarni & J.-E. Michels, ",
+                           "children": []
+                          },
+                          {
+                           "id": "n283",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "\"Temporal features in SQL:2011\"",
+                           "children": []
+                          },
+                          {
+                           "id": "n284",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": " (2012)",
+                           "children": []
+                          },
+                          {
+                           "id": "n285",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "   ",
+                           "children": []
+                          },
+                          {
+                           "id": "n286",
+                           "ct": "Button",
+                           "role": "button",
+                           "name": "자세히 알아보기",
+                           "children": []
+                          }
+                         ]
+                        },
+                        {
+                         "id": "n287",
+                         "ct": "ListItem",
+                         "role": "listitem",
+                         "name": "공개 연혁 요약 자료: JCC Consulting, \"SQL Standards\" (1986~2011년 파트별 개정 이력)   ",
+                         "children": [
+                          {
+                           "id": "n288",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "공개 연혁 요약 자료",
+                           "children": []
+                          },
+                          {
+                           "id": "n289",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": ": JCC Consulting, ",
+                           "children": []
+                          },
+                          {
+                           "id": "n290",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "\"SQL Standards\"",
+                           "children": []
+                          },
+                          {
+                           "id": "n291",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": " (1986~2011년 파트별 개정 이력)",
+                           "children": []
+                          },
+                          {
+                           "id": "n292",
+                           "ct": "Text",
+                           "role": "description",
+                           "name": "   ",
+                           "children": []
+                          },
+                          {
+                           "id": "n293",
+                           "ct": "Button",
+                           "role": "button",
+                           "name": "자세히 알아보기",
+                           "children": []
+                          }
+                         ]
+                        }
+                       ]
+                      }
+                     ]
+                    },
+                    {
+                     "id": "n294",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": [
+                      {
+                       "id": "n295",
+                       "ct": "Button",
+                       "role": "button",
+                       "name": "보고서에서 사용된 소스",
+                       "children": []
+                      }
+                     ]
+                    },
+                    {
+                     "id": "n296",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": [
+                      {
+                       "id": "n297",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "committee.iso.org ISO/IEC 9075:1989 - Information processing systems 새 창에서 열기",
+                       "value": "https://committee.iso.org/ru/standard/16662.html?browse=tc",
+                       "children": []
+                      },
+                      {
+                       "id": "n298",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "en.wikipedia.org SQL - Wikipedia 새 창에서 열기",
+                       "value": "https://en.wikipedia.org/wiki/SQL",
+                       "children": []
+                      },
+                      {
+                       "id": "n299",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "blog.ansi.org SQL: American National Standard Adoptions by INCITS 새 창에서 열기",
+                       "value": "https://blog.ansi.org/ansi/sql-incits-american-national-standard-adoptions/",
+                       "children": []
+                      },
+                      {
+                       "id": "n300",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "jcc.com 새 창에서 열기",
+                       "value": "https://www.jcc.com/index.php/resources/sql-standards",
+                       "children": []
+                      },
+                      {
+                       "id": "n301",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "www2.cs.sfu.ca SQL:1999, formerly known as SQL3 새 창에서 열기",
+                       "value": "https://www2.cs.sfu.ca/CourseCentral/354/karenw.old/std.pdf",
+                       "children": []
+                      },
+                      {
+                       "id": "n302",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "govinfo.gov FIPS PUB 127-1 - GovInfo 새 창에서 열기",
+                       "value": "https://www.govinfo.gov/content/pkg/GOVPUB-C13-55df7e16710356441863893eca08cfd6/pdf/GOVPUB-C13-55df7e16710356441863893eca08cfd6.pdf",
+                       "children": []
+                      },
+                      {
+                       "id": "n303",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "blog.ansi.org The SQL Standard - ISO/IEC 9075:2023 (ANSI X3.135) 새 창에서 열기",
+                       "value": "https://blog.ansi.org/ansi/sql-standard-iso-iec-9075-2023-ansi-x3-135/",
+                       "children": []
+                      },
+                      {
+                       "id": "n304",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "comp.nus.edu.sg Preface - NUS Computing 새 창에서 열기",
+                       "value": "https://www.comp.nus.edu.sg/~oradoc/doc/appdev.817/a76951/pco00pre.htm",
+                       "children": []
+                      },
+                      {
+                       "id": "n305",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "en.wikipedia.org SQL-92 - Wikipedia 새 창에서 열기",
+                       "value": "https://en.wikipedia.org/wiki/SQL-92",
+                       "children": []
+                      },
+                      {
+                       "id": "n306",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "webstore.iec.ch ISO/IEC 9075:1989 - IEC Webstore 새 창에서 열기",
+                       "value": "https://webstore.iec.ch/en/publication/97349",
+                       "children": []
+                      },
+                      {
+                       "id": "n307",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "slideserve.com Overview of SQL Evolution: From Standards to Modern Enhancements 새 창에서 열기",
+                       "value": "https://www.slideserve.com/vivien/overview-of-standard-query-language-sql-powerpoint-ppt-presentation",
+                       "children": []
+                      },
+                      {
+                       "id": "n308",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "en.wikipedia.org SQL:2003 - Wikipedia 새 창에서 열기",
+                       "value": "https://en.wikipedia.org/wiki/SQL:2003",
+                       "children": []
+                      },
+                      {
+                       "id": "n309",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "webstore.iec.ch ISO/IEC 9075-1:2016 - IEC Webstore 새 창에서 열기",
+                       "value": "https://webstore.iec.ch/en/publication/59678",
+                       "children": []
+                      },
+                      {
+                       "id": "n310",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "csd.uoc.gr XML and RDBMSs (Storage and Publishing) Where's the XML Data? 새 창에서 열기",
+                       "value": "https://www.csd.uoc.gr/~hy561/Data/Lectures/CS561XMLStorage10.pdf",
+                       "children": []
+                      },
+                      {
+                       "id": "n311",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "sigmodrecord.org Advancements in SQL/XML - SIGMOD Record 새 창에서 열기",
+                       "value": "https://sigmodrecord.org/publications/sigmodRecord/0409/11.JimMelton.pdf",
+                       "children": []
+                      },
+                      {
+                       "id": "n312",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "webstore.iec.ch ISO/IEC 9075-14:2003 | IEC 새 창에서 열기",
+                       "value": "https://webstore.iec.ch/en/publication/98165",
+                       "children": []
+                      },
+                      {
+                       "id": "n313",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "sigmodrecord.org What's new in SQL:2011 - SIGMOD Record 새 창에서 열기",
+                       "value": "https://sigmodrecord.org/publications/sigmodRecord/1203/pdfs/10.industry.zemke.pdf",
+                       "children": []
+                      },
+                      {
+                       "id": "n314",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "en.wikipedia.org SQL:2008 - Wikipedia 새 창에서 열기",
+                       "value": "https://en.wikipedia.org/wiki/SQL:2008",
+                       "children": []
+                      },
+                      {
+                       "id": "n315",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "webstore.iec.ch ISO/IEC 9075-1:2023/COR1:2026 새 창에서 열기",
+                       "value": "https://webstore.iec.ch/en/publication/115538",
+                       "children": []
+                      },
+                      {
+                       "id": "n316",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "researchgate.net Temporal features in SQL:2011 - ResearchGate 새 창에서 열기",
+                       "value": "https://www.researchgate.net/publication/261845780_Temporal_features_in_SQL2011",
+                       "children": []
+                      },
+                      {
+                       "id": "n317",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "altss.com Bitemporal Data | Altss Glossary 새 창에서 열기",
+                       "value": "https://altss.com/glossary/bitemporal-data",
+                       "children": []
+                      },
+                      {
+                       "id": "n318",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "mpgcamb.com Database Management Systems 새 창에서 열기",
+                       "value": "https://www.mpgcamb.com/wp-content/uploads/2024/12/Raghu-Ramakrishnan-Johannes-Gehrke-Database-Management-Systems-McGraw-Hill-Education-2018.pdf",
+                       "children": []
+                      },
+                      {
+                       "id": "n319",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "store.standards.org.au ISO/IEC 9075-2:1999/Amd 1:2001 | Standards Australia Store 새 창에서 열기",
+                       "value": "https://store.standards.org.au/product/iso-iec-9075-2-1999-amd-1-2001",
+                       "children": []
+                      },
+                      {
+                       "id": "n320",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "issoh.co.jp OLAP（オーラップ）とは？意味と具体例、MOLAP・ROLAP ... - 一創 새 창에서 열기",
+                       "value": "https://www.issoh.co.jp/column/details/7249/",
+                       "children": []
+                      },
+                      {
+                       "id": "n321",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "github.com manjunath5496/SQL-Tutorial: \"Computers are like Old Testament 새 창에서 열기",
+                       "value": "https://github.com/manjunath5496/SQL-Tutorial",
+                       "children": []
+                      },
+                      {
+                       "id": "n322",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "poolstring.com The SQL Standard and Dialects - PoolString 새 창에서 열기",
+                       "value": "https://www.poolstring.com/sql/sql-standard-and-dialects",
+                       "children": []
+                      },
+                      {
+                       "id": "n323",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "varsitytutors.com Use LIMIT/TOP to restrict result size (dialect-dependent) (conceptual) 새 창에서 열기",
+                       "value": "https://www.varsitytutors.com/practice/subjects/sql/lessons/limit-top",
+                       "children": []
+                      },
+                      {
+                       "id": "n324",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "sigmodrecord.org SQL:1999, formerly known as SQL3 - SIGMOD Record 새 창에서 열기",
+                       "value": "https://sigmodrecord.org/publications/sigmodRecord/9903/standards.pdf.gz",
+                       "children": []
+                      },
+                      {
+                       "id": "n325",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "koreascience.kr 객체-관계형 데이터베이스 설계를 위한 UML 확장 - Oracle11g를 중심 새 창에서 열기",
+                       "value": "https://www.koreascience.kr/article/JAKO201111436238434.page?&lang=ko",
+                       "children": []
+                      },
+                      {
+                       "id": "n326",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "sigmodrecord.org SQL:2003 Has Been Published - SIGMOD Record 새 창에서 열기",
+                       "value": "https://sigmodrecord.org/2004/03/10/sql2003-has-been-published/",
+                       "children": []
+                      },
+                      {
+                       "id": "n327",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "researchgate.net SQL:2003 has been published | Request PDF - ResearchGate 새 창에서 열기",
+                       "value": "https://www.researchgate.net/publication/220415502_SQL2003_has_been_published",
+                       "children": []
+                      },
+                      {
+                       "id": "n328",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "en.wikipedia.org SQL/XML - Wikipedia 새 창에서 열기",
+                       "value": "https://en.wikipedia.org/wiki/SQL/XML",
+                       "children": []
+                      },
+                      {
+                       "id": "n329",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "researchgate.net Fred Zemke PhD Software Engineer at Oracle Corporation 새 창에서 열기",
+                       "value": "<redacted:account len=25>",
+                       "children": []
+                      },
+                      {
+                       "id": "n330",
+                       "ct": "Hyperlink",
+                       "role": "link",
+                       "name": "sigmodrecord.org Temporal Features in SQL:2011 - SIGMOD Record 새 창에서 열기",
+                       "value": "https://sigmodrecord.org/2012/09/30/temporal-features-in-sql2011/",
+                       "children": []
+                      }
+                     ]
+                    },
+                    {
+                     "id": "n331",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": [
+                      {
+                       "id": "n332",
+                       "ct": "Button",
+                       "role": "button",
+                       "name": "찾았지만 사용되지 않은 소스",
+                       "children": []
+                      }
+                     ]
+                    },
+                    {
+                     "id": "n333",
+                     "ct": "Group",
+                     "role": "group",
+                     "name": "",
+                     "children": []
+                    },
+                    {
+                     "id": "n334",
+                     "ct": "Button",
+                     "role": "button",
+                     "name": "생각하는 과정 표시",
+                     "children": []
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

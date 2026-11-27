@@ -43,7 +43,7 @@ SKILL_DIR = SCRIPT_DIR.parent
 DEFAULT_AGY_TASK = SKILL_DIR.parent / "agy-delegate" / "scripts" / "agy_task.py"
 DEFAULT_TARGET_SKILL_DIR = Path.home() / ".gemini" / "config" / "skills" / "local-gemini-deep-research"
 BUNDLED_SCRIPTS = ("relay_step.py", "run_deep_research.py", "gemini_host.py", "uitree.py", "privacy.py", "locators.py",
-                   "locators.json", "steps.py", "uia_backend.py")
+                   "locators.json", "steps.py", "uia_backend.py", "report_md.py")
 # scripts an earlier release installed into the target; setup deletes exactly these names, preflight flags them
 OBSOLETE_SCRIPTS = ("patch_gemini_app.py", "chrome_launcher.py")
 BUNDLED_REF_SKILL = SKILL_DIR / "references" / "SKILL.md"
