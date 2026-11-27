@@ -34,6 +34,59 @@ class LaunchCommandTests(unittest.TestCase):
         self.assertEqual(gh.parse_user_data_dir(d2), r"C:\a b\prof")
 
 
+class HardeningTests(unittest.TestCase):
+    def test_d1_rejects_flags(self):
+        with self.assertRaises(ValueError):
+            gh.build_launch_command(STUB, None, [gh.ALLOWED_FLAG_SWITCHES[0]])
+
+    def test_profile_dir_validation(self):
+        bad = ["", "rel\\dir", "\\rootless", 'C:\\a"b', "C:\\a\nb", "C:\\a\x00b", "C:\\a\tb",
+               r"C:\Users\Me\AppData\Local\Google\Gemini\profile", r"c:\x\GOOGLE\gemini",
+               r"C:\x\Google\Gemini\..\..\Google\Gemini\p"]
+        for b in bad:
+            with self.subTest(b=b), self.assertRaises(ValueError):
+                gh.build_launch_command(STUB, b, [])
+        gh.build_launch_command(STUB, r"\\srv\share\prof", [])
+
+    def test_round_trip(self):
+        flags = list(gh.ALLOWED_FLAG_SWITCHES)
+        for path in (r"C:\a b\prof", "C:\\a b\\prof\\", r"C:\plain\prof", "C:\\plain\\prof\\"):
+            with self.subTest(path=path):
+                cmd = gh.build_launch_command(STUB, path, flags)
+                self.assertEqual(gh.parse_user_data_dir(cmd), path)
+
+    def test_decide_validates_d2(self):
+        with self.assertRaises(ValueError):
+            gh.decide_mode(None, "pending", False)
+        with self.assertRaises(ValueError):
+            gh.decide_mode("D2", None, False)
+
+    def test_pinned_d1_blocked_without_user_process(self):
+        self.assertEqual(gh.decide_mode("D1", "blocked", False).mode, "D1")
+
+    def test_parse_edge_cases(self):
+        p = gh.parse_user_data_dir
+        self.assertEqual(p(r"x --user-data-dir=C:\a --user-data-dir=C:\b"), r"C:\b")
+        self.assertIsNone(p(r"x --user-data-dir C:\a"))
+        self.assertIsNone(p("x --user-data-dir="))
+        self.assertIsNone(p('x --user-data-dir=""'))
+        self.assertEqual(p(r"x --USER-DATA-DIR=C:\a"), r"C:\a")
+
+    def test_lookalike_images(self):
+        for img in (r"C:\u\Google\Gemini\app-1\..\..\evil\Gemini.exe",
+                    r"C:\u\Google\Gemini\app-1\Gemini.exe.bak",
+                    r"C:\u\Google\Gemini\app-1\Gemini.exe.",
+                    ""):
+            with self.subTest(img=img):
+                self.assertFalse(gh.is_gemini_image(img))
+
+    def test_exited_precedence(self):
+        self.assertEqual(gh.classify_launch(gh.LaunchCheck(True, True, True, True, 5.0)), "blocked")
+
+    def test_clean_env_case_insensitive(self):
+        self.assertEqual(gh.clean_env({"node_options": "x", "Electron_X": "1", "Path": "p"}), {"Path": "p"})
+
+
 class ParseTests(unittest.TestCase):
     def test_parse_user_data_dir_forms(self):
         p = gh.parse_user_data_dir
@@ -95,9 +148,10 @@ class DecideTests(unittest.TestCase):
         self.assertEqual((d.mode, d.code), (None, "HOST_START_TIMEOUT"))
 
     def test_decide_pinned_job_never_switches_mode(self):
-        for state in ("blocked", "timeout"):
-            d = gh.decide_mode("D2", state, False)
-            self.assertEqual((d.mode, d.code), (None, "HOST_MODE_UNAVAILABLE"))
+        d = gh.decide_mode("D2", "blocked", False)
+        self.assertEqual((d.mode, d.code), (None, "HOST_MODE_UNAVAILABLE"))
+        d = gh.decide_mode("D2", "timeout", False)
+        self.assertEqual((d.mode, d.code), (None, "HOST_START_TIMEOUT"))
         self.assertEqual(gh.decide_mode("D2", "ok", True).mode, "D2")
         self.assertEqual(gh.decide_mode("D1", "ok", False).mode, "D1")
         self.assertEqual(gh.decide_mode("D1", "blocked", True).code, "GEMINI_IN_USE")
