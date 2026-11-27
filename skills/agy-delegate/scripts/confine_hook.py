@@ -18,7 +18,11 @@ In deep-research mode (AGY_CONFINE_MODE="deep-research"):
   - Write tools are permitted only inside <workdir>, and caller control files (relay/request.json,
     prompt.md, goal.md, feedback_*.md, job.json, relay/result.json, relay/started.json, relay/foreground.jsonl)
     and every *.py file are denied with rule "protected".
-  - run_command is permitted only for clean Python execution of the canonical
+  - Also denied there with rule "protected": files with an executable/script extension (.bat .cmd .com .exe .ps1
+    .psm1 .vbs .vbe .js .jse .wsf .wsh .lnk .pif .scr .msc .hta .cpl), Python artefacts (.py .pyw .pyc .pyo .pyz
+    .pth), anything under __pycache__, and files named python/python3/py with any extension.
+  - run_command needs token 0 to be a bare python / python3 / py (optionally .exe) or exactly sys.executable,
+    and is permitted only for clean Python execution of the canonical
     <AGY_CONFINE_DR_DIR>/scripts/relay_step.py --job <workdir> without shell chaining / redirections; any other
     script (a relay_step.py in the work dir included) and all other shell commands are denied with rule "shell".
 
@@ -67,7 +71,13 @@ DOTDOT = re.compile(r"(^|[\\/])\.\.([\\/]|$)")
 
 # Metacharacters for shell chaining and redirection
 SHELL_META_RE = re.compile(r"""[&|;`><\r\n]|\$\(""")
-PYTHON_EXE_RE = re.compile(r"^python(3(\.\d+)?)?(\.exe)?$", re.I)
+# token 0: a bare interpreter name (no path: never a copy agy could have planted) or exactly sys.executable
+PYTHON_EXE_RE = re.compile(r"^(python3?|py)(\.exe)?$", re.I)
+# deep-research: nothing agy writes in the work dir may be runnable (Windows executables/scripts) or importable
+EXEC_EXTS = (".bat", ".cmd", ".com", ".exe", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".lnk",
+             ".pif", ".scr", ".msc", ".hta", ".cpl", ".py", ".pyw", ".pyc", ".pyo", ".pyz", ".pth")
+# cmd.exe looks in the current directory before PATH: no python/python3/py with any extension either
+INTERPRETER_STEMS = ("python", "python3", "py")
 ALLOWED_PYTHON_FLAGS = frozenset({"-u", "-B", "-E", "-s", "-S", "-O", "-OO"})
 
 
@@ -222,8 +232,13 @@ def is_protected_file(rel: str, mode: str = "default") -> bool:
             return True
         if re.match(r"^feedback_[^/]+\.md$", rel_lower):
             return True
-        # no Python file may be created or changed in the work dir: nothing agy writes there is ever run
-        if parts[-1].lower().rstrip(". ").endswith(".py"):
+        # nothing agy writes in the work dir may be run or imported: executable/script extensions, Python artefacts,
+        # __pycache__, and any file named like the interpreter (cmd.exe searches the current dir first)
+        names = [x.lower().rstrip(". ") for x in parts]
+        last = names[-1]
+        if "__pycache__" in names or last.endswith(EXEC_EXTS):
+            return True
+        if last.split(".", 1)[0] in INTERPRETER_STEMS:
             return True
     return False
 
@@ -274,14 +289,12 @@ def validate_deep_research_command(cmd: str, root: str, dr_dir: str, cwd: str = 
 
     # Token 0: Python interpreter validation
     exe_token = tokens[0]
-    exe_base = os.path.basename(exe_token).lower()
-    is_python = bool(PYTHON_EXE_RE.match(exe_base) or exe_base in ("py", "py.exe"))
-    if not is_python:
+    is_python = bool(PYTHON_EXE_RE.match(exe_token))  # bare name only: "\\", "/" or ":" fail the pattern
+    if not is_python and os.path.isabs(exe_token):
         try:
-            if canon(exe_token) == canon(sys.executable):
-                is_python = True
+            is_python = canon(exe_token) == canon(sys.executable)
         except Exception:
-            pass
+            is_python = False
     if not is_python:
         return "deny", f"executable {exe_token!r} is not a supported Python interpreter", "shell"
 

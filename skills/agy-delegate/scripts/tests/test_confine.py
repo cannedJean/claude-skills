@@ -378,6 +378,42 @@ class Hook(unittest.TestCase):
         dec, rule, _ = self.decide_audit("run_command", {"CommandLine": f'python relay_step.py --job "{R}"'}, dr_dir="")
         self.assertEqual((dec, rule), ("deny", "shell"))
 
+    def test_deep_research_interpreter_with_a_path_denied(self):
+        # round 2: token 0 is a bare python/python3/py(.exe) or exactly sys.executable; any other path is refused
+        R = str(self.root)
+        DR = str(self.dr_dir / "scripts" / "relay_step.py")
+        for exe in (f'"{R}{BS}python"', f'"{R}{BS}python.exe"', f'"{R}/py"', f'"{R}{BS}py.exe"', ".\\python",
+                    "./python", ".\\py", "sub\\python3", r"C:\Users\Public\python.exe", '"C:/Users/Public/python"',
+                    f'"{self.base}{BS}python.exe"', "python.cmd", "py.bat", "python3.cmd", "python.com",
+                    "python3.12", "pythonw", "pythonw.exe"):
+            with self.subTest(exe=exe):
+                dec, rule, _ = self.decide_audit("run_command", {"CommandLine": f'{exe} "{DR}" --job "{R}"'})
+                self.assertEqual((dec, rule), ("deny", "shell"), exe)
+        for exe in ("python", "python.exe", "PYTHON.EXE", "python3", "python3.exe", "py", "py.exe", f'"{sys.executable}"'):
+            with self.subTest(ok=exe):
+                dec, rule, reason = self.decide_audit("run_command", {"CommandLine": f'{exe} "{DR}" --job "{R}"'})
+                self.assertEqual(dec, "ask", (exe, rule, reason))
+
+    def test_deep_research_executable_and_python_artefact_writes_denied(self):
+        exts = (".bat", ".cmd", ".com", ".exe", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".lnk",
+                ".pif", ".scr", ".msc", ".hta", ".cpl", ".py", ".pyw", ".pyc", ".pyo", ".pyz", ".pth")
+        targets = []
+        for ext in exts:
+            targets += ["tool" + ext, "sub/tool" + ext.upper(), "tool" + ext + ".", "tool" + ext + " ", "tool" + ext + ". ."]
+        targets += ["__pycache__/relay_step.cpython-312.pyc", "__pycache__/notes.txt", "sub/__PYCACHE__/x",
+                    "python", "python.txt", "PYTHON.md", "python3.json", "py.cmd", "py", "py.anything", "sub/python.log",
+                    "tool.cmd::$DATA", "tool.bat:stream", str(self.root / "tool.ps1"), str(self.root / "python.exe")]
+        for target in targets:
+            with self.subTest(target=target):
+                dec, rule, _ = self.decide_audit("write_to_file", {"TargetFile": target, "CodeContent": "x"})
+                self.assertEqual(dec, "deny", target)
+                if ":" not in target.replace(str(self.root), ""):
+                    self.assertEqual(rule, "protected", target)
+        for ok in ("notes.txt", "report.md", "sub/data.json", "pyramid.txt", "typing.md", "relay/notes.txt"):
+            with self.subTest(ok=ok):
+                dec, _, _ = self.decide_audit("write_to_file", {"TargetFile": ok, "CodeContent": "x"})
+                self.assertEqual(dec, "ask", ok)
+
     def test_deep_research_linked_relay_step_denied(self):
         R = str(self.root)
         evil = self.root / "evil_target.txt"

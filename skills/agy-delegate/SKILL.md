@@ -141,8 +141,8 @@ Commands below are relative to this skill's directory (`scripts/agy_task.py`).
     Caller control files inside `<workdir>` (`relay/request.json`, `prompt.md`, `goal.md`, `feedback_*.md`, `job.json`,
     `relay/result.json`, `relay/started.json`, `relay/foreground.jsonl`) are read-only to file tools (`rule: "protected"`).
   - **Shell tools**: `run_command` is permitted only for clean Python execution of the canonical
-    `<dr_dir>/scripts/relay_step.py --job <workdir>` (a `relay_step.py` anywhere else is denied; `*.py` files in
-    the work dir are read-only).
+    `<dr_dir>/scripts/relay_step.py --job <workdir>` with token 0 a bare `python`/`python3`/`py` or `sys.executable` (a `relay_step.py` anywhere else is
+    denied; executable/script files, Python artefacts and `python*`/`py*` names in the work dir are read-only).
     Shell chaining and redirection (`&&`, `;`, `|`, `>`, `<`, newlines, `` ` ``, `$()`)
     and all other commands/scripts are blocked (`rule: "shell"`).
   - **Browser & MCP tools**: unconditionally denied (`rule: "tool"`).
