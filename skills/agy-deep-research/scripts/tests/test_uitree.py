@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from uitree import FakeTree, Node, PatternNotSupported  # noqa: E402
+from uitree import FakeTree, Node, PATTERNS, PatternNotSupported  # noqa: E402
 
 
 def _sample():
@@ -239,6 +239,208 @@ class UiTreeTests(unittest.TestCase):
         self.assertEqual(t.state, "s2")
         t.snapshot("doc")
         self.assertEqual(t.state, "s2")
+
+
+def _edit(t, doc="doc"):
+    return [n for n, _ in t.snapshot(doc).walk() if n.id == "edit"][0]
+
+
+class UiTreeReviewFixTests(unittest.TestCase):
+    # B6
+    def test_from_dict_null_string_fields_become_empty(self):
+        n = Node.from_dict({"id": "x", "ct": "Text", "role": None, "name": None, "value": None,
+                            "automation_id": None, "aria": None, "patterns": None, "children": None})
+        self.assertEqual((n.role, n.name, n.value, n.automation_id), ("", "", "", ""))
+        self.assertEqual(n.aria, {})
+        self.assertEqual(n.patterns, frozenset())
+        self.assertEqual(n.children, [])
+        self.assertEqual(n, Node(id="x", ct="Text"))
+
+    # B11
+    def test_from_file_accepts_utf8_bom(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "spec.json")
+            with open(path, "w", encoding="utf-8-sig") as fh:
+                json.dump(_spec(), fh)
+            self.assertEqual(FakeTree.from_file(path).state, "s0")
+
+    # B13 / M14
+    def test_snapshot_unknown_doc_keeps_pending_transition(self):
+        t = FakeTree(_spec())
+        t.act("btn", "invoke")
+        with self.assertRaises(KeyError):
+            t.snapshot("nonexistent")
+        self.assertEqual(t.state, "s0")
+        self.assertEqual(t.snapshot("doc").children[0].name, "Start")
+        self.assertEqual(t.snapshot("doc").children[0].name, "Done")
+        self.assertEqual(t.state, "s1")
+
+    def test_snapshot_unknown_doc_when_transition_due_keeps_state(self):
+        t = FakeTree(_spec())
+        t.act("btn", "invoke")
+        t.snapshot("doc")  # delay consumed, transition due on the next snapshot
+        with self.assertRaises(KeyError):
+            t.snapshot("nonexistent")
+        self.assertEqual(t.state, "s0")
+        self.assertEqual(t.snapshot("doc").children[0].name, "Done")
+
+    # B14 / M11
+    def test_get_value_missing_node_raises_keyerror(self):
+        spec = _spec()
+        spec["states"]["s1"]["documents"][0]["children"].pop(1)  # no "edit" in s1
+        spec["transitions"][0]["after_snapshots"] = 0
+        t = FakeTree(spec)
+        t.set_value("edit", "hello")
+        t.act("btn", "invoke")
+        self.assertEqual(t.state, "s1")
+        with self.assertRaises(KeyError):
+            t.get_value("edit")
+        with self.assertRaises(KeyError):
+            t.get_value("never-existed")
+
+    # B15 / M14 / T18
+    def test_malformed_spec_shapes_raise_value_error(self):
+        def mutate(fn):
+            s = _spec()
+            fn(s)
+            return s
+
+        cases = {
+            "spec not dict": ([], "spec"),
+            "missing state": (mutate(lambda s: s.pop("state")), "state"),
+            "missing states": (mutate(lambda s: s.pop("states")), "states"),
+            "states not dict": (mutate(lambda s: s.update(states=[])), "states"),
+            "state not dict": (mutate(lambda s: s["states"].update(s0=[])), "s0"),
+            "documents not list": (mutate(lambda s: s["states"]["s0"].update(documents=5)), "s0"),
+            "document not node": (mutate(lambda s: s["states"]["s0"].update(documents=[{"ct": "X"}])), "s0"),
+            "desktop empty dict": (mutate(lambda s: s["states"]["s0"].update(desktop={})), "s0"),
+            "transitions not list": (mutate(lambda s: s.update(transitions=123)), "transitions"),
+            "transition not dict": (mutate(lambda s: s.update(transitions=["bad"])), "transitions[0]"),
+        }
+        for label, (spec, field) in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(ValueError) as cm:
+                    FakeTree(copy.deepcopy(spec))
+                self.assertIn(field, str(cm.exception))
+
+    # T18
+    def test_validation_message_names_each_rule(self):
+        def with_tr(**kw):
+            s = _spec()
+            s["transitions"][0].update(kw)
+            return s
+        cases = {
+            "to": (with_tr(to="nope"), "'to'"),
+            "from": (with_tr(**{"from": "nope"}), "'from'"),
+            "on kind": (with_tr(on=["click", "btn", "invoke"]), "'on'"),
+            "act pattern": (with_tr(on=["act", "btn", "smash"]), "'on'"),
+            "set_value arity": (with_tr(on=["set_value"]), "'on'"),
+            "after_snapshots": (with_tr(after_snapshots="1"), "'after_snapshots'"),
+        }
+        for label, (spec, frag) in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(ValueError) as cm:
+                    FakeTree(spec)
+                self.assertIn("transitions[0]", str(cm.exception))
+                self.assertIn(frag, str(cm.exception))
+
+    # T18
+    def test_node_defaults_are_isolated(self):
+        a, b = Node(id="a", ct="T"), Node(id="b", ct="T")
+        a.aria["k"] = 1
+        a.children.append(b)
+        self.assertEqual(b.aria, {})
+        self.assertEqual(b.children, [])
+        c = Node.from_dict({"id": "c", "ct": "T"})
+        d = Node.from_dict({"id": "d", "ct": "T"})
+        c.aria["k"] = 1
+        c.children.append(d)
+        self.assertEqual(d.aria, {})
+        self.assertEqual(d.children, [])
+
+    # T9
+    def test_from_star_fires_from_every_state(self):
+        spec = _spec()
+        spec["states"]["s2"] = copy.deepcopy(spec["states"]["s1"])
+        spec["transitions"] = [
+            {"from": "*", "on": ["act", "btn", "invoke"], "to": "s2", "after_snapshots": 0}]
+        for start in ("s0", "s1"):
+            with self.subTest(start):
+                spec["state"] = start
+                t = FakeTree(copy.deepcopy(spec))
+                t.act("btn", "invoke")
+                self.assertEqual(t.state, "s2")
+
+    def test_from_specific_state_only_fires_there(self):
+        spec = _spec()
+        spec["transitions"][0]["after_snapshots"] = 0
+        spec["state"] = "s1"
+        t = FakeTree(spec)
+        t.act("btn", "invoke")
+        self.assertEqual(t.state, "s1")
+        self.assertEqual(t.snapshot("doc").children[0].name, "Done")
+
+    # T16
+    def test_immediate_transition_cancels_pending_one(self):
+        spec = _spec()
+        spec["states"]["s2"] = copy.deepcopy(spec["states"]["s1"])
+        spec["states"]["s0"]["documents"][0]["children"].append(
+            {"id": "btn2", "ct": "Button", "patterns": ["invoke"]})
+        spec["transitions"] = [
+            {"from": "s0", "on": ["act", "btn", "invoke"], "to": "s1", "after_snapshots": 2},
+            {"from": "s0", "on": ["act", "btn2", "invoke"], "to": "s2", "after_snapshots": 0},
+        ]
+        t = FakeTree(spec)
+        t.act("btn", "invoke")
+        t.act("btn2", "invoke")
+        self.assertEqual(t.state, "s2")
+        for _ in range(4):
+            t.snapshot("doc")
+        self.assertEqual(t.state, "s2")
+
+    def test_value_replacement_waits_for_pending_state(self):
+        spec = _spec()
+        spec["states"]["s1"]["documents"][0]["children"][1]["value"] = "server"
+        t = FakeTree(spec)
+        t.set_value("edit", "mine")
+        t.act("btn", "invoke")
+        self.assertEqual(_edit(t).value, "mine")       # snapshot 1: still the old state
+        self.assertEqual(t.get_value("edit"), "mine")
+        self.assertEqual(_edit(t).value, "server")     # snapshot 2: new state visible
+
+    # T17
+    def test_all_patterns_supported_and_logged(self):
+        spec = _spec()
+        five = ("invoke", "toggle", "expand", "collapse", "default_action")
+        self.assertEqual(PATTERNS, five)
+        spec["states"]["s0"]["documents"][0]["children"][0]["patterns"] = list(five)
+        t = FakeTree(spec)
+        for pat in five:
+            t.act("btn", pat)
+        self.assertEqual(t.actions, [("act", "btn", p) for p in five])
+        with self.assertRaises(PatternNotSupported):
+            t.act("btn", "smash")
+        self.assertEqual(len(t.actions), len(five))
+
+    def test_unknown_node_and_doc_raise_keyerror(self):
+        t = FakeTree(_spec())
+        with self.assertRaises(KeyError):
+            t.snapshot("nope")
+        with self.assertRaises(KeyError):
+            t.get_value("nope")
+
+    def test_act_on_desktop_node(self):
+        spec = _spec()
+        spec["states"]["s0"]["desktop"] = {"id": "menu", "ct": "Menu", "children": [
+            {"id": "mi", "ct": "MenuItem", "patterns": ["invoke"]}]}
+        spec["transitions"] = [
+            {"from": "s0", "on": ["act", "mi", "invoke"], "to": "s1", "after_snapshots": 0}]
+        t = FakeTree(spec)
+        t.act("mi", "invoke")
+        self.assertEqual(t.actions, [("act", "mi", "invoke")])
+        self.assertEqual(t.state, "s1")
+        with self.assertRaises(PatternNotSupported):
+            FakeTree(_spec()).act("btn", "expand")
 
 
 if __name__ == "__main__":

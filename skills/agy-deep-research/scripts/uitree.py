@@ -53,14 +53,14 @@ class Node:
         return cls(
             id=d["id"],
             ct=d["ct"],
-            role=d.get("role", ""),
-            name=d.get("name", ""),
+            role=d.get("role") or "",
+            name=d.get("name") or "",
             aria=dict(d.get("aria") or {}),
             heading=d.get("heading"),
             enabled=d.get("enabled", True),
             offscreen=d.get("offscreen", False),
-            value=d.get("value", ""),
-            automation_id=d.get("automation_id", ""),
+            value=d.get("value") or "",
+            automation_id=d.get("automation_id") or "",
             patterns=frozenset(d.get("patterns") or ()),
             children=[cls.from_dict(c) for c in d.get("children") or ()],
         )
@@ -115,14 +115,36 @@ class FakeTree(UiTree):
     """
 
     def __init__(self, spec: dict):
-        self._states = {
-            name: {
-                "documents": [Node.from_dict(d) for d in s.get("documents") or ()],
-                "desktop": Node.from_dict(s["desktop"]) if s.get("desktop") else None,
-            }
-            for name, s in spec["states"].items()
-        }
-        self._transitions = list(spec.get("transitions") or ())
+        if not isinstance(spec, dict):
+            raise ValueError("spec: must be an object")
+        for key in ("state", "states"):
+            if key not in spec:
+                raise ValueError("spec field %r: missing" % key)
+        if not isinstance(spec["states"], dict):
+            raise ValueError("spec field 'states': must be an object")
+        transitions = spec.get("transitions")
+        if transitions is None:
+            transitions = []
+        if not isinstance(transitions, list):
+            raise ValueError("spec field 'transitions': must be a list")
+        for i, tr in enumerate(transitions):
+            if not isinstance(tr, dict):
+                raise ValueError("transitions[%d]: must be an object" % i)
+        self._states = {}
+        for name, st in spec["states"].items():
+            if not isinstance(st, dict):
+                raise ValueError("spec states[%r]: must be an object" % (name,))
+            try:
+                docs = st.get("documents")
+                desktop = st.get("desktop")
+                self._states[name] = {
+                    "documents": [Node.from_dict(d) for d in (docs if docs is not None else ())],
+                    "desktop": Node.from_dict(desktop) if desktop is not None else None,
+                }
+            except (KeyError, TypeError, AttributeError) as exc:
+                raise ValueError("spec states[%r]: malformed documents/desktop (%s: %s)"
+                                 % (name, type(exc).__name__, exc))
+        self._transitions = list(transitions)
         self.state: str = spec["state"]
         self._validate()
         self.actions: List[tuple] = []
@@ -131,7 +153,7 @@ class FakeTree(UiTree):
 
     @classmethod
     def from_file(cls, path) -> "FakeTree":
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, "r", encoding="utf-8-sig") as fh:
             return cls(json.load(fh))
 
     # -- internals ---------------------------------------------------
@@ -215,6 +237,12 @@ class FakeTree(UiTree):
         return self._overlay(d)
 
     def snapshot(self, doc_id: str) -> Node:
+        # Validate against the state this call would expose before mutating.
+        visible = self.state
+        if self._pending is not None and self._pending[1] <= 0:
+            visible = self._pending[0]
+        if not any(d.id == doc_id for d in self._states[visible]["documents"]):
+            raise KeyError("no such document in state %r: %s" % (visible, doc_id))
         if self._pending is not None:
             if self._pending[1] <= 0:
                 target = self._pending[0]
@@ -243,6 +271,5 @@ class FakeTree(UiTree):
         self._fire(["set_value", node_id])
 
     def get_value(self, node_id: str) -> str:
-        if node_id in self._values:
-            return self._values[node_id]
-        return self._find(node_id).value
+        node = self._find(node_id)
+        return self._values.get(node_id, node.value)
