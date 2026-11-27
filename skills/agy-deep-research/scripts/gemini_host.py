@@ -22,10 +22,14 @@ WinSta0 and survives its creator while the app runs, and vanishes when the app e
 after handing off, so only the app's browser process counts; a slow start can exceed 15 s; a cross-desktop
 WM_CLOSE fails (error 1400), so closing is the app menu from a thread on that desktop (injected `quit_via_menu`),
 then a same-desktop WM_CLOSE, then TerminateProcess of our verified process tree only.
+Host never acts on the user's Gemini: "user running" is re-read right before a D1 launch, a Gemini.exe it cannot
+inspect counts as the user's, and anything we launched is closed again before a refusal. State lives in
+%LOCALAPPDATA%\agy-deep-research\host.json (written atomically; never under the app's directory).
 """
 from __future__ import annotations
 
 import contextlib
+import json
 import ntpath
 import os
 import re
@@ -33,7 +37,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Iterator, List, Literal, Mapping, Optional, Protocol, Sequence, Tuple, Union
+from typing import Callable, Dict, Iterable, Iterator, List, Literal, Mapping, Optional, Protocol, Sequence, Tuple, Union
 
 DESKTOP_NAME = "agy-deep-research"
 ALLOWED_FLAG_SWITCHES = (
@@ -101,6 +105,9 @@ class ProcInfo:
     image: str
     cmdline: str
     created: float
+    # False: a Gemini.exe process whose image, creation time or command line could not be read. Host treats it
+    # as the user's (fails closed): never ours, never terminated, and it makes D1 refuse.
+    inspected: bool = True
 
 
 def _split_args(cmdline: str) -> list:
@@ -295,15 +302,18 @@ class WindowInfo:
 class HostOS(Protocol):
     def open_desktop(self, name: str) -> bool: ...  # does the desktop exist (OpenDesktopW by name)
 
-    def create_desktop(self, name: str) -> None: ...  # CreateDesktopW in WinSta0, handle kept while we run
+    def create_desktop(self, name: str) -> None: ...  # CreateDesktopW in WinSta0, handle kept until released
+
+    def release_desktops(self) -> None: ...  # close the desktop handles create_desktop kept
 
     def enum_desktops(self) -> List[str]: ...
 
     def desktop_windows(self, name: str) -> List[WindowInfo]: ...  # [] when the desktop cannot be opened
 
-    def processes(self) -> List[ProcInfo]: ...  # Gemini.exe processes (image, command line, creation time)
+    def processes(self) -> List[ProcInfo]: ...  # Gemini.exe processes; uninspectable ones as inspected=False
 
-    def launch(self, cmdline: str, desktop: str, env: Mapping[str, str]) -> int: ...  # pid of the launcher stub
+    def launch(self, cmdline: str, desktop: str, env: Mapping[str, str],
+               cwd: Optional[str] = None) -> int: ...  # pid of the launcher stub
 
     def terminate(self, pid: int, created: Optional[float] = None) -> bool: ...
 
@@ -312,14 +322,32 @@ class HostOS(Protocol):
     def local_state_mtime(self, profile: str) -> Optional[float]: ...
 
 
-def default_profile_dir(environ: Optional[Mapping[str, str]] = None) -> str:
+def _tool_dir(environ: Optional[Mapping[str, str]]) -> str:
     env = os.environ if environ is None else environ
-    return ntpath.join(env.get("LOCALAPPDATA", ""), "agy-deep-research", "gemini-profile")
+    base = env.get("LOCALAPPDATA", "")
+    if not base or not base.strip():
+        raise ValueError("LOCALAPPDATA is not set: cannot place the agy-deep-research host files")
+    return os.path.join(base, "agy-deep-research")
+
+
+def default_profile_dir(environ: Optional[Mapping[str, str]] = None) -> str:
+    return os.path.join(_tool_dir(environ), "gemini-profile")
 
 
 def default_lock_path(environ: Optional[Mapping[str, str]] = None) -> str:
-    env = os.environ if environ is None else environ
-    return os.path.join(env.get("LOCALAPPDATA", ""), "agy-deep-research", "host.lock")
+    return os.path.join(_tool_dir(environ), "host.lock")
+
+
+def default_state_path(environ: Optional[Mapping[str, str]] = None) -> str:
+    return os.path.join(_tool_dir(environ), "host.json")
+
+
+def app_version(image: str) -> Optional[str]:
+    """`1.2.3` from ...\\app-1.2.3\\Gemini.exe (None when the image is not an app image)."""
+    if not is_gemini_image(image):
+        return None
+    folder = ntpath.basename(ntpath.dirname(image))
+    return folder[len("app-"):] if folder.lower().startswith("app-") else None
 
 
 @dataclass
@@ -329,10 +357,10 @@ class HostConfig:
     desktop: str = DESKTOP_NAME
     flags: Sequence[str] = ALLOWED_FLAG_SWITCHES
     lock_path: Optional[str] = None  # default: %LOCALAPPDATA%\agy-deep-research\host.lock
+    state_path: Optional[str] = None  # default: %LOCALAPPDATA%\agy-deep-research\host.json
     environ: Optional[Mapping[str, str]] = None  # launch environment before clean_env (default os.environ)
     clock: Callable[[], float] = time.time  # wall clock: compared with process creation times and file mtimes
     sleep: Callable[[float], None] = time.sleep
-    active_job: Callable[[], bool] = lambda: False
     poll_s: float = 0.5
     quit_wait_s: float = 10.0
     terminate_wait_s: float = 5.0
@@ -340,6 +368,8 @@ class HostConfig:
     def __post_init__(self):
         if self.lock_path is None:
             self.lock_path = default_lock_path()
+        if self.state_path is None:
+            self.state_path = default_state_path()
 
 
 @dataclass
@@ -358,6 +388,9 @@ class InstanceInfo:
     profile: Optional[str]  # --user-data-dir of the browser; None for the default profile (D1)
     mode: Literal["D2", "D1"]
     orphan: bool
+    last_job: Optional[str] = None  # from host.json, when it describes this browser process
+    last_step_at: Optional[float] = None
+    started_at: Optional[float] = None
 
 
 @dataclass
@@ -376,17 +409,47 @@ def _profile_differs(parent: ProcInfo, child: ProcInfo) -> bool:
     return _canon(a) != _canon(b)
 
 
+def _write_json_atomic(path: str, data: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, sort_keys=True)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
+def _same_process(rec: Optional[dict], pid: Optional[int], created: Optional[float]) -> bool:
+    if not rec or pid is None or created is None:
+        return False
+    try:
+        return int(rec.get("browser_pid")) == pid and abs(float(rec.get("browser_created")) - created) < 1e-3
+    except (TypeError, ValueError):
+        return False
+
+
+QuitViaMenu = Callable[[str, List[int], List[int]], None]
+
+
 class Host:
-    """ensure / instances / close / lock over an injected HostOS. Never touches a process it has not verified as
-    ours: the dedicated profile (D2), or a Gemini process tree owning a window on our hidden desktop (D1)."""
+    """ensure / instances / close / touch / lock over an injected HostOS. Never acts on a process it has not
+    verified as ours: the dedicated profile (D2), or a default-profile process tree owning a window on our hidden
+    desktop (D1). A Gemini.exe process that cannot be inspected counts as the user's (fail closed)."""
 
     def __init__(self, os_: HostOS, cfg: HostConfig):
         self.os, self.cfg = os_, cfg
+        self._launch_t0: Optional[float] = None
 
     # --- process trees -------------------------------------------------------------------------------------------
-    @staticmethod
-    def _gemini(procs: Sequence[ProcInfo]) -> Dict[int, ProcInfo]:
-        return {p.pid: p for p in procs if is_gemini_image(p.image)}
+    def _scan(self) -> Tuple[Dict[int, ProcInfo], List[ProcInfo]]:
+        """(inspected Gemini app processes by pid, uninspectable Gemini.exe processes)."""
+        procs = self.os.processes()
+        byid = {p.pid: p for p in procs if p.inspected and is_gemini_image(p.image)}
+        blind = [p for p in procs if not p.inspected]
+        return byid, blind
+
+    def _procs(self) -> Dict[int, ProcInfo]:
+        return self._scan()[0]
 
     @staticmethod
     def _root(pid: int, byid: Dict[int, ProcInfo]) -> Optional[ProcInfo]:
@@ -415,7 +478,7 @@ class Host:
         return out
 
     def _ours_d2(self, p: ProcInfo, started_after: Optional[float] = None) -> bool:
-        return is_our_instance(p, self.cfg.profile_dir, started_after)
+        return p.inspected and is_our_instance(p, self.cfg.profile_dir, started_after)
 
     def _desktop_roots(self, desktop: str, byid: Dict[int, ProcInfo], main_only: bool) -> List[ProcInfo]:
         roots: Dict[int, ProcInfo] = {}
@@ -426,20 +489,29 @@ class Host:
                     roots[r.pid] = r
         return list(roots.values())
 
+    def _d1_trees(self, byid: Dict[int, ProcInfo]) -> Dict[int, ProcInfo]:
+        """Default-profile trees owning a window on our hidden desktop (the user's windows live elsewhere)."""
+        out: Dict[int, ProcInfo] = {}
+        for root in self._desktop_roots(self.cfg.desktop, byid, main_only=False):
+            if parse_user_data_dir(root.cmdline) is None:
+                for p in self._tree(root, byid):
+                    out[p.pid] = p
+        return out
+
     def _verified_tree(self, desktop: Optional[str], mode: str) -> List[ProcInfo]:
-        """Current processes of our instance: D2 = every app process of the dedicated profile; D1 = the trees of
-        default-profile Gemini processes owning a window on our hidden desktop (the user's live elsewhere)."""
-        byid = self._gemini(self.os.processes())
+        byid = self._procs()
         if mode == "D2":
             return [p for p in byid.values() if self._ours_d2(p)]
         if desktop != self.cfg.desktop:
             return []  # a D1 instance is identified only by our hidden desktop
-        out: Dict[int, ProcInfo] = {}
-        for root in self._desktop_roots(desktop, byid, main_only=False):
-            if parse_user_data_dir(root.cmdline) is None:
-                for p in self._tree(root, byid):
-                    out[p.pid] = p
-        return list(out.values())
+        return list(self._d1_trees(byid).values())
+
+    def _user_running(self, byid: Dict[int, ProcInfo], blind: List[ProcInfo]) -> bool:
+        """Any Gemini process that is not ours. An uninspectable Gemini.exe always counts (fail closed)."""
+        if blind:
+            return True
+        mine = {pid for pid, p in byid.items() if self._ours_d2(p)} | set(self._d1_trees(byid))
+        return any(pid not in mine for pid in byid)
 
     def _instance_on_desktop(self, byid: Dict[int, ProcInfo]) -> Optional[Tuple[str, ProcInfo]]:
         for root in self._desktop_roots(self.cfg.desktop, byid, main_only=True):
@@ -448,6 +520,49 @@ class Host:
             if parse_user_data_dir(root.cmdline) is None:
                 return "D1", root
         return None
+
+    # --- host.json -------------------------------------------------------------------------------------------------
+    def load_state(self) -> Optional[dict]:
+        try:
+            with open(self.cfg.state_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _save_state(self, session: HostSession, root: ProcInfo) -> None:
+        old = self.load_state()
+        same = _same_process(old, root.pid, root.created)
+        started = self._launch_t0 if self._launch_t0 is not None else root.created
+        rec = {
+            "mode": session.mode,
+            "browser_pid": root.pid,
+            "browser_created": root.created,
+            "desktop": session.desktop,
+            "started_at": old.get("started_at", started) if same else started,
+            "last_job": old.get("last_job") if same else None,
+            "last_step_at": old.get("last_step_at") if same else None,
+            "app_version": app_version(root.image),
+        }
+        _write_json_atomic(self.cfg.state_path, rec)
+
+    def touch(self, job_id: str) -> bool:
+        """Record that `job_id` just ran a step on the current instance (False when there is no host.json)."""
+        rec = self.load_state()
+        if rec is None:
+            return False
+        rec["last_job"] = job_id
+        rec["last_step_at"] = self.cfg.clock()
+        _write_json_atomic(self.cfg.state_path, rec)
+        return True
+
+    def _clear_state(self, browser_pid: Optional[int]) -> None:
+        rec = self.load_state()
+        if rec is not None and browser_pid is not None and rec.get("browser_pid") == browser_pid:
+            try:
+                os.remove(self.cfg.state_path)
+            except OSError:
+                pass
 
     # --- ensure ----------------------------------------------------------------------------------------------------
     def _env(self) -> dict:
@@ -460,50 +575,76 @@ class Host:
         if not self.os.open_desktop(self.cfg.desktop):
             self.os.create_desktop(self.cfg.desktop)
 
+    def _launch(self, cmd: str) -> float:
+        self._ensure_desktop()
+        t0 = self.cfg.clock()
+        if self._launch_t0 is None:
+            self._launch_t0 = t0
+        self.os.launch(cmd, self._station_desktop(), self._env(), self.cfg.profile_dir)
+        return t0
+
+    def _fail(self, code: str, reason: Optional[str]) -> HostError:
+        """Before refusing after a launch of ours: terminate what that launch started (verified, ours only)."""
+        if self._launch_t0 is not None:
+            since = self._launch_t0 - LAUNCH_SLACK_S
+            byid = self._procs()
+            victims = {pid: p for pid, p in byid.items() if self._ours_d2(p, since)}
+            victims.update({pid: p for pid, p in self._d1_trees(byid).items() if p.created >= since})
+            for p in victims.values():
+                self.os.terminate(p.pid, p.created)
+            self.os.release_desktops()
+        return HostError(code, reason or "")
+
     def ensure(self, job_mode: Optional[str]) -> HostSession:
         """Reuse the instance on our hidden desktop, else start D2 (dedicated profile) and fall back to D1 per
-        decide_mode. Raises HostError (GEMINI_IN_USE, HOST_BUSY, HOST_MODE_UNAVAILABLE, HOST_START_TIMEOUT)."""
+        decide_mode; writes host.json. Raises HostError (GEMINI_IN_USE, HOST_BUSY, HOST_MODE_UNAVAILABLE,
+        HOST_START_TIMEOUT)."""
         if job_mode not in (None, "D2", "D1"):
             raise ValueError(f"unknown job mode: {job_mode}")
-        byid = self._gemini(self.os.processes())
+        self._launch_t0 = None
+        byid, blind = self._scan()
         existing = self._instance_on_desktop(byid) if self.os.open_desktop(self.cfg.desktop) else None
         if existing is not None:
             mode, root = existing
             if job_mode is not None and job_mode != mode:
                 raise HostError("HOST_MODE_UNAVAILABLE",
                                 f"job is pinned to {job_mode} but the running instance is {mode}")
-            return HostSession(mode, self.cfg.desktop, root.pid, "reused")
+            return self._session(mode, root, "reused")
         if any(self._ours_d2(p) for p in byid.values()):
             raise HostError("HOST_BUSY", "the dedicated-profile instance runs outside the hidden desktop "
                                          "(signin or a visible debug window); close it first")
-        # no instance of ours is on the hidden desktop: every Gemini app process now running is the user's
-        user_running = bool(byid)
         if job_mode == "D1":
-            dec = decide_mode("D1", None, user_running)
+            dec = decide_mode("D1", None, self._user_running(byid, blind))
             if dec.code:
                 raise HostError(dec.code, dec.reason or "")
             return self._launch_d1(None)
+        user_before = self._user_running(byid, blind)
         state, root = self._launch_d2()
-        dec = decide_mode(job_mode, state, user_running)
+        if state == "ok":
+            return self._session("D2", root, None)
+        # the user may have started Gemini while we waited: decide (and launch D1) on a fresh inventory
+        user_now = self._user_running(*self._scan())
+        dec = decide_mode(job_mode, state, user_before or user_now)
         if dec.code:
-            raise HostError(dec.code, dec.reason or "")
-        if dec.mode == "D2":
-            return HostSession("D2", self.cfg.desktop, root.pid, None)
+            raise self._fail(dec.code, dec.reason)
         if root is not None:  # the stub dropped the switch: a default-profile instance is already on our desktop
-            return HostSession("D1", self.cfg.desktop, root.pid, dec.reason)
+            return self._session("D1", root, dec.reason)
         return self._launch_d1(dec.reason)
+
+    def _session(self, mode: str, root: ProcInfo, reason: Optional[str]) -> HostSession:
+        s = HostSession(mode, self.cfg.desktop, root.pid, reason)
+        self._save_state(s, root)
+        return s
 
     def _launch_d2(self) -> Tuple[str, Optional[ProcInfo]]:
         """("ok", our browser) | ("blocked", default-profile browser on our desktop or None) | ("timeout", None)."""
         cfg = self.cfg
         cmd = build_launch_command(cfg.stub, cfg.profile_dir, list(cfg.flags))
         before = self.os.local_state_mtime(cfg.profile_dir)
-        self._ensure_desktop()
-        t0 = cfg.clock()
-        self.os.launch(cmd, self._station_desktop(), self._env())
+        t0 = self._launch(cmd)
         seen: set = set()
         while True:
-            byid = self._gemini(self.os.processes())
+            byid = self._procs()
             ours = {pid for pid, p in byid.items() if self._ours_d2(p, t0 - LAUNCH_SLACK_S)}
             seen |= ours
             roots = self._desktop_roots(cfg.desktop, byid, main_only=True)
@@ -527,26 +668,35 @@ class Host:
 
     def _launch_d1(self, reason: Optional[str]) -> HostSession:
         cfg = self.cfg
-        cmd = build_launch_command(cfg.stub, None, [])
-        self._ensure_desktop()
-        t0 = cfg.clock()
-        self.os.launch(cmd, self._station_desktop(), self._env())
+        t0 = self._launch(build_launch_command(cfg.stub, None, []))
         while True:
-            found = self._instance_on_desktop(self._gemini(self.os.processes()))
+            found = self._instance_on_desktop(self._procs())
             if found is not None and found[0] == "D1":
-                return HostSession("D1", cfg.desktop, found[1].pid, reason)
+                return self._session("D1", found[1], reason)
             if cfg.clock() - t0 >= START_TIMEOUT_S:
-                raise HostError("HOST_START_TIMEOUT", "Gemini did not start in time")
+                raise self._fail("HOST_START_TIMEOUT", "Gemini did not start in time")
             cfg.sleep(cfg.poll_s)
 
     # --- inventory -------------------------------------------------------------------------------------------------
-    def instances(self) -> List[InstanceInfo]:
-        """Our instances only: anything of the default profile on our hidden desktop (D1), plus the dedicated
-        profile wherever it runs (D2). The user's own instances are never listed. `orphan` = no active job."""
-        byid = self._gemini(self.os.processes())
-        orphan = not self.cfg.active_job()
+    def instances(self, active_jobs: Iterable[str] = ()) -> List[InstanceInfo]:
+        """Our instances only: default-profile trees on our hidden desktop (D1) and the dedicated profile wherever
+        it runs (D2); the user's instances are never listed. host.json is merged when it describes the same
+        browser process; `orphan` = alive instance whose last_job is not one of `active_jobs`."""
+        active = set(active_jobs)
+        byid = self._procs()
+        rec = self.load_state()
         out: List[InstanceInfo] = []
         covered: set = set()
+
+        def add(desk, root, tree, mode):
+            covered.update(p.pid for p in tree)
+            same = _same_process(rec, root.pid, root.created)
+            last_job = rec.get("last_job") if same else None
+            out.append(InstanceInfo(desk, sorted(p.pid for p in tree), root.pid, parse_user_data_dir(root.cmdline),
+                                    mode, not (last_job and last_job in active), last_job,
+                                    rec.get("last_step_at") if same else None,
+                                    rec.get("started_at") if same else None))
+
         for desk in self.os.enum_desktops():
             for root in self._desktop_roots(desk, byid, main_only=False):
                 if root.pid in covered:
@@ -554,19 +704,13 @@ class Host:
                 d2 = self._ours_d2(root)
                 if not d2 and (desk != self.cfg.desktop or parse_user_data_dir(root.cmdline) is not None):
                     continue
-                tree = self._tree(root, byid)
-                covered |= {p.pid for p in tree}
-                out.append(InstanceInfo(desk, sorted(p.pid for p in tree), root.pid,
-                                        parse_user_data_dir(root.cmdline), "D2" if d2 else "D1", orphan))
+                add(desk, root, self._tree(root, byid), "D2" if d2 else "D1")
         rest = {pid: p for pid, p in byid.items() if pid not in covered and self._ours_d2(p)}
         for pid in sorted(rest):
             if pid in covered:
                 continue
             root = self._root(pid, rest) or rest[pid]
-            tree = self._tree(root, rest)
-            covered |= {q.pid for q in tree}
-            out.append(InstanceInfo(None, sorted(q.pid for q in tree), root.pid,
-                                    parse_user_data_dir(root.cmdline), "D2", orphan))
+            add(None, root, self._tree(root, rest), "D2")
         return out
 
     # --- close -----------------------------------------------------------------------------------------------------
@@ -581,26 +725,40 @@ class Host:
     def _desktop_gone(self) -> bool:
         return self.cfg.desktop not in self.os.enum_desktops()
 
-    def close(self, target: Union[HostSession, InstanceInfo],
-              quit_via_menu: Callable[[str], None]) -> CloseResult:
-        """quit_via_menu(desktop) (the caller runs the app menu 파일 -> 종료 via UIA from a thread on that desktop)
-        -> wait -> WM_CLOSE from a thread on that desktop -> wait -> TerminateProcess of our tree, re-verified at
-        each step (same pid and creation time, still ours). Other processes are never touched."""
+    def _main_hwnds(self, desktop: str, left: List[ProcInfo]) -> List[int]:
+        pids = {p.pid for p in left}
+        return [w.hwnd for w in self.os.desktop_windows(desktop) if w.pid in pids and w.is_main]
+
+    def close(self, target: Union[HostSession, InstanceInfo], quit_via_menu: QuitViaMenu) -> CloseResult:
+        """On our hidden desktop only: quit_via_menu(desktop, pids, hwnds) - the caller runs the app menu
+        (파일 -> 종료) via UIA from a thread on that desktop, limited to those verified pids/windows -> wait.
+        Then WM_CLOSE to our verified main windows from a thread on their desktop -> wait -> TerminateProcess of
+        our tree, re-verified at every step (same pid and creation time, still ours). Releases held desktop
+        handles; removes host.json when it described the closed instance."""
+        try:
+            res = self._close(target, quit_via_menu)
+        finally:
+            self.os.release_desktops()
+        if res.remaining == 0:
+            self._clear_state(target.browser_pid)
+        return res
+
+    def _close(self, target: Union[HostSession, InstanceInfo], quit_via_menu: QuitViaMenu) -> CloseResult:
         desktop, mode = target.desktop, target.mode
         left = self._verified_tree(desktop, mode)
         if not left:
             return CloseResult(0, "none", self._desktop_gone())
         menu_error = None
-        if desktop:
+        if desktop == self.cfg.desktop:
             try:
-                quit_via_menu(desktop)
+                quit_via_menu(desktop, sorted(p.pid for p in left), self._main_hwnds(desktop, left))
             except Exception as exc:  # fall through to WM_CLOSE
                 menu_error = type(exc).__name__
             left = self._wait_gone(desktop, mode, self.cfg.quit_wait_s)
             if not left:
                 return CloseResult(0, "menu", self._desktop_gone(), menu_error=menu_error)
-            pids = {p.pid for p in left}
-            hwnds = [w.hwnd for w in self.os.desktop_windows(desktop) if w.pid in pids and w.is_main]
+        if desktop:
+            hwnds = self._main_hwnds(desktop, left)
             if hwnds:
                 self.os.post_close(desktop, hwnds)
                 left = self._wait_gone(desktop, mode, self.cfg.quit_wait_s)
@@ -767,17 +925,17 @@ class _Win32:
         v = (ft[0].dwHighDateTime << 32) | ft[0].dwLowDateTime
         return (v - _EPOCH_AS_FILETIME) / 1e7
 
-    def cmdline(self, h) -> str:
-        """ProcessCommandLineInformation (Windows 8.1+): same-user processes, no WMI/PowerShell."""
+    def cmdline(self, h) -> Optional[str]:
+        """ProcessCommandLineInformation (Windows 8.1+): same-user processes, no WMI/PowerShell. None on failure."""
         ctypes, wt = self.ctypes, self.wt
         size = wt.ULONG(0)
         self.ntdll.NtQueryInformationProcess(h, _PROCESS_COMMAND_LINE_INFORMATION, None, 0, ctypes.byref(size))
         if not size.value:
-            return ""
+            return None
         buf = ctypes.create_string_buffer(size.value)
         if self.ntdll.NtQueryInformationProcess(h, _PROCESS_COMMAND_LINE_INFORMATION, buf, size,
                                                 ctypes.byref(size)) != 0:
-            return ""
+            return None
         us = self.UNICODE_STRING.from_buffer(buf)
         return ctypes.wstring_at(us.Buffer, us.Length // 2) if us.Buffer and us.Length else ""
 
@@ -811,11 +969,28 @@ class Win32HostOS:
             raise w.err("CreateDesktopW")
         self._held[name] = h
 
+    def release_desktops(self) -> None:
+        w = self._api()
+        held, self._held = self._held, {}
+        for h in held.values():
+            w.u32.CloseDesktop(h)
+
     def enum_desktops(self) -> List[str]:
         w = self._api()
         names: List[str] = []
-        cb = w.ENUMSTR(lambda n, _: names.append(n) or True)
-        w.u32.EnumDesktopsW(w.u32.GetProcessWindowStation(), cb, 0)
+        errors: List[BaseException] = []
+
+        def cb(n, _):
+            try:
+                names.append(n)
+                return True
+            except BaseException as exc:  # an exception cannot cross the ctypes callback: record it, stop
+                errors.append(exc)
+                return False
+
+        w.u32.EnumDesktopsW(w.u32.GetProcessWindowStation(), w.ENUMSTR(cb), 0)
+        if errors:
+            raise errors[0]
         return names
 
     def desktop_windows(self, name: str) -> List[WindowInfo]:
@@ -825,24 +1000,32 @@ class Win32HostOS:
         if not h:
             return []
         out: List[WindowInfo] = []
+        errors: List[BaseException] = []
 
         def cb(hwnd, _):
-            pid = wt.DWORD()
-            u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            cls = ctypes.create_unicode_buffer(256)
-            u.GetClassNameW(hwnd, cls, 256)
-            out.append(WindowInfo(int(hwnd or 0), int(pid.value), cls.value, bool(u.IsWindowVisible(hwnd)),
-                                  u.GetWindowTextLengthW(hwnd) > 0, int(u.GetWindow(hwnd, _GW_OWNER) or 0)))
-            return True
+            try:
+                pid = wt.DWORD()
+                u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                cls = ctypes.create_unicode_buffer(256)
+                u.GetClassNameW(hwnd, cls, 256)
+                out.append(WindowInfo(int(hwnd or 0), int(pid.value), cls.value, bool(u.IsWindowVisible(hwnd)),
+                                      u.GetWindowTextLengthW(hwnd) > 0, int(u.GetWindow(hwnd, _GW_OWNER) or 0)))
+                return True
+            except BaseException as exc:  # an exception cannot cross the ctypes callback: record it, stop
+                errors.append(exc)
+                return False
 
         try:
             u.EnumDesktopWindows(h, w.ENUMWND(cb), 0)
         finally:
             u.CloseDesktop(h)
+        if errors:
+            raise errors[0]
         return out
 
     def processes(self) -> List[ProcInfo]:
-        """Gemini.exe processes (Toolhelp snapshot, then image, creation time and command line per process)."""
+        """Gemini.exe processes (Toolhelp snapshot, then image, creation time and command line per process). One
+        that cannot be opened or read is returned as ProcInfo(inspected=False): Host counts it as the user's."""
         w = self._api()
         k, ctypes = w.k32, w.ctypes
         snap = k.CreateToolhelp32Snapshot(_TH32CS_SNAPPROCESS, 0)
@@ -861,22 +1044,30 @@ class Win32HostOS:
             k.CloseHandle(snap)
         out: List[ProcInfo] = []
         for pid, ppid in entries:
+            sentinel = ProcInfo(pid, ppid, "", "", 0.0, inspected=False)
             h = k.OpenProcess(_PROCESS_QUERY_LIMITED, False, pid)
             if not h:
+                out.append(sentinel)
                 continue
             try:
-                created = w.created(h)
-                if created is not None:
-                    out.append(ProcInfo(pid, ppid, w.image(h), w.cmdline(h), created))
+                created, image, cmd = w.created(h), w.image(h), w.cmdline(h)
+                if created is None or not image or cmd is None:
+                    out.append(sentinel)
+                else:
+                    out.append(ProcInfo(pid, ppid, image, cmd, created))
             finally:
                 k.CloseHandle(h)
         return out
 
-    def launch(self, cmdline: str, desktop: str, env: Mapping[str, str]) -> int:
-        """CreateProcessW on `desktop` (WinSta0\\<name>) with CREATE_NO_WINDOW; returns the stub's pid."""
+    def launch(self, cmdline: str, desktop: str, env: Mapping[str, str], cwd: Optional[str] = None) -> int:
+        """CreateProcessW on `desktop` (WinSta0\\<name>) with CREATE_NO_WINDOW and `cwd` (the profile directory,
+        created when missing) as the current directory; returns the stub's pid."""
         w = self._api()
         if not desktop.startswith(WINDOW_STATION + "\\"):
             raise ValueError("desktop must be %s\\<name>" % WINDOW_STATION)
+        if cwd:
+            _validate_profile_dir(cwd)  # never a directory under the app's own data directory
+            os.makedirs(cwd, exist_ok=True)
         ctypes = w.ctypes
         si = w.STARTUPINFOW()
         si.cb = ctypes.sizeof(si)
@@ -885,7 +1076,7 @@ class Win32HostOS:
         buf = ctypes.create_unicode_buffer(cmdline)
         block = ctypes.create_unicode_buffer(_env_block(env))
         ok = w.k32.CreateProcessW(None, buf, None, None, False, _CREATE_NO_WINDOW | _CREATE_UNICODE_ENVIRONMENT,
-                                  block, None, ctypes.byref(si), ctypes.byref(pi))
+                                  block, cwd or None, ctypes.byref(si), ctypes.byref(pi))
         if not ok:
             raise w.err("CreateProcessW")
         w.k32.CloseHandle(pi.hThread)

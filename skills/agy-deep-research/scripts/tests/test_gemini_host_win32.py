@@ -2,6 +2,7 @@ import sandbox  # noqa: F401  (must stay the first import: blocks real-app acces
 # test_gemini_host_win32.py - Host orchestration (ensure / instances / close / lock) against a fake HostOS.
 # No real desktop, window, process or PowerShell is touched: Host only talks to FakeOS, and Win32HostOS is only
 # called to prove it refuses everything inside the test sandbox.
+import json
 import os
 import sys
 import tempfile
@@ -76,6 +77,10 @@ class FakeOS:
         self.desktops.add(name)
         self._held = {name}
 
+    def release_desktops(self):
+        self.calls.append(("release_desktops",))
+        self._held = set()
+
     def enum_desktops(self):
         self.calls.append(("enum_desktops",))
         return sorted(self.desktops)
@@ -88,8 +93,8 @@ class FakeOS:
         self.calls.append(("processes",))
         return list(self.procs.values())
 
-    def launch(self, cmdline, desktop, env):
-        self.calls.append(("launch", cmdline, desktop, dict(env)))
+    def launch(self, cmdline, desktop, env, cwd=None):
+        self.calls.append(("launch", cmdline, desktop, dict(env), cwd))
         stub = self.next_pid
         self.next_pid += 100
         self.add_proc(stub, 1, cmdline, image=STUB)
@@ -130,10 +135,11 @@ def start_d2_instance(fake, browser=7000, window_at=2.0, state_at=3.0, desktop=O
     fake.at(state_at, lambda: fake.local_state.__setitem__(PROFILE, fake.now))
 
 
-def make_host(fake, lock_path=None, active_job=lambda: False, env=None):
-    cfg = gh.HostConfig(stub=STUB, profile_dir=PROFILE, lock_path=lock_path or os.path.join(
-        tempfile.mkdtemp(prefix="agy-dr-lock-"), "host.lock"), clock=fake.clock, sleep=fake.sleep,
-        active_job=active_job, environ=env if env is not None else {"PATH": "x", "NODE_OPTIONS": "y",
+def make_host(fake, lock_path=None, state_path=None, env=None):
+    tmp = tempfile.mkdtemp(prefix="agy-dr-host-")
+    cfg = gh.HostConfig(stub=STUB, profile_dir=PROFILE, lock_path=lock_path or os.path.join(tmp, "host.lock"),
+        state_path=state_path or os.path.join(tmp, "host.json"), clock=fake.clock, sleep=fake.sleep,
+        environ=env if env is not None else {"PATH": "x", "NODE_OPTIONS": "y",
                                                                     "ELECTRON_RUN_AS_NODE": "1"})
     return gh.Host(fake, cfg)
 
@@ -288,7 +294,10 @@ class InstanceTests(unittest.TestCase):
         self.assertEqual(gh._canon(inst.profile), gh._canon(PROFILE))
 
     def test_not_orphan_with_active_job(self):
-        (inst,) = make_host(self._fake(), active_job=lambda: True).instances()
+        host = make_host(self._fake())
+        host._save_state(gh.HostSession("D2", OURS, 7000), host.os.procs[7000])
+        host.touch("job1")
+        (inst,) = host.instances(active_jobs=["job1"])
         self.assertFalse(inst.orphan)
 
     def test_windowless_dedicated_profile_instance_is_listed(self):
@@ -326,8 +335,8 @@ class CloseTests(unittest.TestCase):
                 host = make_host(fake)
                 (inst,) = host.instances()
                 menu = []
-                res = host.close(inst, quit_via_menu=lambda desktop: menu.append(desktop))
-                self.assertEqual(menu, [OURS])
+                res = host.close(inst, quit_via_menu=lambda desktop, pids, hwnds: menu.append((desktop, pids)))
+                self.assertEqual(menu, [(OURS, [7000, 7001, 7002])])
                 self.assertEqual(sorted(fake.terminated()), [7000, 7001, 7002])
                 self.assertEqual(res.remaining, 0)
                 self.assertEqual(res.method, "terminate")
@@ -341,7 +350,7 @@ class CloseTests(unittest.TestCase):
         host = make_host(fake)
         (inst,) = host.instances()
 
-        def quit_menu(desktop):
+        def quit_menu(desktop, pids, hwnds):
             fake.at(2.0, lambda: [fake.kill(p) for p in (7001, 7002, 7000)])
         res = host.close(inst, quit_via_menu=quit_menu)
         self.assertEqual((res.remaining, res.method), (0, "menu"))
@@ -355,7 +364,7 @@ class CloseTests(unittest.TestCase):
         (inst,) = host.instances()
         fake.on_post_close = lambda: fake.at(1.0, lambda: [fake.kill(p) for p in (7001, 7002, 7000)])
 
-        def broken(desktop):
+        def broken(desktop, pids, hwnds):
             raise RuntimeError("menu not found")
         res = host.close(inst, quit_via_menu=broken)
         self.assertEqual((res.remaining, res.method), (0, "wm_close"))
@@ -367,7 +376,7 @@ class CloseTests(unittest.TestCase):
         host = make_host(fake)
         s = host.ensure(None)
         add_user_instance(fake)
-        res = host.close(s, quit_via_menu=lambda d: None)
+        res = host.close(s, quit_via_menu=lambda d, pids, hwnds: None)
         self.assertEqual(sorted(fake.terminated()), [7000, 7001])
         self.assertEqual(res.remaining, 0)
 
@@ -379,7 +388,7 @@ class CloseTests(unittest.TestCase):
         fake.kill(7000)
         fake.add_proc(7000, 50, '"%s"' % APP, created=fake.now + 1)
         fake.add_window("Default", 7000)
-        host.close(inst, quit_via_menu=lambda d: None)
+        host.close(inst, quit_via_menu=lambda d, pids, hwnds: None)
         self.assertNotIn(7000, fake.terminated())
         self.assertIn(7000, fake.procs)
 
@@ -387,9 +396,206 @@ class CloseTests(unittest.TestCase):
         fake = FakeOS()
         add_user_instance(fake)
         host = make_host(fake)
-        res = host.close(gh.InstanceInfo(OURS, [], None, None, "D2", True), quit_via_menu=lambda d: None)
+        res = host.close(gh.InstanceInfo(OURS, [], None, None, "D2", True), quit_via_menu=lambda d, pids, hwnds: None)
         self.assertEqual((res.remaining, res.method), (0, "none"))
         self.assertEqual(fake.terminated(), [])
+
+
+def guard_exit_d2(fake):
+    """Our dedicated-profile app process starts, then the guard ends it (the D2 launch is blocked)."""
+    def on_launch(cmd, desk):
+        if UDD in cmd:
+            fake.at(1.0, lambda: fake.add_proc(7000, 4242, '"%s" %s' % (APP, UDD)))
+            fake.at(2.0, lambda: fake.kill(7000))
+    return on_launch
+
+
+class UserNeverTouchedTests(unittest.TestCase):
+    def test_user_starting_gemini_during_d2_wait_blocks_d1(self):
+        fake = FakeOS()
+        fake.on_launch = guard_exit_d2(fake)
+        fake.at(1.5, lambda: add_user_instance(fake))  # the user opens Gemini while we wait
+        with self.assertRaises(gh.HostError) as cm:
+            make_host(fake).ensure(None)
+        self.assertEqual(cm.exception.code, "GEMINI_IN_USE")
+        self.assertEqual(len(fake.launches()), 1)
+        self.assertEqual(fake.terminated(), [])
+
+    def _blind(self, fake, pid=900, ppid=50):
+        fake.procs[pid] = gh.ProcInfo(pid, ppid, "", "", 0.0, inspected=False)
+
+    def test_uninspectable_gemini_counts_as_user_for_pinned_d1(self):
+        fake = FakeOS()
+        self._blind(fake)
+        with self.assertRaises(gh.HostError) as cm:
+            make_host(fake).ensure("D1")
+        self.assertEqual(cm.exception.code, "GEMINI_IN_USE")
+        self.assertEqual(fake.launches(), [])
+
+    def test_uninspectable_gemini_counts_as_user_after_blocked_d2(self):
+        fake = FakeOS()
+        self._blind(fake)
+        fake.on_launch = guard_exit_d2(fake)
+        with self.assertRaises(gh.HostError) as cm:
+            make_host(fake).ensure(None)
+        self.assertEqual(cm.exception.code, "GEMINI_IN_USE")
+        self.assertEqual(len(fake.launches()), 1)
+
+    def test_uninspectable_gemini_is_never_ours_nor_terminated(self):
+        fake = FakeOS()
+        fake.add_proc(7000, 1, '"%s" %s' % (APP, UDD))
+        fake.add_window(OURS, 7000)
+        self._blind(fake, pid=7005, ppid=7000)  # even a child of our browser
+        fake.add_window(OURS, 7005)
+        host = make_host(fake)
+        (inst,) = host.instances()
+        self.assertEqual(inst.pids, [7000])
+        res = host.close(inst, quit_via_menu=lambda d, pids, hwnds: None)
+        self.assertEqual(fake.terminated(), [7000])
+        self.assertIn(7005, fake.procs)
+        self.assertEqual(res.remaining, 0)
+
+    def test_menu_quit_only_on_our_desktop(self):
+        fake = FakeOS()
+        add_user_instance(fake)  # user's browser 100 on Default
+        fake.add_proc(7000, 1, '"%s" %s' % (APP, UDD))  # our profile visible on Default (signin)
+        fake.add_proc(7001, 7000, '"%s" %s renderer' % (APP, UDD))
+        fake.add_window("Default", 7000, hwnd=70001)
+        host = make_host(fake)
+        (inst,) = host.instances()
+        self.assertEqual(inst.desktop, "Default")
+        menu = []
+        res = host.close(inst, quit_via_menu=lambda d, pids, hwnds: menu.append(d))
+        self.assertEqual(menu, [])
+        posts = [c for c in fake.calls if c[0] == "post_close"]
+        self.assertEqual(posts, [("post_close", "Default", (70001,))])
+        self.assertEqual(sorted(fake.terminated()), [7000, 7001])
+        self.assertIn(100, fake.procs)
+        self.assertEqual(res.remaining, 0)
+
+    def test_menu_gets_only_verified_pids_and_windows(self):
+        fake = FakeOS()
+        add_user_instance(fake)
+        fake.add_proc(7000, 1, '"%s" %s' % (APP, UDD))
+        fake.add_window(OURS, 7000, hwnd=70001)
+        host = make_host(fake)
+        (inst,) = host.instances()
+        got = []
+        host.close(inst, quit_via_menu=lambda d, pids, hwnds: got.append((d, pids, hwnds)))
+        self.assertEqual(got, [(OURS, [7000], [70001])])
+
+
+class AbortTests(unittest.TestCase):
+    def test_timeout_terminates_what_we_launched(self):
+        fake = FakeOS()
+        add_user_instance(fake)
+        # our app starts but never shows a window on our desktop
+        fake.on_launch = lambda cmd, desk: fake.at(1.0, lambda: fake.add_proc(7000, 4242, '"%s" %s' % (APP, UDD)))
+        with self.assertRaises(gh.HostError) as cm:
+            make_host(fake).ensure(None)
+        self.assertEqual(cm.exception.code, "HOST_START_TIMEOUT")
+        self.assertEqual(fake.terminated(), [7000])
+        self.assertIn(100, fake.procs)
+        self.assertIn(("release_desktops",), fake.calls)
+
+    def test_gemini_in_use_closes_switch_ignored_instance_we_started(self):
+        fake = FakeOS()
+        add_user_instance(fake)
+
+        def ignored(cmd, desk):
+            fake.at(1.0, lambda: fake.add_proc(8000, 4343, '"%s"' % APP))
+            fake.at(2.0, lambda: fake.add_window(OURS, 8000))
+        fake.on_launch = ignored
+        with self.assertRaises(gh.HostError) as cm:
+            make_host(fake).ensure(None)
+        self.assertEqual(cm.exception.code, "GEMINI_IN_USE")
+        self.assertEqual(fake.terminated(), [8000])
+        self.assertIn(100, fake.procs)
+
+    def test_refusal_without_launch_terminates_nothing(self):
+        fake = FakeOS()
+        add_user_instance(fake)
+        with self.assertRaises(gh.HostError):
+            make_host(fake).ensure("D1")
+        self.assertEqual(fake.terminated(), [])
+
+    def test_launch_cwd_is_profile_and_close_releases_desktops(self):
+        fake = FakeOS()
+        fake.on_launch = lambda cmd, desk: start_d2_instance(fake)
+        host = make_host(fake)
+        s = host.ensure(None)
+        self.assertEqual(fake.launches()[0][4], PROFILE)
+        host.close(s, quit_via_menu=lambda d, pids, hwnds: None)
+        self.assertIn(("release_desktops",), fake.calls)
+
+    def test_empty_localappdata_raises(self):
+        for env in ({}, {"LOCALAPPDATA": ""}, {"LOCALAPPDATA": "  "}):
+            for fn in (gh.default_lock_path, gh.default_state_path, gh.default_profile_dir):
+                with self.assertRaises(ValueError):
+                    fn(env)
+
+
+class StateFileTests(unittest.TestCase):
+    def _ensure(self):
+        fake = FakeOS()
+        fake.on_launch = lambda cmd, desk: start_d2_instance(fake)
+        host = make_host(fake)
+        return fake, host, host.ensure(None)
+
+    def test_ensure_writes_host_json_atomically(self):
+        fake, host, s = self._ensure()
+        d = os.path.dirname(host.cfg.state_path)
+        with open(host.cfg.state_path, encoding="utf-8") as fh:
+            rec = json.load(fh)
+        self.assertEqual(rec["mode"], "D2")
+        self.assertEqual(rec["browser_pid"], 7000)
+        self.assertEqual(rec["browser_created"], fake.procs[7000].created)
+        self.assertEqual(rec["desktop"], OURS)
+        self.assertEqual(rec["started_at"], T0)
+        self.assertIsNone(rec["last_job"])
+        self.assertIsNone(rec["last_step_at"])
+        self.assertEqual(rec["app_version"], "1.2.3")
+        self.assertEqual([n for n in os.listdir(d) if n.endswith(".tmp")], [])
+
+    def test_touch_and_instances_merge(self):
+        fake, host, s = self._ensure()
+        fake.now += 30
+        self.assertTrue(host.touch("job-7"))
+        (inst,) = host.instances(active_jobs={"job-7"})
+        self.assertEqual((inst.last_job, inst.last_step_at, inst.started_at, inst.orphan),
+                         ("job-7", fake.now, T0, False))
+        (inst,) = host.instances(active_jobs={"other"})
+        self.assertTrue(inst.orphan)
+        (inst,) = host.instances()
+        self.assertTrue(inst.orphan)
+
+    def test_reuse_keeps_last_job(self):
+        fake, host, s = self._ensure()
+        host.touch("job-7")
+        again = host.ensure(None)
+        self.assertEqual(again.reason, "reused")
+        self.assertEqual(host.load_state()["last_job"], "job-7")
+
+    def test_stale_record_is_not_merged(self):
+        fake, host, s = self._ensure()
+        host.touch("job-7")
+        for pid in (7000, 7001):  # same pids, another instance
+            fake.procs[pid].created += 5
+        (inst,) = host.instances(active_jobs={"job-7"})
+        self.assertIsNone(inst.last_job)
+        self.assertTrue(inst.orphan)
+
+    def test_touch_without_state(self):
+        self.assertFalse(make_host(FakeOS()).touch("job"))
+
+    def test_close_removes_host_json(self):
+        fake, host, s = self._ensure()
+        host.close(s, quit_via_menu=lambda d, pids, hwnds: None)
+        self.assertFalse(os.path.exists(host.cfg.state_path))
+
+    def test_default_state_path(self):
+        cfg = gh.HostConfig(stub=STUB, profile_dir=PROFILE)
+        self.assertEqual(cfg.state_path, os.path.join(os.environ["LOCALAPPDATA"], "agy-deep-research", "host.json"))
 
 
 class LockTests(unittest.TestCase):
@@ -415,7 +621,7 @@ class Win32SandboxTests(unittest.TestCase):
         w = gh.Win32HostOS()
         calls = [lambda: w.open_desktop(OURS), lambda: w.create_desktop(OURS), w.enum_desktops,
                  lambda: w.desktop_windows(OURS), w.processes, lambda: w.launch("x", "WinSta0\\" + OURS, {}),
-                 lambda: w.terminate(1), lambda: w.post_close(OURS, [1]), lambda: w.local_state_mtime(PROFILE)]
+                 lambda: w.terminate(1), lambda: w.post_close(OURS, [1]), w.release_desktops, lambda: w.local_state_mtime(PROFILE)]
         for call in calls:
             with self.assertRaises(gh.HostRefused) as cm:
                 call()
