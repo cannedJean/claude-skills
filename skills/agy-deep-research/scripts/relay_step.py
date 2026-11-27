@@ -162,7 +162,7 @@ DRIVER_ERROR_CODES = frozenset({
     "APP_NOT_INSTALLED", "UIA_UNAVAILABLE", "LOCATOR_CONFIG_ERROR", "UIA_BACKEND_ERROR", "DRIVER_ERROR",
     "UIA_DRIVER_NOT_IMPLEMENTED", "DRIVER_STATE_MISMATCH", "DEADLINE_TOO_SHORT",
     "ALREADY_STARTED", "PLAN_CARD_STALE", "RESEARCH_NOT_STARTED", "RESEARCH_STALLED", "RECOVERY_UNAVAILABLE",
-    "RESEARCH_TIMEOUT",
+    "RESEARCH_TIMEOUT", "UNEXPECTED_SURFACE",
 })
 DRIVER_ERROR_HINT = ("the driver reported this code (see its details and the stderr log); the caller decides, and a step "
                      "that already sent a prompt or feedback is never re-run")

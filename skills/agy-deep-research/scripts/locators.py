@@ -283,9 +283,8 @@ def _scope_roots(scope: str, ctx: LocatorContext, key: Optional[str] = None) -> 
                     return [turn]
         return turns[-1:]
     if scope == "report_panel":
-        labels = [n for k in REPORT_CONTROLS for n in ctx.locs["locators"].get(k, {}).get("names", ())
-                  if not n.startswith("re:")]
-        panel = report_md.find_report_panel(doc, ctx.allowed, labels) if labels else None
+        ents = [ctx.locs["locators"][k] for k in REPORT_CONTROLS if k in ctx.locs["locators"]]
+        panel = report_md.find_report_panel(doc, ctx.allowed, ents) if ents else None
         return [panel] if panel is not None else []
     if scope == "composer":
         akey = conf.get("anchor", "prompt_input")

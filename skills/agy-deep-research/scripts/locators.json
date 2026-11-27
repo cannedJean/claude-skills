@@ -28,7 +28,7 @@
     "sign_in": {"ct": "Hyperlink", "names": ["로그인", "Sign in"], "scope": "document", "expect": "optional", "patterns": []},
     "research_status": {"ct": "Text", "names": ["re:조사 시작 중.*", "re:웹사이트 [\\d,]+개 조사 중.*", "re:Starting research.*", "re:Researching [\\d,]+ websites.*"], "scope": "main", "expect": "optional", "patterns": []},
     "research_thought_title": {"ct": "Text", "role": "heading", "names": ["re:.+"], "scope": "main", "expect": "optional", "patterns": []},
-    "report_done_phrase": {"ct": "Text", "names": ["re:I[’']ve completed your research.*", "re:연구를 완료했습니다.*", "re:조사를 완료했습니다.*"], "scope": "main", "expect": "optional", "patterns": []},
+    "report_done_phrase": {"ct": "Text", "names": ["re:I[’']ve completed your research.*", "re:.*연구를 완료했습니다.*", "re:.*조사를 완료했습니다.*"], "scope": "main", "expect": "optional", "patterns": []},
     "report_share_export": {"ct": "Button", "names": ["공유 및 내보내기", "Share & export", "Share and export"], "scope": "report_panel", "expect": "optional", "patterns": []},
     "report_toc": {"ct": "Button", "names": ["목차 메뉴", "Table of contents"], "scope": "report_panel", "expect": "optional", "patterns": []},
     "report_sources_used": {"ct": "Button", "names": ["보고서에서 사용된 소스", "Sources used in the report"], "scope": "report_panel", "expect": "optional", "patterns": []}

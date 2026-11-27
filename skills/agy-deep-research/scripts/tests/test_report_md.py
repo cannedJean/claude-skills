@@ -1,16 +1,21 @@
 import sandbox  # noqa: F401  (must stay the first import: blocks real-app access)
+import json
 import os
 import re
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 
 from uitree import FakeTree, Node  # noqa: E402
+import locators  # noqa: E402
 import privacy  # noqa: E402
 import report_md  # noqa: E402
 
+BUNDLED = Path(HERE).parent / "locators.json"
 FIXTURE = os.path.join(HERE, "fixtures", "report_sql_ko.json")
 HEADER = ["버전 (통칭)", "공개 연도", "공식 표준 번호", "대표적인 변화"]
 
@@ -239,6 +244,32 @@ class PanelScopeTests(unittest.TestCase):
     def test_unallowed_doc_fails_closed(self):
         doc = _page(_n("h1", "Text", "보고서", role="heading", heading=1))
         self.assertIsNone(report_md.find_report_root(doc, set()))
+
+    def test_re_override_of_report_control_is_honoured(self):
+        doc = _page(_n("h1", "Text", "보고서", role="heading", heading=1), _n("t1", "Text", "본문."))
+        for n, _ in doc.walk():
+            if n.id == "share":
+                n.name = "Export report (v2)"
+        allowed = privacy.allowed_ids(doc)
+        self.assertIsNone(report_md.find_report_panel(doc, allowed))
+        self.assertIsNone(report_md.find_report_root(doc, allowed))
+        with tempfile.TemporaryDirectory() as tmp:
+            ov = Path(tmp) / "locators.local.json"
+            ov.write_text(json.dumps({
+                "version": 1,
+                "locators": {"report_share_export": {"names": ["re:Export report.*"]}},
+            }), encoding="utf-8")
+            locs = locators.load_locators(BUNDLED, ov)
+        panel = report_md.find_report_panel(doc, allowed, locs)
+        root = report_md.find_report_root(doc, allowed, locs)
+        self.assertIsNotNone(panel)
+        self.assertEqual(panel.id, "panel")
+        self.assertIsNotNone(root)
+        self.assertEqual(root.id, "body")
+        tree = FakeTree({"state": "s", "states": {"s": {"documents": [doc.to_dict()]}}})
+        snap = tree.snapshot("doc")
+        ctx = locators.LocatorContext(tree, snap, locs, privacy.allowed_ids(snap))
+        self.assertEqual([n.id for n in locators.resolve("report_share_export", ctx)], ["share"])
 
 
 class PanelScopeFailClosedTests(unittest.TestCase):

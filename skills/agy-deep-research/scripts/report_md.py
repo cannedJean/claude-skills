@@ -47,17 +47,18 @@ from typing import Iterable, List, Optional
 from uitree import Node
 
 # the report controls are locators (locators.json: report_share_export, report_toc, report_sources_used, ko + en);
-# their literal names are the panel anchors. One source of truth: read from the bundled file next to this module.
+# their locator entries anchor the panel via locators._matches. One source of truth: read from the bundled file.
 REPORT_CONTROL_KEYS = ("report_share_export", "report_toc", "report_sources_used")
 
 
-def _bundled_control_labels() -> tuple:
+def _bundled_control_entries() -> tuple:
     with open(Path(__file__).with_name("locators.json"), "r", encoding="utf-8-sig") as fh:
         locs = json.load(fh)["locators"]
-    return tuple(n for k in REPORT_CONTROL_KEYS for n in locs[k]["names"] if not n.startswith("re:"))
+    return tuple(locs[k] for k in REPORT_CONTROL_KEYS if k in locs)
 
 
-REPORT_CONTROL_LABELS = _bundled_control_labels()
+REPORT_CONTROL_ENTRIES = _bundled_control_entries()
+REPORT_CONTROL_LABELS = tuple(n for ent in REPORT_CONTROL_ENTRIES for n in ent["names"] if not n.startswith("re:"))
 
 SKIP_CT = frozenset({
     "Button", "SplitButton", "Edit", "Menu", "MenuBar", "MenuItem", "CheckBox", "RadioButton", "ComboBox",
@@ -183,16 +184,36 @@ def _valid_panel(sub) -> bool:
     return True
 
 
-def find_report_panel(doc: Node, allowed, labels: Optional[Iterable[str]] = None) -> Optional[Node]:
+def _control_entries(controls) -> list:
+    if controls is None:
+        return list(REPORT_CONTROL_ENTRIES)
+    if isinstance(controls, dict):
+        locs = controls.get("locators", controls)
+        return [locs[k] for k in REPORT_CONTROL_KEYS if k in locs]
+    entries, names = [], []
+    for item in controls:
+        if isinstance(item, dict):
+            entries.append(item)
+        elif isinstance(item, str):
+            names.append(item)
+    if names:
+        entries.append({"ct": "Button", "names": names})
+    return entries
+
+
+def find_report_panel(doc: Node, allowed, labels: Optional[Iterable] = None) -> Optional[Node]:
     """The report side panel (see module doc), or None (fail closed)."""
     if doc is None or not allowed:
         return None
-    keys = {_label_key(x) for x in (labels if labels is not None else REPORT_CONTROL_LABELS)}
+    import locators
+    entries = _control_entries(labels)
+    if not entries:
+        return None
     index = {}
     anchors = []
     for n, anc in doc.walk():
         index[n.id] = (n, anc)
-        if n.id in allowed and (n.ct == "Button" or _role(n) == "button") and _label_key(n.name) in keys:
+        if n.id in allowed and any(locators._matches(n, ent) for ent in entries):
             anchors.append((n, anc))
     candidates = []
     for _anchor, anc in anchors:
@@ -215,7 +236,7 @@ def find_report_panel(doc: Node, allowed, labels: Optional[Iterable[str]] = None
     return outer
 
 
-def find_report_root(doc: Node, allowed, labels: Optional[Iterable[str]] = None) -> Optional[Node]:
+def find_report_root(doc: Node, allowed, labels: Optional[Iterable] = None) -> Optional[Node]:
     """The report body inside the panel: the panel child on the path to the H1."""
     panel = find_report_panel(doc, allowed, labels)
     if panel is None:

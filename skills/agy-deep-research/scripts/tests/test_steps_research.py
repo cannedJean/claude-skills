@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -211,6 +212,11 @@ class ResearchLocatorTests(unittest.TestCase):
             self.assertTrue(locators.match_name(text, lc["report_done_phrase"]["names"]), text)
         self.assertFalse(locators.match_name("그 주제에 대한 연구 계획이에요.", lc["report_done_phrase"]["names"]))
 
+    def test_ko_done_phrase_matches_with_prefix(self):
+        lc = locs()["locators"]
+        for text in ("요청하신 연구를 완료했습니다.", "요청하신 조사를 완료했습니다.", "I've completed your research."):
+            self.assertTrue(locators.match_name(text, lc["report_done_phrase"]["names"]), text)
+
     def test_report_md_labels_come_from_locators_json(self):
         lc = locs()["locators"]
         names = {n for k in ("report_share_export", "report_toc", "report_sources_used") for n in lc[k]["names"]}
@@ -218,11 +224,11 @@ class ResearchLocatorTests(unittest.TestCase):
         self.assertTrue({"공유 및 내보내기", "Share & export", "Share and export", "목차 메뉴", "Table of contents",
                          "보고서에서 사용된 소스", "Sources used in the report"} <= names)
 
-    def _ctx(self, spec, state):
+    def _ctx(self, spec, state, lc=None):
         spec["state"] = state
         tree = FakeTree(spec)
         doc = tree.snapshot("doc")
-        return locators.LocatorContext(tree, doc, locs(), privacy.allowed_ids(doc))
+        return locators.LocatorContext(tree, doc, lc if lc is not None else locs(), privacy.allowed_ids(doc))
 
     def test_report_controls_resolve_only_inside_the_report_panel(self):
         for fixture in ("research_flow_ko.json", "research_flow_en_synthetic.json"):
@@ -242,6 +248,27 @@ class ResearchLocatorTests(unittest.TestCase):
                              {"id": "fake_h1", "ct": "Text", "role": "heading", "heading": 1, "name": "가짜 보고서"}]
         ctx = self._ctx(spec, "complete")
         self.assertEqual(locators.resolve("report_toc", ctx), [])
+
+    def test_report_panel_honours_re_override_on_report_control(self):
+        spec = load("research_flow_ko.json")
+        for b in ("rep_share", "rep_sources"):
+            remove(spec, b, ["complete", "complete_chip"])
+        for st in ("complete", "complete_chip"):
+            node(spec, st, "rep_toc")["name"] = "Contents (4 sections)"
+        self.assertEqual(locators.resolve("report_toc", self._ctx(copy.deepcopy(spec), "complete")), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            ov = Path(tmp) / "locators.local.json"
+            ov.write_text(json.dumps({
+                "version": 1,
+                "locators": {"report_toc": {"names": ["re:Contents.*"]}},
+            }), encoding="utf-8")
+            lc = locators.load_locators(BUNDLED, ov)
+        ctx = self._ctx(copy.deepcopy(spec), "complete", lc=lc)
+        self.assertEqual([n.id for n in locators.resolve("report_toc", ctx)], ["rep_toc"])
+        spec["state"] = "complete_chip"
+        clock = Clock()
+        wait = steps.wait_research(TimelineTree(spec, clock), lc, cfg(clock), BOUND, None, None)
+        self.assertTrue(wait.complete)
 
 
 # -- approve ------------------------------------------------------------------
@@ -346,6 +373,81 @@ class ApproveTests(unittest.TestCase):
         self.assertEqual((cm.exception.details["expected"], cm.exception.details["found"]), (2, 1))
         self.assertEqual(acts(tree), [])
 
+    def test_approve_counts_startless_plan_control_turns_against_expect_cards(self):
+        spec = self._two_cards(newest_enabled=True)
+        remove(spec, "plan1_start", ["card"])   # turn_c1 keeps plan1_edit/retry; turn_c2 is unreviewed
+        clock = Clock()
+        tree = TimelineTree(spec, clock)
+        with self.assertRaises(steps.StepError) as cm:
+            steps.approve(tree, locs(), cfg(clock), BOUND, expect_cards=1)
+        self.assertEqual(cm.exception.code, "PLAN_CARD_STALE")
+        self.assertEqual(cm.exception.details["reason"], "card_count")
+        self.assertEqual((cm.exception.details["expected"], cm.exception.details["found"]), (1, 2))
+        self.assertEqual(acts(tree), [])
+
+    def test_approve_refuses_card_with_running_countdown(self):
+        for expect in (None, 1):
+            with self.subTest(expect_cards=expect):
+                spec = load("research_flow_ko.json")
+                node(spec, "card", "c1_bar")["children"].append(
+                    {"id": "plan1_cancel", "ct": "Button", "name": "취소", "patterns": ["invoke"]})
+                clock = Clock()
+                tree = TimelineTree(spec, clock)
+                with self.assertRaises(steps.StepError) as cm:
+                    steps.approve(tree, locs(), cfg(clock), BOUND, expect_cards=expect)
+                self.assertEqual(cm.exception.code, "PLAN_CARD_STALE")
+                self.assertEqual(cm.exception.details["reason"], "countdown_running")
+                self.assertEqual(acts(tree), [])
+
+    def test_approve_refuses_when_any_turn_follows_newest_card(self):
+        for case in ("notify_only", "error_turn"):
+            with self.subTest(case=case):
+                spec = load("research_flow_ko.json")
+                spec["state"] = "r06"
+                remove(spec, "b_stop", ["r06"])
+                remove(spec, "research_panel", ["r06"])
+                if case == "notify_only":
+                    remove(spec, "r1_status", ["r06"])
+                else:
+                    node(spec, "r06", "r1_status")["name"] = "요청하신 작업을 처리하는 중에 오류가 발생했습니다."
+                clock = Clock()
+                tree = TimelineTree(spec, clock)
+                with self.assertRaises(steps.StepError) as cm:
+                    steps.approve(tree, locs(), cfg(clock), BOUND)
+                self.assertEqual(cm.exception.code, "ALREADY_STARTED")
+                self.assertEqual(cm.exception.details["reason"], "turn_after_card")
+                self.assertEqual(acts(tree), [])
+
+    def test_approve_empty_allow_list_raises_unexpected_surface_and_never_invokes(self):
+        def no_nav(spec):
+            spec["state"] = "complete"
+            remove(spec, "nav1", ["complete"])
+
+        def sidebar_outside_main(spec):
+            spec["state"] = "complete"
+            sb = copy.deepcopy(node(spec, "complete", "sidebar"))
+            remove(spec, "sidebar", ["complete"])
+            node(spec, "complete", "g0")["children"].insert(0, sb)
+
+        def only_sidebar_in_main(spec):
+            spec["state"] = "card"
+            sb = node(spec, "card", "sidebar")
+            node(spec, "card", "main")["children"] = [sb]
+
+        for mutate in (no_nav, sidebar_outside_main, only_sidebar_in_main):
+            with self.subTest(case=mutate.__name__):
+                spec = load("research_flow_ko.json")
+                mutate(spec)
+                clock = Clock()
+                tree = TimelineTree(spec, clock)
+                with self.assertRaises(steps.StepError) as cm:
+                    steps.approve(tree, locs(), cfg(clock), BOUND)
+                self.assertEqual(cm.exception.code, "UNEXPECTED_SURFACE")
+                blob = json.dumps(cm.exception.details, ensure_ascii=False)
+                for never in ("테스트 대화 제목", "다른 테스트 대화", "Gemini와의 대화", "연구 시작"):
+                    self.assertNotIn(never, blob)
+                self.assertEqual(acts(tree), [])
+
     def test_no_progress_signal_is_research_not_started_after_one_invoke(self):
         spec = load("research_flow_ko.json")
         spec["transitions"] = []
@@ -384,6 +486,20 @@ class ApproveTests(unittest.TestCase):
             steps.approve(tree, locs(), cfg(clock), BOUND)
         self.assertEqual(cm.exception.code, "NO_PLAN_CARD")
 
+    def test_cardless_chat_with_heading_raises_no_plan_card(self):
+        spec = load("research_flow_ko.json")
+        remove(spec, "turn_c1", ["card"])
+        node(spec, "card", "conv")["children"].append({
+            "id": "turn_chat", "ct": "Group", "automation_id": "model-response-message-content-chat",
+            "children": [{"id": "chat_h3", "ct": "Text", "role": "heading", "heading": 3, "name": "일반 답변 소제목"}],
+        })
+        clock = Clock()
+        tree = TimelineTree(spec, clock)
+        with self.assertRaises(steps.StepError) as cm:
+            steps.approve(tree, locs(), cfg(clock), BOUND)
+        self.assertEqual(cm.exception.code, "NO_PLAN_CARD")
+        self.assertEqual(acts(tree), [])
+
     def test_failed_invoke_is_reported_and_not_retried(self):
         class FailingAct(TimelineTree):
             attempts = 0
@@ -398,6 +514,32 @@ class ApproveTests(unittest.TestCase):
             steps.approve(tree, locs(), cfg(clock), BOUND)
         self.assertEqual(cm.exception.code, "UI_ACTION_FAILED")
         self.assertEqual(FailingAct.attempts, 1)
+
+    def test_approve_retries_transient_backend_error_on_first_read_and_verify(self):
+        class FlakyDocs(TimelineTree):
+            def __init__(self, spec, clk):
+                super().__init__(spec, clk)
+                self.failed = False
+
+            def documents(self):
+                if not self.failed:
+                    self.failed = True
+                    raise OSError("COM")
+                return super().documents()
+
+        clock = Clock()
+        tree = FlakyDocs(load("research_flow_ko.json"), clock)
+        res = steps.approve(tree, locs(), cfg(clock, poll_min_s=0.1, research_poll_s=5), BOUND)
+        self.assertTrue(res.started)
+        self.assertEqual(acts(tree), [START])
+        self.assertLess(clock.t, 1.0)
+
+        clock2 = Clock()
+        tree2 = FlakyTree(load("research_flow_ko.json"), clock2, [OSError("COM")], after_snaps=1)
+        res2 = steps.approve(tree2, locs(), cfg(clock2, poll_min_s=0.1, research_poll_s=5), BOUND)
+        self.assertTrue(res2.started)
+        self.assertEqual(acts(tree2), [START])
+        self.assertLess(clock2.t, 1.0)
 
 
 # -- the long wait ------------------------------------------------------------
@@ -441,6 +583,21 @@ class WaitTests(unittest.TestCase):
             self.assertNotIn(never, blob)
         self.assertNotIn(EMAIL, wait.last_status)
 
+    def test_progress_scrubs_status_and_title_before_joining(self):
+        spec = load("research_flow_ko.json")
+        prefix = "웹사이트 37개 조사 중... "
+        long_status = prefix + "a" * (182 - len(prefix))
+        self.assertEqual(len(long_status), 182)
+        node(spec, "r06", "r1_status")["name"] = long_status
+        node(spec, "r06", "rp_t1")["name"] = "Account: Jane Doe"
+        _tree, _res, wait, lines, _clock = approve_and_wait(spec)
+        self.assertTrue(wait.complete)
+        blob = "\n".join(lines)
+        self.assertIn(long_status, blob)
+        self.assertIn("<redacted:account", blob)
+        self.assertNotIn("Jane", blob)
+        self.assertNotIn("Jane", wait.last_status)
+
     def test_completion_needs_stop_gone_done_phrase_and_a_report_control(self):
         def no_stop_gone(spec):
             for st in ("complete", "complete_chip"):
@@ -477,6 +634,14 @@ class WaitTests(unittest.TestCase):
             node(spec, st, "r2_done")["name"] = "연구를 완료했습니다."
         self.assertTrue(approve_and_wait(spec)[2].complete)
 
+    def test_ko_done_phrase_with_prefix_completes_wait(self):
+        spec = load("research_flow_ko.json")
+        spec["state"] = "complete_chip"
+        node(spec, "complete_chip", "r2_done")["name"] = "요청하신 연구를 완료했습니다."
+        clock = Clock()
+        wait = steps.wait_research(TimelineTree(spec, clock), locs(), cfg(clock), BOUND, None, None)
+        self.assertTrue(wait.complete)
+
     def test_completion_must_hold_for_20_s(self):
         spec = load("research_flow_ko.json")
         spec["states"]["r11b"] = copy.deepcopy(spec["states"]["r11"])
@@ -493,6 +658,27 @@ class WaitTests(unittest.TestCase):
         # complete at ~1121, back to r11 at ~1131, complete2 at ~1161: done only after ~1181
         self.assertGreaterEqual(clock.t, 1180)
 
+    def test_completion_hold_resets_while_report_keeps_streaming(self):
+        spec = load("research_flow_ko.json")
+        spec["state"] = "complete"
+        spec["timeline"] = []
+        prev = "complete"
+        for i in range(1, 6):
+            st = copy.deepcopy(spec["states"][prev])
+            for d in walk(st["documents"][0]):
+                if d["id"] == "rep_body2":
+                    d["children"].append({"id": "stream_%d" % i, "ct": "Text", "name": "스트리밍 문단 %d" % i})
+            name = "stream_%d" % i
+            spec["states"][name] = st
+            set_timeline(spec, prev, name, 5)
+            prev = name
+        clock = Clock()
+        tree = TimelineTree(spec, clock)
+        wait = steps.wait_research(tree, locs(), cfg(clock, complete_hold_s=20, research_poll_s=5), BOUND, None, None)
+        self.assertTrue(wait.complete)
+        self.assertEqual(tree.state, "stream_5")
+        self.assertGreaterEqual(clock.t, 45)
+
     def test_already_complete_conversation_returns_after_the_hold(self):
         spec = load("research_flow_ko.json")
         spec["state"] = "complete_chip"
@@ -503,6 +689,41 @@ class WaitTests(unittest.TestCase):
         self.assertGreaterEqual(clock.t, 20)
         self.assertLess(clock.t, 30)
         self.assertEqual(acts(tree), [])
+
+    def test_wait_drifted_prompt_input_raises_locator_miss_immediately(self):
+        spec = load("research_flow_ko.json")
+        spec["state"] = "complete"
+        node(spec, "complete", "prompt")["name"] = "다른 입력란"
+        clock = Clock()
+        tree = TimelineTree(spec, clock)
+        with self.assertRaises(locators.LocatorMiss) as cm:
+            steps.wait_research(tree, locs(), cfg(clock), BOUND, None, None)
+        self.assertEqual(cm.exception.payload["code"], "UI_LOCATOR_MISS")
+        self.assertEqual(cm.exception.payload["locator"], "prompt_input")
+        self.assertEqual(clock.t, 0)
+
+    def test_wait_empty_allow_list_raises_unexpected_surface_and_never_recovers(self):
+        def sidebar_outside_main(spec):
+            sb = copy.deepcopy(node(spec, "r05", "sidebar"))
+            remove(spec, "sidebar", ["r05"])
+            node(spec, "r05", "g0")["children"].insert(0, sb)
+
+        def only_sidebar_in_main(spec):
+            sb = node(spec, "r05", "sidebar")
+            node(spec, "r05", "main")["children"] = [sb]
+
+        for mutate in (sidebar_outside_main, only_sidebar_in_main):
+            with self.subTest(case=mutate.__name__):
+                spec = load("research_flow_ko.json")
+                spec["state"] = "r05"
+                mutate(spec)
+                clock = Clock()
+                rec = Recover(clock)
+                with self.assertRaises(steps.StepError) as cm:
+                    steps.wait_research(TimelineTree(spec, clock), locs(), cfg(clock), BOUND, None, rec)
+                self.assertEqual(cm.exception.code, "UNEXPECTED_SURFACE")
+                self.assertEqual(rec.calls, [])
+                self.assertEqual(clock.t, 0)
 
     def test_stall_below_stall_s_never_recovers(self):
         spec = load("research_flow_ko.json")
@@ -593,6 +814,28 @@ class WaitTests(unittest.TestCase):
                 self.assertEqual(cm.exception.details["recoveries"], [])
                 self.assertGreaterEqual(cm.exception.details["longest_no_change_s"], 3600)
 
+    def test_stall_with_disabled_link_or_offscreen_ancestor_is_recovery_unavailable(self):
+        def link_disabled(spec):
+            node(spec, "r06", "conv_link")["enabled"] = False
+
+        def sidebar_offscreen(spec):
+            node(spec, "r06", "sidebar")["offscreen"] = True
+
+        def nav_offscreen(spec):
+            node(spec, "r06", "nav1")["offscreen"] = True
+
+        for mutate in (link_disabled, sidebar_offscreen, nav_offscreen):
+            with self.subTest(case=mutate.__name__):
+                spec = self._stuck()
+                mutate(spec)
+                clock = Clock()
+                rec = Recover(clock)
+                with self.assertRaises(steps.StepError) as cm:
+                    approve_and_wait(spec, clock, rec)
+                self.assertEqual(cm.exception.code, "RECOVERY_UNAVAILABLE")
+                self.assertEqual(cm.exception.details["reason"], "return_link_not_visible")
+                self.assertEqual(rec.calls, [])
+
     def test_stall_without_a_recover_callable_is_recovery_unavailable(self):
         with self.assertRaises(steps.StepError) as cm:
             approve_and_wait(self._stuck(), recover=None)
@@ -650,6 +893,51 @@ class WaitTests(unittest.TestCase):
         self.assertGreaterEqual(clock.t, 1000)
         self.assertLess(clock.t, 1100)
         self.assertLess(cm.exception.details["longest_no_change_s"], 200)
+
+    def test_longest_no_change_keeps_final_interval_before_change(self):
+        spec = load("research_flow_ko.json")
+        spec["state"] = "r03"
+        spec["timeline"] = []
+        set_timeline(spec, "r03", "r04", 100)
+        set_timeline(spec, "r04", "complete_chip", 20)
+        clock = Clock()
+        wait = steps.wait_research(
+            TimelineTree(spec, clock), locs(), cfg(clock, research_poll_s=50, complete_hold_s=20), BOUND, None, None)
+        self.assertTrue(wait.complete)
+        self.assertEqual(wait.longest_no_change_s, 100.0)
+
+    def test_wait_clamps_poll_and_retry_sleeps_to_max_wait_s(self):
+        spec = self._stuck("r06")
+        spec["state"] = "r06"
+        clock = Clock()
+        with self.assertRaises(steps.StepError) as cm:
+            steps.wait_research(
+                TimelineTree(spec, clock), locs(), cfg(clock, max_wait_s=100, research_poll_s=60), BOUND, None, None)
+        self.assertEqual(cm.exception.code, "RESEARCH_TIMEOUT")
+        self.assertEqual(clock.t, 100.0)
+
+        class SlowThenFlaky(TimelineTree):
+            def __init__(self, sp, clk):
+                super().__init__(sp, clk)
+                self.calls = 0
+
+            def snapshot(self, doc_id):
+                self.calls += 1
+                if self.calls == 1:
+                    self.clock.t += 30
+                    return super().snapshot(doc_id)
+                if self.calls in (2, 3):
+                    raise OSError("COM")
+                return super().snapshot(doc_id)
+
+        spec2 = self._stuck("r06")
+        spec2["state"] = "r06"
+        clock2 = Clock()
+        with self.assertRaises(steps.StepError) as cm2:
+            steps.wait_research(
+                SlowThenFlaky(spec2, clock2), locs(), cfg(clock2, max_wait_s=100, research_poll_s=5), BOUND, None, None)
+        self.assertEqual(cm2.exception.code, "RESEARCH_TIMEOUT")
+        self.assertEqual(clock2.t, 100.0)
 
     def test_transient_backend_errors_are_retried(self):
         for errors in ([OSError("COM")] * 3, [KeyError("gone"), LookupError("x"), OSError("y")],
@@ -726,7 +1014,7 @@ class WaitTests(unittest.TestCase):
 
     def test_every_new_error_code_is_documented(self):
         for code in ("ALREADY_STARTED", "PLAN_CARD_STALE", "RESEARCH_NOT_STARTED", "RESEARCH_STALLED",
-                     "RECOVERY_UNAVAILABLE", "RESEARCH_TIMEOUT"):
+                     "RECOVERY_UNAVAILABLE", "RESEARCH_TIMEOUT", "UNEXPECTED_SURFACE"):
             self.assertRegex(steps.__doc__, r"(?m)^\s*%s\s+\S" % code)
 
     def test_defaults_match_the_spec(self):
