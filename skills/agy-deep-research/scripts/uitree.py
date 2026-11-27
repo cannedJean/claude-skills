@@ -99,7 +99,20 @@ class UiTree(Protocol):
 
 
 class FakeTree(UiTree):
-    """Deterministic UiTree driven by a JSON spec (see module tests)."""
+    """Deterministic UiTree driven by a JSON spec (see module tests).
+
+    Semantics:
+    - ``set_value`` stores text per node id; it is shown in every state, unless
+      a transition's target state defines a non-empty ``value`` for that node,
+      in which case that value replaces the stored text once the transition
+      takes effect.
+    - ``after_snapshots`` = number of further ``snapshot()`` calls before the
+      new state becomes visible (0 = immediately).
+    - Pending transitions are last-wins: a second matching action while a
+      transition is pending replaces the pending one (matching is evaluated
+      against the currently visible state).
+    - A malformed spec raises ``ValueError`` naming the bad field.
+    """
 
     def __init__(self, spec: dict):
         self._states = {
@@ -111,6 +124,7 @@ class FakeTree(UiTree):
         }
         self._transitions = list(spec.get("transitions") or ())
         self.state: str = spec["state"]
+        self._validate()
         self.actions: List[tuple] = []
         self._values: dict = {}
         self._pending: Optional[list] = None  # [target_state, snapshots_left]
@@ -121,6 +135,43 @@ class FakeTree(UiTree):
             return cls(json.load(fh))
 
     # -- internals ---------------------------------------------------
+    def _validate(self) -> None:
+        if self.state not in self._states:
+            raise ValueError("spec field 'state': unknown state %r" % (self.state,))
+        for i, tr in enumerate(self._transitions):
+            where = "transitions[%d]" % i
+            if tr.get("to") not in self._states:
+                raise ValueError("%s field 'to': unknown state %r" % (where, tr.get("to")))
+            frm = tr.get("from", "*")
+            if frm != "*" and frm not in self._states:
+                raise ValueError("%s field 'from': unknown state %r" % (where, frm))
+            on = tr.get("on")
+            if not isinstance(on, (list, tuple)) or not on or on[0] not in ("act", "set_value"):
+                raise ValueError("%s field 'on': first item must be 'act' or 'set_value'" % where)
+            if on[0] == "act":
+                if len(on) != 3 or on[2] not in PATTERNS:
+                    raise ValueError(
+                        "%s field 'on': act needs [act, node_id, pattern] with pattern in %s"
+                        % (where, ", ".join(PATTERNS)))
+            elif len(on) != 2:
+                raise ValueError("%s field 'on': set_value needs [set_value, node_id]" % where)
+            delay = tr.get("after_snapshots", 0)
+            if isinstance(delay, bool) or not isinstance(delay, int) or delay < 0:
+                raise ValueError(
+                    "%s field 'after_snapshots': must be a non-negative int, got %r" % (where, delay))
+
+    def _enter(self, state: str) -> None:
+        """Make `state` current; its explicit node values replace stored text."""
+        self.state = state
+        cur = self._states[state]
+        roots = list(cur["documents"])
+        if cur["desktop"] is not None:
+            roots.append(cur["desktop"])
+        for root in roots:
+            for n, _ in root.walk():
+                if n.value and n.id in self._values:
+                    del self._values[n.id]
+
     def _overlay(self, node: Node) -> Node:
         node = copy.deepcopy(node)
         for n, _ in node.walk():
@@ -145,10 +196,10 @@ class FakeTree(UiTree):
                 continue
             if list(tr["on"]) != list(on):
                 continue
-            delay = int(tr.get("after_snapshots", 0))
+            delay = tr.get("after_snapshots", 0)
             if delay <= 0:
-                self.state = tr["to"]
                 self._pending = None
+                self._enter(tr["to"])
             else:
                 self._pending = [tr["to"], delay]
             return
@@ -166,8 +217,9 @@ class FakeTree(UiTree):
     def snapshot(self, doc_id: str) -> Node:
         if self._pending is not None:
             if self._pending[1] <= 0:
-                self.state = self._pending[0]
+                target = self._pending[0]
                 self._pending = None
+                self._enter(target)
             else:
                 self._pending[1] -= 1
         for d in self._states[self.state]["documents"]:
