@@ -133,10 +133,12 @@ class LocatorTests(unittest.TestCase):
                         {"version": 1, "extra": 1},
                         {"version": 1, "locators": {"send": {"names": "x"}}},
                         {"version": 1, "locators": {"send": {"scope": "nowhere"}}},
-                        {"version": 1, "locators": {"send": {"names": ["re:("]}}}):
-                ov = _write(tmp, bad)
-                with self.assertRaises(locators.LocatorConfigError, msg=bad):
-                    locators.load_locators(BUNDLED, ov)
+                        {"version": 1, "locators": {"send": {"names": ["re:("]}}},
+                        {"version": 1, "locators": {"send": {"names": []}}}):
+                with self.subTest(bad=bad):
+                    ov = _write(tmp, bad)
+                    with self.assertRaises(locators.LocatorConfigError):
+                        locators.load_locators(BUNDLED, ov)
         with tempfile.TemporaryDirectory() as tmp:
             ov = _write(tmp, {"version": 1, "locators": {"send": {"nmaes": ["x"]}}})
             with self.assertRaises(locators.LocatorConfigError) as cm:
@@ -189,6 +191,118 @@ class LocatorTests(unittest.TestCase):
         with self.assertRaises(locators.LocatorMiss) as cm:
             locators.resolve("tools", _ctx(spec))
         self.assertEqual(cm.exception.payload["locator"], "prompt_input")
+
+    def test_measured_triples_resolve(self):
+        for fx, names in (("locators_page_ko.json", ("사고 수준", "Deep Research", "Pro")),
+                          ("locators_page_en_synthetic.json", ("Thinking level", "Deep Research", "Pro"))):
+            ctx = _ctx(_spec(fx))
+            for key, (ct, role), name in (
+                    ("thinking_menu", ("MenuItem", "menuitem"), names[0]),
+                    ("dr_item", ("CheckBox", "menuitemcheckbox"), names[1]),
+                    ("mode_item", ("RadioButton", "menuitemradio"), names[2])):
+                ent = ctx.locs["locators"][key]
+                self.assertEqual((ent["ct"], ent.get("role")), (ct, role), key)
+                nodes = locators.resolve(key, ctx)
+                self.assertEqual([(n.ct, n.role, n.name) for n in nodes], [(ct, role, name)], key)
+        # mode_item must not match plain MenuItems such as File/View
+        ids = [n.id for n in locators.resolve("mode_item", _ctx(_spec()))]
+        self.assertEqual(ids, ["pm_mode"])
+
+    def test_retry_name_whitespace_normalized(self):
+        ent = locators.load_locators(BUNDLED, None)["locators"]["plan_retry_without_dr"]
+        self.assertTrue(locators.match_name(" Deep Research 사용하지 않고 다시 시도하기 ", ent["names"]))
+        self.assertTrue(locators.match_name(" Retry without Deep Research ", ent["names"]))
+        self.assertEqual([n.id for n in locators.resolve("plan_retry_without_dr", _ctx(_spec()))], ["plan_retry"])
+
+    def test_menu_items_measured_names(self):
+        ctx = _ctx(_spec())
+        self.assertEqual([n.name for n in locators.resolve("app_menu_quit", ctx)], ["종료 Ctrl+Q"])
+        self.assertEqual([n.name for n in locators.resolve("app_menu_reload", ctx)], ["새로고침 Ctrl+R"])
+
+    def test_expect_classes(self):
+        locs = locators.load_locators(BUNDLED, None)["locators"]
+        want = {
+            "unique": ["prompt_input", "tools", "plan_start", "plan_edit", "mode_button", "app_menu"],
+            "at_least_one": ["new_chat", "more_tools", "dr_item", "thinking_menu", "mode_item",
+                             "app_menu_file", "app_menu_view", "app_menu_quit", "app_menu_reload"],
+            "optional": ["send", "stop_response", "dr_on", "plan_cancel_countdown",
+                         "plan_retry_without_dr", "sidebar_open", "sidebar_close",
+                         "sidebar_more", "sign_in"],
+        }
+        for exp, keys in want.items():
+            for k in keys:
+                self.assertEqual(locs[k]["expect"], exp, k)
+
+    def test_at_least_one_miss_on_zero(self):
+        spec = _spec()
+        for st in spec["states"].values():
+            _rename(st["desktop"], "파일", "문서")
+        with self.assertRaises(locators.LocatorMiss) as cm:
+            locators.resolve("app_menu_file", _ctx(spec))
+        self.assertEqual(cm.exception.payload["found"], 0)
+        self.assertEqual(cm.exception.payload["expect"], "at_least_one")
+
+    def test_unique_miss_on_two_has_hint_and_no_added_name(self):
+        spec = _spec()
+        for st in spec["states"].values():
+            for d in st["documents"]:
+                _rename(d, "연구 계획 수정", "연구 시작")
+        with self.assertRaises(locators.LocatorMiss) as cm:
+            locators.resolve("plan_start", _ctx(spec))
+        p = cm.exception.payload
+        self.assertEqual(p["found"], 2)
+        self.assertEqual(p["hint"], "ambiguous: narrow names or scope")
+        orig = locators.load_locators(BUNDLED, None)["locators"]["plan_start"]["names"]
+        self.assertEqual(p["override_snippet"]["locators"]["plan_start"]["names"], orig)
+
+    def test_override_top_level_limited_to_version_and_locators(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for bad in ({"version": 1, "surfaces_allowed": ["re:^x"]},
+                        {"version": 1, "scopes": {"main": {}}},
+                        {"version": 1, "model_aliases": {}}):
+                with self.subTest(bad=bad):
+                    with self.assertRaises(locators.LocatorConfigError):
+                        locators.load_locators(BUNDLED, _write(tmp, bad))
+
+    def test_scope_config_type_checks(self):
+        def mutated(fn):
+            with tempfile.TemporaryDirectory() as tmp:
+                cfg = json.loads(BUNDLED.read_text(encoding="utf-8"))
+                fn(cfg)
+                p = Path(tmp) / "b.json"
+                p.write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+                return locators.load_locators(p, None)
+        cases = {
+            "min_buttons str": lambda c: c["scopes"]["composer"].update(min_buttons="3"),
+            "min_buttons 0": lambda c: c["scopes"]["composer"].update(min_buttons=0),
+            "min_buttons bool": lambda c: c["scopes"]["composer"].update(min_buttons=True),
+            "prefix empty": lambda c: c["scopes"]["plan_card"].update(ancestor_automation_id_prefix=""),
+            "anchor unknown": lambda c: c["scopes"]["composer"].update(anchor="nope"),
+            "names empty": lambda c: c["locators"]["send"].update(names=[]),
+        }
+        for label, fn in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(locators.LocatorConfigError):
+                    mutated(fn)
+
+    def test_malformed_json_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "locators.local.json"
+            p.write_text("{not json", encoding="utf-8")
+            with self.assertRaises(locators.LocatorConfigError):
+                locators.load_locators(BUNDLED, p)
+
+    def test_top_bar_scope_resolves(self):
+        ctx = _ctx(_spec())
+        self.assertEqual([n.id for n in locators.resolve("app_menu", ctx)], ["tb_menu"])
+
+    def test_href_host_match_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ov = _write(tmp, {"version": 1, "locators": {"sign_in": {"href_host": "gemini.google.com"}}})
+            ctx = _ctx(_spec(), ov)
+            self.assertEqual([n.id for n in locators.resolve("sign_in", ctx)], ["signin"])
+            ctx.doc.find_all(lambda n, a: n.id == "signin")[0].aria["href"] = "https://evil.example.invalid/"
+            self.assertEqual(locators.resolve("sign_in", ctx), [])
 
 
 if __name__ == "__main__":

@@ -4,6 +4,16 @@ Locators live in locators.json (bundled) and may be overridden field by field
 from %LOCALAPPDATA%\\agy-deep-research\\locators.local.json. A miss raises
 LocatorMiss whose payload lists similar candidate names (only from the
 privacy-allowed region or GENERIC_LABELS) and an exact override snippet.
+The override may contain only `version` and `locators`.
+
+Notes for callers:
+- An `optional` locator's absence may be used as a state only when a positive
+  anchor (`prompt_input` / `tools` / `plan_start`) resolved in the same
+  snapshot; callers enforce this (Task 8).
+- `desktop_root()` is the root of the tool's own hidden desktop, which holds
+  only the tool's Gemini instance, so the `popup`/`desktop` scopes cannot reach
+  other applications. Their nodes are not in the page's allowed region, so
+  misses there only get GENERIC_LABELS hints (accepted limitation).
 Stdlib only; imports on any OS.
 """
 import copy
@@ -93,6 +103,12 @@ def _validate(cfg: dict, where: str) -> None:
                 raise LocatorConfigError("%s: unknown scope %r" % (where, sname))
             if not isinstance(sval, dict) or any(f not in SCOPE_KINDS[sname] for f in sval):
                 raise LocatorConfigError("%s: scope %r has unknown fields or wrong type" % (where, sname))
+            mb = sval.get("min_buttons", 1)
+            if isinstance(mb, bool) or not isinstance(mb, int) or mb < 1:
+                raise LocatorConfigError("%s: scope %r field 'min_buttons' must be an int >= 1" % (where, sname))
+            for sf in ("ancestor_automation_id_prefix", "url_prefix", "anchor"):
+                if sf in sval and (not isinstance(sval[sf], str) or not sval[sf]):
+                    raise LocatorConfigError("%s: scope %r field %r must be a non-empty string" % (where, sname, sf))
     for lk in ("surfaces_allowed", "status_phrases", "safety_phrases", "error_phrases"):
         if lk in cfg:
             if not _is_strlist(cfg[lk]):
@@ -118,6 +134,8 @@ def _validate(cfg: dict, where: str) -> None:
                 raise LocatorConfigError("%s: field %r must be a string" % (w, f))
             if f in ("names", "patterns") and not _is_strlist(v):
                 raise LocatorConfigError("%s: field %r must be a list of strings" % (w, f))
+        if "names" in ent and not ent["names"]:
+            raise LocatorConfigError("%s: field 'names' must not be empty" % w)
         if "expect" in ent and ent["expect"] not in EXPECTS:
             raise LocatorConfigError("%s: field 'expect' must be one of %s" % (w, ", ".join(EXPECTS)))
         if "scope" in ent and ent["scope"] not in SCOPE_KINDS:
@@ -145,6 +163,10 @@ def _read(path: Path, where: str) -> dict:
 
 
 def _require(cfg: dict) -> None:
+    for sname, sval in cfg.get("scopes", {}).items():
+        anchor = sval.get("anchor")
+        if anchor is not None and anchor not in cfg.get("locators", {}):
+            raise LocatorConfigError("scope %r field 'anchor': unknown locator %r" % (sname, anchor))
     for key, ent in cfg.get("locators", {}).items():
         for f in REQUIRED:
             if f not in ent:
@@ -156,6 +178,10 @@ def load_locators(bundled: Path, override: Optional[Path] = None) -> dict:
     _require(cfg)
     if override is not None and Path(override).exists():
         ov = _read(Path(override), "override")
+        for k in ov:
+            if k not in ("version", "locators"):
+                raise LocatorConfigError(
+                    "override: top-level field %r not allowed (only version, locators)" % k)
         for k, v in ov.items():
             if k == "locators":
                 for key, ent in v.items():
@@ -273,11 +299,13 @@ def resolve(key: str, ctx: LocatorContext) -> List[Node]:
         return found
     cands = _candidates(ent, roots, ctx)
     names = list(ent["names"])
-    if cands and cands[0]["name"] not in names:
+    if not found and cands and cands[0]["name"] not in names:
         names.append(cands[0]["name"])
     payload = {
         "code": "UI_LOCATOR_MISS", "locator": key, "scope": ent["scope"],
         "expect": expect, "found": len(found), "candidates": cands,
         "override_snippet": {"version": 1, "locators": {key: {"names": names}}},
     }
+    if len(found) > 1:
+        payload["hint"] = "ambiguous: narrow names or scope"
     raise LocatorMiss(privacy.scrub(payload))

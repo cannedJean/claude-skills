@@ -65,7 +65,10 @@
               {
                "id": "signin",
                "ct": "Hyperlink",
-               "name": "로그인"
+               "name": "로그인",
+               "aria": {
+                "href": "https://gemini.google.com/signin"
+               }
               }
              ]
             },
@@ -145,7 +148,7 @@
               {
                "id": "plan_retry",
                "ct": "Button",
-               "name": "Deep Research 없이 다시 시도",
+               "name": " Deep Research 사용하지 않고 다시 시도하기 ",
                "patterns": [
                 "invoke"
                ]
@@ -266,8 +269,9 @@
        },
        {
         "id": "pm_dr",
-        "ct": "MenuItem",
+        "ct": "CheckBox",
         "name": "Deep Research",
+        "role": "menuitemcheckbox",
         "patterns": [
          "invoke"
         ]
@@ -275,13 +279,15 @@
        {
         "id": "pm_think",
         "ct": "MenuItem",
-        "name": "생각 모드",
+        "name": "사고 수준",
+        "role": "menuitem",
         "patterns": []
        },
        {
         "id": "pm_mode",
-        "ct": "MenuItem",
+        "ct": "RadioButton",
         "name": "Pro",
+        "role": "menuitemradio",
         "patterns": []
        },
        {
@@ -293,7 +299,7 @@
        {
         "id": "pm_quit",
         "ct": "MenuItem",
-        "name": "종료 (Ctrl+Q)",
+        "name": "종료 Ctrl+Q",
         "patterns": []
        },
        {
@@ -305,7 +311,7 @@
        {
         "id": "pm_reload",
         "ct": "MenuItem",
-        "name": "새로고침 (Ctrl+R)",
+        "name": "새로고침 Ctrl+R",
         "patterns": []
        }
       ]

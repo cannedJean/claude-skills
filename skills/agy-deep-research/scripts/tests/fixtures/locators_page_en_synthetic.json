@@ -65,7 +65,10 @@
               {
                "id": "signin",
                "ct": "Hyperlink",
-               "name": "Sign in"
+               "name": "Sign in",
+               "aria": {
+                "href": "https://gemini.google.com/signin"
+               }
               }
              ]
             },
@@ -145,7 +148,7 @@
               {
                "id": "plan_retry",
                "ct": "Button",
-               "name": "Retry without Deep Research",
+               "name": " Retry without Deep Research ",
                "patterns": [
                 "invoke"
                ]
@@ -266,8 +269,9 @@
        },
        {
         "id": "pm_dr",
-        "ct": "MenuItem",
+        "ct": "CheckBox",
         "name": "Deep Research",
+        "role": "menuitemcheckbox",
         "patterns": [
          "invoke"
         ]
@@ -275,13 +279,15 @@
        {
         "id": "pm_think",
         "ct": "MenuItem",
-        "name": "Thinking",
+        "name": "Thinking level",
+        "role": "menuitem",
         "patterns": []
        },
        {
         "id": "pm_mode",
-        "ct": "MenuItem",
+        "ct": "RadioButton",
         "name": "Pro",
+        "role": "menuitemradio",
         "patterns": []
        },
        {
@@ -293,7 +299,7 @@
        {
         "id": "pm_quit",
         "ct": "MenuItem",
-        "name": "Quit (Ctrl+Q)",
+        "name": "Quit Ctrl+Q",
         "patterns": []
        },
        {
@@ -305,7 +311,7 @@
        {
         "id": "pm_reload",
         "ct": "MenuItem",
-        "name": "Reload (Ctrl+R)",
+        "name": "Reload Ctrl+R",
         "patterns": []
        }
       ]
