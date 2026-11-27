@@ -45,6 +45,10 @@ conversation_id, report_title, plan, plan_count, edit_button_clicked, confirm_cl
 report_file, report_chars, sources_count, elapsed_s, stdout_log, stderr_log, pid. For a completed report `url` /
 `conversation_id` are the driver's provenance (where the report came from), never a later look at the page.
 
+Privacy: every driver stdout/stderr tail and error message written to result.json (and printed) goes through
+privacy.scrub (privacy.py next to this file); if that module cannot be imported a minimal local redaction of
+e-mail addresses and `Google 계정:` / `Google Account:` lines is used instead, never the raw text.
+
 Exit codes: 0 ok | 2 research-level failure (no usable plan / report) | 3 driver or environment error |
 5 bad request. Python 3.9+, stdlib only.
 """
@@ -56,7 +60,61 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 from urllib.parse import urlsplit
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+try:
+    from privacy import scrub as _privacy_scrub
+except Exception:  # noqa: BLE001 - an install without privacy.py still never writes raw tails
+    _privacy_scrub = None
+
+_FALLBACK_SENSITIVE = (re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)*"), re.compile(r"Google\s*(계정|Account)\s*:", re.I))
+
+
+def _fallback_scrub(value):
+    if isinstance(value, dict):
+        return {_fallback_scrub(k): _fallback_scrub(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_fallback_scrub(v) for v in value]
+    if isinstance(value, str):
+        forms = (value, unicodedata.normalize("NFKC", value),
+                 "".join(c for c in unicodedata.normalize("NFKC", value) if unicodedata.category(c)[0] not in "MC"))
+        if any(rx.search(f) for rx in _FALLBACK_SENSITIVE for f in forms):
+            return "<redacted:account>"
+    return value
+
+
+def scrub_text(value):
+    """privacy.scrub, or the minimal local redaction when privacy.py is unavailable (never the raw text)."""
+    if _privacy_scrub is not None:
+        try:
+            return _privacy_scrub(value)
+        except Exception:  # noqa: BLE001
+            pass
+    return _fallback_scrub(value)
+
+
+_SCRUBBED_KEYS = ("message", "stderr_tail", "stdout_tail", "error", "detail")
+
+
+def scrub_result(res):
+    """Scrub, in place, every tail / error message a result carries (top level and its probe)."""
+    for k in _SCRUBBED_KEYS:
+        if res.get(k) is not None:
+            res[k] = scrub_text(res[k])
+    probe = res.get("probe")
+    if isinstance(probe, dict):
+        for k in _SCRUBBED_KEYS:
+            if probe.get(k) is not None:
+                probe[k] = scrub_text(probe[k])
+    return res
+
+
+def write_result(path, res):
+    write_json_atomic(path, scrub_result(res))
 
 for _s in (sys.stdout, sys.stderr):
     if hasattr(_s, "reconfigure"):
@@ -260,26 +318,35 @@ def probe_page(req, py, timeout=45):
     argv = [py, driver, "--step", "probe"]
     if req.get("resume_url"):
         argv += ["--resume-url", req["resume_url"]]
+    extra_env = req.get("env") or {}
+    if not isinstance(extra_env, dict):
+        return {"error": f"request env must be an object of NAME: value, not {type(extra_env).__name__}"}
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
-    env.update({str(k): str(v) for k, v in (req.get("env") or {}).items()})
+    env.update({str(k): str(v) for k, v in extra_env.items()})
     try:
         r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=timeout, stdin=subprocess.DEVNULL, env=env)
     except Exception as e:  # noqa: BLE001 - the probe is best effort
-        return {"error": str(e)[-300:]}
+        return {"error": scrub_text(str(e)[-300:])}
     lines = (r.stdout or "").strip().splitlines()
+    last = lines[-1].strip() if lines else ""
     info = None
-    if lines and lines[-1].startswith("{"):
+    if last.startswith("{"):
         try:
-            info = json.loads(lines[-1])
+            info = json.loads(last)
         except ValueError:
             info = None
     if r.returncode != 0 or not isinstance(info, dict) or info.get("status") == "error":
         code = (info or {}).get("code") if isinstance(info, dict) else None
         detail = code or (r.stderr or "")[-300:] or "no output"
-        return {"error": f"driver probe failed (rc {r.returncode}): {detail}"}
-    if "start_enabled" in info:
-        info.setdefault("active_confirm", 1 if info.get("start_enabled") else 0)
+        return {"error": scrub_text(f"driver probe failed (rc {r.returncode}): {detail}")}
+    # fail closed on a broken contract: a missing/non-boolean start_enabled must never read as "no start button"
+    if not isinstance(info.get("start_enabled"), bool):
+        return {"error": "driver probe broke its contract: no boolean start_enabled"}
+    cards = info.get("plan_cards")
+    if cards is not None and (isinstance(cards, bool) or not isinstance(cards, int)):
+        return {"error": "driver probe broke its contract: plan_cards is not an integer"}
+    info["active_confirm"] = 1 if info["start_enabled"] else 0
     return info
 
 
@@ -415,16 +482,17 @@ def classify(run, step):
                 hint = PLAN_MISMATCH_HINT   # there is no research to collect after a plan or edit step
             tail = [ln.rstrip() for ln in run.stderr.splitlines() if ln.strip()][-3:]
             if code == "UI_SELECTOR_TIMEOUT" and run.prompt_sent:
-                return Fail("PAGE_TIMEOUT_AFTER_SEND", (tail[-1] if tail else needle), 2,
+                return Fail("PAGE_TIMEOUT_AFTER_SEND", scrub_text(tail[-1] if tail else needle), 2,
                             "a page wait timed out AFTER the prompt/feedback was typed: it is in the conversation; never re-run this request (the caller decides)",
-                            stderr_tail=tail)
-            return Fail(code, (tail[-1] if tail else needle), exit_code, hint, stderr_tail=tail)
+                            stderr_tail=scrub_text(tail))
+            return Fail(code, scrub_text(tail[-1] if tail else needle), exit_code, hint, stderr_tail=scrub_text(tail))
     if run.rc == 2:
         tail = [ln.rstrip() for ln in run.stderr.splitlines() if ln.strip()][-2:]
-        return Fail("DRIVER_ARGS_REJECTED", " | ".join(tail), 3, "this driver copy does not accept these flags")
+        return Fail("DRIVER_ARGS_REJECTED", scrub_text(" | ".join(tail)), 3, "this driver copy does not accept these flags")
     if run.rc not in (0, None):
         tail = [ln.rstrip() for ln in run.stderr.splitlines() if ln.strip()][-5:]
-        return Fail("DRIVER_CRASH", (tail[-1] if tail else f"exit {run.rc}"), 3, "see the stderr log", stderr_tail=tail)
+        return Fail("DRIVER_CRASH", scrub_text(tail[-1] if tail else f"exit {run.rc}"), 3, "see the stderr log",
+                    stderr_tail=scrub_text(tail))
     return None
 
 
@@ -530,7 +598,7 @@ def do_step(job, req, relay_dir, result_path):
         res.update({"status": "probed" if not info.get("error") else "error", "probe": info})
         if info.get("error"):
             res.update({"code": "PROBE_FAILED", "message": info["error"], "exit_code": 3})
-        write_json_atomic(result_path, res)
+        write_result(result_path, res)
         return res, 0 if not info.get("error") else 3
     feats = driver_features(driver)
     if not feats["step"]:
@@ -549,7 +617,7 @@ def do_step(job, req, relay_dir, result_path):
         res.update({"status": "error", "code": "STEP_ALREADY_ACTED", "exit_code": 2, "previous": {k: prev.get(k) for k in ("status", "code", "prompt_sent", "edit_button_clicked", "confirm_clicked", "url")},
                     "message": "this request already acted on the Gemini app (prompt/feedback typed or start clicked); not running the driver again",
                     "hint": "report this; the caller decides what happens next"})
-        write_json_atomic(result_path, res)
+        write_result(result_path, res)
         return res, 2
     prefix = f"{step}_{seq}"
     out_log = os.path.join(relay_dir, prefix + ".stdout.txt")
@@ -593,14 +661,14 @@ def do_step(job, req, relay_dir, result_path):
                     res.update({"status": "error", "code": "CONVERSATION_MISMATCH", "exit_code": 2, "probe": probe_info,
                                 "message": why, "hint": "another job or the user is driving the shared Gemini page, or the "
                                 "conversation no longer exists; nothing was clicked. The caller approves again when the app is free"})
-                    write_json_atomic(result_path, res)
+                    write_result(result_path, res)
                     return res, 2
                 if not probe_info.get("active_confirm"):
                     res = base_result(req)
                     res.update({"status": "error", "code": "CONFIRM_MISSING", "exit_code": 2, "probe": probe_info,
                                 "message": "no active '연구 시작' button on the conversation: nothing to approve (countdown fired, research already started, or wrong card)",
                                 "hint": "the caller runs status, then collect if a research is running there, otherwise a new plan"})
-                    write_json_atomic(result_path, res)
+                    write_result(result_path, res)
                     return res, 2
                 exp_url, exp_cards = req.get("expected_url"), req.get("expected_plan_count")
                 if (exp_url and probe_info.get("url", "").rstrip("/") != exp_url.rstrip("/")) or (exp_cards and probe_info.get("plan_cards") != exp_cards):
@@ -608,7 +676,7 @@ def do_step(job, req, relay_dir, result_path):
                     res.update({"status": "error", "code": "PLAN_CHANGED", "exit_code": 2, "probe": probe_info,
                                 "message": f"the conversation does not match what the caller reviewed (url {probe_info.get('url')}, plan cards {probe_info.get('plan_cards')}, expected {exp_cards})",
                                 "hint": "someone changed the plan in the app or the tab moved; the caller must read the current plan again (edit) or start a new job"})
-                    write_json_atomic(result_path, res)
+                    write_result(result_path, res)
                     return res, 2
         if step == "collect":
             # collect re-attaches; it must never be the click that starts a research the caller did not approve
@@ -618,7 +686,7 @@ def do_step(job, req, relay_dir, result_path):
                 res.update({"status": "error", "code": "COLLECT_PROBE_FAILED", "exit_code": 3, "probe": probe_info,
                             "message": f"the read-only page probe failed ({probe_info.get('error')}); without it collect cannot rule out a pending plan",
                             "hint": "fix the environment (the Gemini app and its driver must be available) and collect again"})
-                write_json_atomic(result_path, res)
+                write_result(result_path, res)
                 return res, 3
             why = probe_conversation_mismatch(req, probe_info) if not probe_info.get("error") else None
             if why:
@@ -626,14 +694,14 @@ def do_step(job, req, relay_dir, result_path):
                 res.update({"status": "error", "code": "CONVERSATION_MISMATCH", "exit_code": 2, "probe": probe_info,
                             "message": why, "hint": "another job or the user is driving the shared Gemini page, or the "
                             "conversation no longer exists; " + MISMATCH_HINT})
-                write_json_atomic(result_path, res)
+                write_result(result_path, res)
                 return res, 2
             if probe_info.get("active_confirm"):
                 res = base_result(req)
                 res.update({"status": "error", "code": "COLLECT_WOULD_START", "exit_code": 2, "probe": probe_info,
                             "message": "the plan card still has an active '연구 시작' button: the research has not started",
                             "hint": "this is a pending plan, not a running research; the caller approves it (approve --reason) or edits it"})
-                write_json_atomic(result_path, res)
+                write_result(result_path, res)
                 return res, 2
     if req.get("show"):
         argv.append("--show")
@@ -663,23 +731,23 @@ def do_step(job, req, relay_dir, result_path):
         res.update({"status": "error", "code": "COLLECT_STARTED_RESEARCH", "exit_code": 2,
                     "message": "collect clicked '연구 시작': a research started that the caller had not approved in this step",
                     "hint": "the research is now running in the app; the caller records it and may collect later"})
-        write_json_atomic(result_path, res)
+        write_result(result_path, res)
         return res, 2
     if err:
         res.update({"status": "error", "code": err.code, "message": err.message, "hint": err.hint, "exit_code": err.exit_code})
         res.update(err.extra)
-        write_json_atomic(result_path, res)
+        write_result(result_path, res)
         return res, err.exit_code
     if step in ("plan", "edit"):
         payload = parse_hook(run)
         if not payload or not (payload.get("plan") or "").strip():
             res.update({"status": "error", "code": "NO_PLAN_PAYLOAD", "message": "the driver exited without a plan payload", "exit_code": 2,
                         "hint": "see the stdout log; the caller decides"})
-            write_json_atomic(result_path, res)
+            write_result(result_path, res)
             return res, 2
         res.update({"status": "plan_ready" if step == "plan" else "plan_revised", "event": payload.get("event"), "url": payload.get("url"),
                     "plan": payload.get("plan"), "plan_count": payload.get("plan_count"), "plan_chars": len(payload.get("plan") or "")})
-        write_json_atomic(result_path, res)
+        write_result(result_path, res)
         return res, 0
     # Conversation identity: the report counts only with this run's provenance line, naming the job's conversation
     prov = parse_provenance(run.stdout) or {}
@@ -690,7 +758,7 @@ def do_step(job, req, relay_dir, result_path):
                     "message": "the driver did not say which conversation the report came from; nothing was accepted",
                     "hint": "a driver older than this relay, or the run ended before a report was extracted: sync the skill "
                             "(deep_research.py setup) and collect again"})
-        write_json_atomic(result_path, res)
+        write_result(result_path, res)
         return res, 2
     want = conversation_id_from_url(req.get("resume_url")) or pinned.get("conversation_id")
     if want and got != want:
@@ -699,7 +767,7 @@ def do_step(job, req, relay_dir, result_path):
                     "rejected_report": set_aside(req["output"], relay_dir, f"rejected_{seq}.report.md"),
                     "message": f"the report was extracted from conversation {got}, not this job's {want}",
                     "hint": MISMATCH_HINT})
-        write_json_atomic(result_path, res)
+        write_result(result_path, res)
         return res, 2
     markdown = None
     if os.path.isfile(req["output"]):
@@ -711,7 +779,7 @@ def do_step(job, req, relay_dir, result_path):
     if not markdown or len(markdown.strip()) < REPORT_MIN_CHARS:
         res.update({"status": "error", "code": "REPORT_EMPTY", "message": f"the report has {len((markdown or '').strip())} chars", "exit_code": 2,
                     "hint": "collect again after a minute; the panel may not have rendered"})
-        write_json_atomic(result_path, res)
+        write_result(result_path, res)
         return res, 2
     res.update({"status": "completed", "report_file": os.path.abspath(req["output"]), "report_chars": len(markdown), "sources_count": count_sources(markdown),
                 "url": prov.get("url") or f"https://gemini.google.com/app/{got}", "conversation_id": got,
@@ -719,7 +787,7 @@ def do_step(job, req, relay_dir, result_path):
     if step == "auto":
         res["plan"] = parse_plan_block(before_report(run.stdout))
         res["plan_chars"] = len(res["plan"] or "")
-    write_json_atomic(result_path, res)
+    write_result(result_path, res)
     return res, 0
 
 
@@ -807,7 +875,7 @@ def main(argv=None):
                "message": e.message, "hint": e.hint, "exit_code": e.exit_code, "finished_at": now_iso()}
         res.update(e.extra)
         try:
-            write_json_atomic(result_path, res)
+            write_result(result_path, res)
         except OSError:
             pass
         code = e.exit_code

@@ -79,6 +79,34 @@ class LegacyJobTestCase(DeepResearchTestBase):
         self.assertEqual(job.get("host"), "uia")
         self.assertNotIn("browser", job)
 
+    def test_init_stdout_reports_host_uia(self) -> None:
+        rc, res, err = self.run_dr(["init", "--job", "host_stdout", "--prompt", PROMPT, "--goal", GOAL])
+        self.assertEqual(rc, 0, (res, err))
+        self.assertEqual(res.get("host"), "uia")
+        self.assertNotIn("browser", res)
+
+    def test_browser_option_is_gone(self) -> None:
+        for argv in (["auto", "--prompt", PROMPT, "--goal", GOAL, "--browser", "chrome"],
+                     ["init", "--job", "b1", "--prompt", PROMPT, "--goal", GOAL, "--browser", "app"]):
+            with self.subTest(argv=argv[0]):
+                rc, _, err = self.run_dr(argv)
+                self.assertEqual(rc, 2, err)
+                self.assertIn("--browser", err)
+
+    def test_corrupt_job_json_is_invalid_state_not_a_crash(self) -> None:
+        for i, content in enumerate(("[1]", '"text"', "42", '{"host": "uia", "out_path": 5, "browser": "x"}',
+                                     '{"host": "uia", "out_path": ["r.md"], "status": "plan_ready"}')):
+            with self.subTest(content=content):
+                job_dir = self.init_job(f"corrupt_{i}")
+                (job_dir / "job.json").write_text(content, encoding="utf-8")
+                rc, res, err = self.run_dr(["status", "--job", f"corrupt_{i}"])
+                self.assertNotIn("Traceback", err)
+                if '"browser"' in content:
+                    self.assertEqual((rc, res.get("code")), (2, "LEGACY_BROWSER_MODE"), (res, err))
+                    self.assertIsInstance(res.get("out_path"), str)
+                else:
+                    self.assertEqual((rc, res.get("code")), (5, "INVALID_JOB_STATE"), (res, err))
+
     def test_legacy_chrome_job_refused(self) -> None:
         job_dir = self.init_job("legacy_chrome")
         self.rewrite_job(job_dir, host=None, browser="chrome")
@@ -150,6 +178,31 @@ class SetupObsoleteFilesTestCase(DeepResearchTestBase):
         rc, pf2, _ = self.run_dr(["preflight", "--target-dir", str(self.target_skill_dir)])
         self.assertEqual(pf2["sync_status"], "in_sync")
         self.assertEqual(pf2["checks"]["sync"]["obsolete_files"], [])
+
+    def test_pre_m2_install_is_out_of_sync_not_missing(self) -> None:
+        # an old install: some of today's bundled files are missing and the patcher is still there
+        scripts = self.target_skill_dir / "scripts"
+        scripts.mkdir(parents=True)
+        for name in ("relay_step.py", "run_deep_research.py", "patch_gemini_app.py"):
+            (scripts / name).write_text("# old\n", encoding="utf-8")
+        (self.target_skill_dir / "SKILL.md").write_text("# old\n", encoding="utf-8")
+        res = dr.check_sync_status(self.target_skill_dir)
+        self.assertEqual(res["status"], "out_of_sync")
+        self.assertEqual(res["obsolete_files"], ["scripts/patch_gemini_app.py"])
+        empty = self.target_skill_dir.parent / "never_installed"
+        self.assertEqual(dr.check_sync_status(empty)["status"], "missing_target")
+
+    def test_broken_obsolete_symlink_is_flagged(self) -> None:
+        rc, st, _ = self.run_dr(["setup", "--target-dir", str(self.target_skill_dir)])
+        self.assertEqual(st["sync_status"], "in_sync")
+        link = self.target_skill_dir / "scripts" / "patch_gemini_app.py"
+        try:
+            os.symlink(str(self.target_skill_dir / "scripts" / "__gone__.py"), str(link))
+        except OSError as e:
+            self.skipTest(f"no symlinks here: {e}")
+        self.assertFalse(link.exists())
+        res = dr.check_sync_status(self.target_skill_dir)
+        self.assertEqual((res["status"], res["obsolete_files"]), ("out_of_sync", ["scripts/patch_gemini_app.py"]))
 
     def test_obsolete_file_alone_makes_a_synced_target_out_of_sync(self) -> None:
         rc, st, _ = self.run_dr(["setup", "--target-dir", str(self.target_skill_dir)])
@@ -265,6 +318,189 @@ class RelayPlanChangedTestCase(unittest.TestCase):
     def test_matching_plan_cards_passes_the_gate(self) -> None:
         _, _, run_driver = self.approve(plan_cards=1)
         run_driver.assert_called_once()
+
+
+class RelayClassifyTestCase(unittest.TestCase):
+    """T14: the stderr needle -> code mapping of relay_step.classify."""
+
+    def run_with(self, stderr: str, rc: int = 1, **attrs):
+        run = relay_step.Run()
+        run.rc, run.err = rc, [stderr]
+        for k, v in attrs.items():
+            setattr(run, k, v)
+        return run
+
+    def test_every_failure_needle_maps_to_its_code(self) -> None:
+        seen = set()
+        for needle, code, exit_code, _ in relay_step.FAILURES:
+            if needle in seen:
+                continue
+            seen.add(needle)
+            with self.subTest(code=code):
+                err = relay_step.classify(self.run_with(f"Traceback\nRuntimeError: {needle} (x)\n"), "approve")
+                self.assertEqual((err.code, err.exit_code), (code, exit_code))
+
+    def test_other_outcomes(self) -> None:
+        self.assertIsNone(relay_step.classify(self.run_with("", rc=0), "plan"))
+        self.assertEqual(relay_step.classify(self.run_with("usage: bad flag", rc=2), "plan").code, "DRIVER_ARGS_REJECTED")
+        self.assertEqual(relay_step.classify(self.run_with("boom", rc=1), "plan").code, "DRIVER_CRASH")
+        self.assertEqual(relay_step.classify(self.run_with("", rc=None, killed="deadline"), "plan").code, "DEADLINE")
+        self.assertEqual(relay_step.classify(self.run_with("Timeout 30000ms exceeded", rc=1, prompt_sent=True), "plan").code,
+                         "PAGE_TIMEOUT_AFTER_SEND")
+        err = relay_step.classify(self.run_with("Conversation mismatch: x", rc=1), "plan")
+        self.assertEqual((err.code, err.hint), ("CONVERSATION_MISMATCH", relay_step.PLAN_MISMATCH_HINT))
+
+
+class AgySkillDocsTestCase(unittest.TestCase):
+    """T7: agy's skill body (references/SKILL.md) carries no patcher / CDP / browser instructions."""
+
+    def test_reference_skill_has_no_patcher_or_cdp_text(self) -> None:
+        text = (SCRIPTS_DIR.parent / "references" / "SKILL.md").read_text(encoding="utf-8").lower()
+        for token in ("patch_gemini_app", "app.asar", "cdp", "remote-debugging", "9222", "9223", "9224",
+                      "chrome_launcher", "--browser", "playwright"):
+            with self.subTest(token=token):
+                self.assertNotIn(token, text)
+
+
+class RelayProbeContractTestCase(unittest.TestCase):
+    """B9/M8, B21, M7, T6: the probe contract is validated (fail closed) and every tail/message is scrubbed."""
+    URL = "https://gemini.google.com/app/abc"
+
+    def setUp(self) -> None:
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.job = self._tmp.name
+        self.relay_dir = os.path.join(self.job, "relay")
+        os.makedirs(self.relay_dir)
+        self.result_path = os.path.join(self.relay_dir, "result.json")
+        self.driver = os.path.join(self.job, "run_deep_research.py")
+        with open(self.driver, "w", encoding="utf-8") as f:
+            f.write('# fake driver: "--step" "--prompt-file" "--edit-prompt-file"\n')
+
+    def probe(self, stdout: str, rc: int = 0, stderr: str = "", req_extra=None):
+        req = {"resume_url": self.URL, "driver": self.driver}
+        req.update(req_extra or {})
+        done = subprocess.CompletedProcess([], rc, stdout=stdout, stderr=stderr)
+        with mock.patch.object(relay_step.subprocess, "run", return_value=done) as run:
+            return relay_step.probe_page(req, sys.executable), run
+
+    def test_probe_without_boolean_start_enabled_is_an_error(self) -> None:
+        for out in ('{"url": "%s"}' % self.URL, '{"start_enabled": "yes", "url": "u"}', '{"start_enabled": 1, "url": "u"}',
+                    '{"start_enabled": null, "url": "u"}', '{"start_enabled": true, "plan_cards": "2", "url": "u"}',
+                    '{"start_enabled": true, "plan_cards": true, "url": "u"}',
+                    '{"start_enabled": true, "plan_cards": 1.5, "url": "u"}'):
+            with self.subTest(out=out):
+                info, _ = self.probe(out + "\n")
+                self.assertIn("error", info, info)
+                self.assertNotIn("active_confirm", info)
+        info, _ = self.probe('{"start_enabled": true, "plan_cards": 2, "url": "u"}\n')
+        self.assertNotIn("error", info)
+        self.assertEqual((info["active_confirm"], info["plan_cards"]), (1, 2))
+        info, _ = self.probe('{"start_enabled": false, "url": "u"}\n')
+        self.assertEqual(info["active_confirm"], 0)
+
+    def test_probe_accepts_indented_last_json_line(self) -> None:
+        info, _ = self.probe('log line\n   {"start_enabled": false, "plan_cards": 1, "url": "u"}   \n')
+        self.assertNotIn("error", info, info)
+        self.assertEqual(info["active_confirm"], 0)
+
+    def test_probe_non_dict_env_is_an_error_not_a_crash(self) -> None:
+        for env in (["A=1"], "A=1", 3):
+            with self.subTest(env=env):
+                info, run = self.probe('{"start_enabled": false, "url": "u"}\n', req_extra={"env": env})
+                self.assertIn("error", info)
+                run.assert_not_called()
+
+    def test_probe_error_detail_is_scrubbed(self) -> None:
+        leak = "Traceback: lookup failed for tester.person@gmail.com\nGoogle 계정: 홍길동(tester.person@gmail.com)\n"
+        info, _ = self.probe("", rc=1, stderr=leak)
+        self.assertIn("error", info)
+        self.assertNotIn("gmail", info["error"])
+        self.assertNotIn("홍길동", info["error"])
+        info, _ = self.probe("no json\n", rc=0, stderr=leak * 3)
+        self.assertNotIn("gmail", json.dumps(info, ensure_ascii=False))
+
+    def collect(self, probe_stdout: str, probe_rc: int = 0):
+        req = {"relay_version": 2, "step": "collect", "seq": 3, "driver": self.driver, "resume_url": self.URL,
+               "output": os.path.join(self.job, "report.md"), "timeout": 60}
+        done = subprocess.CompletedProcess([], probe_rc, stdout=probe_stdout, stderr="")
+
+        class _Ran(Exception):
+            pass
+
+        with mock.patch.object(relay_step.subprocess, "run", return_value=done), \
+                mock.patch.object(relay_step, "run_driver", side_effect=_Ran()) as run_driver:
+            try:
+                res, code = relay_step.do_step(self.job, req, self.relay_dir, self.result_path)
+            except _Ran:
+                res, code = None, None
+        return res, code, run_driver
+
+    def test_collect_probe_failure_is_collect_probe_failed(self) -> None:
+        for out, rc in (('{"status": "error", "code": "UIA_DRIVER_NOT_IMPLEMENTED"}\n', 3), ("", 1),
+                        ('{"url": "%s"}\n' % self.URL, 0), ('{"start_enabled": "no", "url": "%s"}\n' % self.URL, 0)):
+            with self.subTest(out=out, rc=rc):
+                res, code, run_driver = self.collect(out, rc)
+                run_driver.assert_not_called()
+                self.assertEqual((code, res["code"], res["exit_code"]), (3, "COLLECT_PROBE_FAILED", 3))
+                with open(self.result_path, encoding="utf-8") as f:
+                    self.assertEqual(json.load(f)["code"], "COLLECT_PROBE_FAILED")
+
+    def test_collect_start_enabled_maps_to_active_confirm(self) -> None:
+        res, code, run_driver = self.collect('{"start_enabled": true, "plan_cards": 1, "url": "%s"}\n' % self.URL)
+        run_driver.assert_not_called()
+        self.assertEqual((code, res["code"]), (2, "COLLECT_WOULD_START"))
+        self.assertEqual(res["probe"]["active_confirm"], 1)
+        _, _, run_driver = self.collect('{"start_enabled": false, "plan_cards": 1, "url": "%s"}\n' % self.URL)
+        run_driver.assert_called_once()
+
+    def test_approve_start_disabled_is_confirm_missing(self) -> None:
+        req = {"relay_version": 2, "step": "approve", "seq": 2, "driver": self.driver, "resume_url": self.URL,
+               "output": os.path.join(self.job, "report.md"), "timeout": 60}
+        done = subprocess.CompletedProcess([], 0, stdout='{"start_enabled": false, "plan_cards": 1, "url": "%s"}\n'
+                                           % self.URL, stderr="")
+        with mock.patch.object(relay_step.subprocess, "run", return_value=done), \
+                mock.patch.object(relay_step, "run_driver") as run_driver:
+            res, code = relay_step.do_step(self.job, req, self.relay_dir, self.result_path)
+        run_driver.assert_not_called()
+        self.assertEqual((code, res["code"], res["probe"]["active_confirm"]), (2, "CONFIRM_MISSING", 0))
+
+    def fake_run(self, stderr: str, rc: int = 1):
+        run = relay_step.Run()
+        run.rc = rc
+        run.err = [stderr]
+        return run
+
+    def test_driver_stderr_tail_and_message_are_scrubbed_in_result(self) -> None:
+        prompt = os.path.join(self.job, "prompt.md")
+        with open(prompt, "w", encoding="utf-8") as f:
+            f.write("topic")
+        req = {"relay_version": 2, "step": "plan", "seq": 1, "driver": self.driver, "prompt_file": prompt}
+        stderr = ("Traceback (most recent call last):\n  File x\nRuntimeError: signed in as tester.person@gmail.com\n"
+                  "Google 계정: 홍길동(tester.person@gmail.com)\n")
+        for rc, err in ((1, stderr), (2, stderr), (1, stderr + "Timeout 30000ms exceeded\n")):
+            with self.subTest(rc=rc, err=err[-30:]):
+                with mock.patch.object(relay_step, "run_driver", return_value=self.fake_run(err, rc)):
+                    res, code = relay_step.do_step(self.job, req, self.relay_dir, self.result_path)
+                self.assertEqual(res["status"], "error")
+                with open(self.result_path, encoding="utf-8") as f:
+                    written = f.read()
+                for text in (written, json.dumps(res, ensure_ascii=False)):
+                    self.assertNotIn("gmail", text)
+                    self.assertNotIn("홍길동", text)
+
+    def test_scrub_falls_back_without_privacy_module(self) -> None:
+        with mock.patch.object(relay_step, "_privacy_scrub", None):
+            for value in ("x tester@gmail.com y", "Google 계정: 홍길동", "a" * 300 + " tester@gmail.com",
+                          ["ok", "Google Account: someone"], {"k": "tester@gmail.com"}):
+                with self.subTest(value=str(value)[:40]):
+                    out = json.dumps(relay_step.scrub_text(value), ensure_ascii=False)
+                    self.assertNotIn("gmail", out)
+                    self.assertNotIn("홍길동", out)
+                    self.assertNotIn("someone", out)
+            self.assertEqual(relay_step.scrub_text("plain message"), "plain message")
+        self.assertIsNotNone(relay_step._privacy_scrub)
 
 
 class DriverStubTestCase(unittest.TestCase):

@@ -935,8 +935,10 @@ def check_sync_status(target_dir: Path) -> dict:
         all_matching = False
     files_status["SKILL.md"] = {"bundled_sha256": src_skill_sha, "target_sha256": dst_skill_sha, "in_sync": src_skill_sha == dst_skill_sha}
 
-    obsolete = [f"scripts/{name}" for name in OBSOLETE_SCRIPTS if (target_dir / "scripts" / name).exists()]
-    if not target_dir.exists() or not all_present:
+    obsolete = [f"scripts/{name}" for name in OBSOLETE_SCRIPTS
+                if (target_dir / "scripts" / name).exists() or (target_dir / "scripts" / name).is_symlink()]
+    # an older install (obsolete files still there) is out of sync even when today's new files are missing
+    if not target_dir.exists() or (not all_present and not obsolete):
         status = "missing_target"
     elif all_matching and not obsolete:
         status = "in_sync"
@@ -1034,11 +1036,12 @@ def cmd_preflight(a) -> int:
 def load_job(job_dir: Path) -> dict:
     job_file = job_dir / "job.json"
     job = read_json_safe(job_file)
-    if not job:
+    if not job or not isinstance(job, dict):
         die(f"job metadata missing or corrupted: {job_file}", 5, code="INVALID_JOB_STATE")
     if job.get("host") != HOST or "browser" in job:
         # a finished report must stay findable: say where it is and what the last relay result was
-        out_path = job.get("out_path") or str(job_dir / "report.md")
+        out_path = job.get("out_path") if isinstance(job.get("out_path"), str) and job.get("out_path") else \
+            str(job_dir / "report.md")
         relay_result = read_json_safe(job_dir / "relay" / "result.json")
         die(f"job {job.get('job_id') or job_dir.name} was created for a removed browser mode "
             f"(browser={job.get('browser') or 'app'!r}); it cannot be run, edited, approved or collected", 2,
@@ -1046,6 +1049,8 @@ def load_job(job_dir: Path) -> dict:
             hint="start a new job (init or auto) with the same prompt and goal; the old job directory is left as it is",
             job_status=job.get("status"), out_path=out_path, out_exists=Path(out_path).is_file(),
             relay_result_status=relay_result.get("status") if isinstance(relay_result, dict) else None)
+    if job.get("out_path") is not None and not isinstance(job.get("out_path"), str):
+        die(f"job metadata corrupted: out_path is not a path string: {job_file}", 5, code="INVALID_JOB_STATE")
     return job
 
 
