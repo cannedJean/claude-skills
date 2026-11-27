@@ -21,9 +21,15 @@ Rules (spec section 11, Task 8 rulings):
   Research progress (no enabled start in the card + `stop_response`) is stopped
   and reported as UNREVIEWED_START; a card first seen with its start disabled
   counts as a fired countdown. Any other failed check is
-  COUNTDOWN_NOT_CANCELLED. A timeout or LocatorMiss while `stop_response` is
-  present invokes `stop_response` first (details get stop_invoked/stopped).
+  COUNTDOWN_NOT_CANCELLED. A timeout, COUNTDOWN_NOT_CANCELLED or LocatorMiss
+  while `stop_response` is present invokes `stop_response` first (details get
+  stop_invoked/stopped). While a response runs, a card count below
+  `prev_cards` or a newest card without its start also means UNREVIEWED_START.
   Fail closed, never retried.
+- Acts: only BackendError (pattern missing, element gone, COM/OS error) counts
+  as "did not act" and falls through to the next stop; its type name is
+  recorded (UI_ACTION_FAILED.error, COUNTDOWN_NOT_CANCELLED.act_errors).
+  Programming errors propagate.
 - Polling interval = max(cfg.poll_min_s, 2 x duration of the last snapshot).
 - Every StepError.details and every returned value has passed privacy.scrub.
 - Node ids must stay stable for the same UI element across snapshots (the UIA
@@ -40,8 +46,9 @@ Error codes (StepError.code; "started?" = may research have started):
     MODEL_AMBIGUOUS        several menu items match (details.matches). started? no
     MODEL_NOT_SELECTED     the chosen item is not checked after selection. started? no
     DEEP_RESEARCH_TOGGLE_NOT_FOUND  tools menu items or the Deep Research button did not appear. started? no
-    UI_ACTION_FAILED       the node supports none of the patterns tried. started? no for menus/prompt; during plan
-                           wait the countdown handling has already run (see the codes below)
+    UI_ACTION_FAILED       the node supports none of the patterns tried or the backend failed (details.error =
+                           exception type name). started? no for menus/prompt; stops never raise it (they fall
+                           through to the next stop)
     UI_TIMEOUT             a local UI reaction did not happen (details.waiting_for); in edit_plan stop_response is
                            invoked first if present. started? no (the plan card is not touched by these waits)
     NO_PLAN_CARD           edit_plan found no plan card to edit. started? no
@@ -49,10 +56,12 @@ Error codes (StepError.code; "started?" = may research have started):
     GEMINI_ERROR_RESPONSE  the newest response holds an error phrase (never retried). started? no
     PLAN_TIMEOUT           no new card within card_timeout_s; stop_response invoked first if present. started?
                            possible (a card may have been missed) - check details.stop_invoked
-    PLAN_CARD_COUNT_MISMATCH  more than one new card; every new card's cancel was invoked. started? possible
+    PLAN_CARD_COUNT_MISMATCH  more than one new card; every new card's cancel was invoked and no progress was
+                           seen afterwards (else UNREVIEWED_START). started? unlikely
     PLAN_CARD_UNRECOGNISED a turn-scoped plan_start lookup unexpectedly matched (internal guard). started? possible
     UNREVIEWED_START       research progress seen; stop_response invoked (details.stopped). started? YES
-    COUNTDOWN_NOT_CANCELLED  cancel and edit fallback could not be verified. started? possible (not seen yet)
+    COUNTDOWN_NOT_CANCELLED  cancel and edit fallback could not be verified; stop_response invoked first if
+                           present (details.stop_invoked, act_errors). started? possible (not seen yet)
 LocatorMiss (UI_LOCATOR_MISS payload) is raised for label drift; during the plan wait it may carry stop_invoked.
 """
 import hashlib
@@ -70,6 +79,13 @@ from uitree import Node, PatternNotSupported
 FRESH_URL = "https://gemini.google.com/app"
 CONVERSATION_RE = re.compile(r"^https://gemini\.google\.com/app/[0-9a-f]{8,}$")
 DEFAULT_CARD_PREFIX = "model-response-message-content"
+# Errors a UiTree backend raises when an act cannot happen: pattern missing (PatternNotSupported),
+# element gone (LookupError/KeyError, FakeTree raises KeyError), COM/OS failure (OSError; the UIA backend
+# maps COMError onto an OSError subclass). Only these count as "did not act"; anything else is a bug and
+# propagates.
+BackendError = (PatternNotSupported, LookupError, OSError)
+# fail-closed exits that invoke stop_response first when it is present (details get stop_invoked/stopped)
+STOP_FIRST_CODES = ("PLAN_TIMEOUT", "UI_TIMEOUT", "COUNTDOWN_NOT_CANCELLED")
 
 
 class StepError(Exception):
@@ -130,23 +146,31 @@ def _absent(ctx: LocatorContext, key: str, anchor: str) -> Optional[bool]:
 
 
 def _act(tree, node: Node, prefs: Tuple[str, ...], key: str) -> str:
+    """Act with the first supported pattern; backend errors (BackendError) try the
+    next pattern, then UI_ACTION_FAILED with the last error's type name.
+    Programming errors propagate."""
+    error = "no_pattern"
     for p in prefs:
         if p in node.patterns:
             try:
                 tree.act(node.id, p)
                 return p
-            except PatternNotSupported:
-                continue
-    raise StepError("UI_ACTION_FAILED", {"locator": key, "patterns": sorted(node.patterns)})
+            except BackendError as exc:
+                error = type(exc).__name__
+    raise StepError("UI_ACTION_FAILED", {"locator": key, "patterns": sorted(node.patterns), "error": error})
 
 
-def _try_act(tree, node: Node, prefs: Tuple[str, ...]) -> bool:
-    """Best-effort act for stops (cancel, edit, stop_response): any failure of the
-    backend (missing pattern, element gone, COM error) means "did not act"."""
+def _try_act(tree, node: Node, prefs: Tuple[str, ...], key: str = "", errors: Optional[list] = None) -> bool:
+    """Best-effort act for stops (cancel, edit, stop_response): a backend failure
+    means "did not act" (recorded in `errors`) so the next stop is tried."""
     try:
-        _act(tree, node, prefs, "")
+        _act(tree, node, prefs, key)
         return True
-    except Exception:  # noqa: BLE001 - a failed stop must fall through to the next stop
+    except StepError as exc:
+        if exc.code != "UI_ACTION_FAILED":
+            raise
+        if errors is not None:
+            errors.append({"locator": key, "error": exc.details.get("error", "no_pattern")})
         return False
 
 
@@ -517,7 +541,7 @@ def _stop(tree, poll: _Poll, cfg: StepConfig, ctx: LocatorContext) -> Optional[T
     stop = _try(ctx, "stop_response")
     if not stop:
         return None
-    if not _try_act(tree, stop[0], ("invoke",)):
+    if not _try_act(tree, stop[0], ("invoke",), "stop_response"):
         return False, False
     try:
         poll.until(cfg.stop_timeout_s, lambda c: _absent(c, "stop_response", "prompt_input") is True,
@@ -535,8 +559,9 @@ def _unreviewed(tree, poll: _Poll, cfg: StepConfig, ctx: LocatorContext, method:
 
 
 def _stop_on_failure(tree, poll: _Poll, cfg: StepConfig, exc: Exception) -> None:
-    """Before a timeout or LocatorMiss leaves the step: stop a running response."""
-    if isinstance(exc, StepError) and exc.code not in ("PLAN_TIMEOUT", "UI_TIMEOUT"):
+    """Before a timeout, an unverified cancel or a LocatorMiss leaves the step: stop a
+    running response (harmless if it was only Gemini's canned turn)."""
+    if isinstance(exc, StepError) and exc.code not in STOP_FIRST_CODES:
         return
     try:
         res = _stop(tree, poll, cfg, poll.snap())
@@ -551,7 +576,13 @@ def _stop_on_failure(tree, poll: _Poll, cfg: StepConfig, exc: Exception) -> None
 def _cancel_all(tree, ctx: LocatorContext, turns: List[Node]) -> None:
     for turn in turns:
         for b in _find_in(turn, ctx, "plan_cancel_countdown"):
-            _try_act(tree, b, ("invoke",))
+            _try_act(tree, b, ("invoke",), "plan_cancel_countdown")
+
+
+def _start_live(ctx: LocatorContext, turn_id: str) -> bool:
+    turn = _turn_by_id(ctx, turn_id)
+    starts = _find_in(turn, ctx, "plan_start") if turn is not None else []
+    return len(starts) == 1 and starts[0].enabled
 
 
 def _watch(tree, poll: _Poll, cfg: StepConfig, ctx: LocatorContext, prev_cards: int):
@@ -559,6 +590,10 @@ def _watch(tree, poll: _Poll, cfg: StepConfig, ctx: LocatorContext, prev_cards: 
     new = cards[prev_cards:]
     if len(new) > 1:
         _cancel_all(tree, ctx, [t for t, _s in reversed(new)])
+        after = poll.snap()
+        if (_absent(after, "stop_response", "prompt_input") is False
+                or not all(_start_live(after, t.id) for t, _s in new)):
+            _unreviewed(tree, poll, cfg, after, "cancel_button")
         raise StepError("PLAN_CARD_COUNT_MISMATCH", {"expected": prev_cards + 1, "found": len(cards)})
     if new:
         turn, start = new[0]
@@ -566,9 +601,13 @@ def _watch(tree, poll: _Poll, cfg: StepConfig, ctx: LocatorContext, prev_cards: 
             return turn
         # first seen with its start disabled: the countdown fired (or the card was missed)
         cancel = _find_in(turn, ctx, "plan_cancel_countdown")
-        method = "cancel_button" if cancel and _try_act(tree, cancel[0], ("invoke",)) else None
+        method = ("cancel_button" if cancel and _try_act(tree, cancel[0], ("invoke",), "plan_cancel_countdown")
+                  else None)
         _unreviewed(tree, poll, cfg, ctx, method)
     turns = _turns(ctx)
+    stop_running = _absent(ctx, "stop_response", "prompt_input") is False
+    if stop_running and len(cards) < prev_cards:
+        _unreviewed(tree, poll, cfg, ctx, None)  # an earlier card lost its start while a response runs
     if not turns:
         return None
     last = turns[-1]
@@ -578,6 +617,8 @@ def _watch(tree, poll: _Poll, cfg: StepConfig, ctx: LocatorContext, prev_cards: 
         # a countdown card whose start button we cannot recognise: stop it, then report the drift
         _cancel_all(tree, ctx, [last])
         _raise_turn_miss(ctx, last, "plan_start")
+    if stop_running and (_find_in(last, ctx, "plan_edit") or _find_in(last, ctx, "plan_retry_without_dr")):
+        _unreviewed(tree, poll, cfg, ctx, None)  # the newest card has no start left and a response runs
     text = _turn_text(last)
     if _phrase_hit(text, ctx.locs.get("safety_phrases")):
         raise StepError("SAFETY_BLOCKED", {})
@@ -638,23 +679,24 @@ def _plan(tree, poll: _Poll, cfg: StepConfig, prev_cards: int) -> dict:
     last = holder["ctx"]
     method = None
     ok = False
+    errors: list = []
     # first stop: the countdown cancel, the moment the card is seen
     cancel = _find_in(turn, last, "plan_cancel_countdown")
-    if cancel and _try_act(tree, cancel[0], ("invoke",)):
+    if cancel and _try_act(tree, cancel[0], ("invoke",), "plan_cancel_countdown", errors):
         method = "cancel_button"
         ok, last = _verify(tree, poll, cfg, turn.id, method)
     if not ok:
         # second stop: plan_edit (no/failed cancel, or the cancel had no effect)
         card = _turn_by_id(last, turn.id)
         edit = _find_in(card, last, "plan_edit") if card is not None else []
-        if edit and _try_act(tree, edit[0], ("invoke",)):
+        if edit and _try_act(tree, edit[0], ("invoke",), "plan_edit", errors):
             method = "edit_fallback"
             _wait_canned(tree, poll, cfg, turn.id, method)
             ok, last = _verify(tree, poll, cfg, turn.id, method)
         elif method is None:
             _verify(tree, poll, cfg, turn.id, "none")  # nothing could stop it: still watch for progress
     if not ok:
-        raise StepError("COUNTDOWN_NOT_CANCELLED", {"cancel": method or "none"})
+        raise StepError("COUNTDOWN_NOT_CANCELLED", {"cancel": method or "none", "act_errors": errors})
     card = _turn_by_id(last, turn.id)
     result = privacy.scrub({"cancel": method, "cards": prev_cards + 1})
     result["plan_text"] = extract_plan_text(card, last.allowed)  # scrubbed line by line
@@ -671,7 +713,11 @@ def wait_plan_and_cancel(tree, locs: dict, cfg: StepConfig, url: str, prev_cards
         raise
 
 
-def edit_plan(tree, locs: dict, cfg: StepConfig, url: str, feedback: str) -> dict:
+def edit_plan(tree, locs: dict, cfg: StepConfig, url: str, feedback: str,
+              prev_cancel: Optional[str] = None) -> dict:
+    """`prev_cancel` = the `cancel` field of the previous plan result. Only after an
+    "edit_fallback" result (plan_edit already invoked, canned turn present) is
+    plan_edit not invoked again."""
     doc = bind_conversation(tree, url)
     poll = _Poll(tree, locs, cfg, doc.id, url)
     try:
@@ -680,14 +726,18 @@ def edit_plan(tree, locs: dict, cfg: StepConfig, url: str, feedback: str) -> dic
         if not cards:
             raise StepError("NO_PLAN_CARD", {})
         turn = cards[-1][0]
-        if not _after_card_turns(ctx, turn.id):
+        before = _after_card_turns(ctx, turn.id) or []
+        need = len(before) + 1
+        if prev_cancel == "edit_fallback" and before:
+            need = len(before)  # the canned turn of the edit fallback is already there
+        else:
             edit = _find_in(turn, ctx, "plan_edit")
             if not edit:
                 _raise_turn_miss(ctx, turn, "plan_edit")
             _act(tree, edit[0], ("invoke",), "plan_edit")
-        # else: the canned turn is already there (an edit_fallback result): do not invoke plan_edit again
         poll.until(cfg.turn_timeout_s,
-                   lambda c: _after_card_turns(c, turn.id) and _absent(c, "stop_response", "prompt_input") is True,
+                   lambda c: len(_after_card_turns(c, turn.id) or []) >= need
+                   and _absent(c, "stop_response", "prompt_input") is True,
                    "canned_turn")
         enter_prompt(tree, locs, cfg, doc, feedback)
         _send(tree, poll.snap())

@@ -238,7 +238,8 @@ class PlanFlowTests(unittest.TestCase):
         tree = AutoTree(spec)
         lc = locs()
         self.assertEqual(steps.wait_plan_and_cancel(tree, lc, cfg(), BOUND, 0)["cancel"], "edit_fallback")
-        res = steps.edit_plan(tree, lc, cfg(), BOUND, "2번 단계를 빼 주세요.")
+        res = steps.edit_plan(tree, lc, cfg(), BOUND, "2번 단계를 빼 주세요.",
+                              prev_cancel="edit_fallback")
         self.assertEqual(res, {"cancel": "cancel_button", "plan_text": KO_PLAN2, "cards": 2})
         self.assertEqual(acts(tree), [("act", "plan1_edit", "invoke"), ("act", "b_send", "invoke"),
                                       ("act", "plan2_cancel", "invoke")])
@@ -335,11 +336,111 @@ class PlanFlowTests(unittest.TestCase):
     def test_count_mismatch_cancels_every_new_card(self):
         spec = load("plan_flow_edit_two_cards.json")
         spec["state"] = "edit_card"
+        for name in ("edit_card", "edit_cancelled", "wrong_card"):
+            for d in nodes({"states": {"s": spec["states"][name]}}):
+                if d["id"] == "plan1_start":
+                    d["enabled"] = True  # two live cards, no research
         tree = AutoTree(spec)
         with self.assertRaises(steps.StepError) as cm:
             steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)
         self.assertEqual(cm.exception.code, "PLAN_CARD_COUNT_MISMATCH")
         self.assertEqual(sorted(acts(tree)), [("act", "plan1_cancel", "invoke"), ("act", "plan2_cancel", "invoke")])
+
+    def test_count_mismatch_with_research_is_unreviewed(self):
+        spec = load("plan_flow_edit_two_cards.json")
+        spec["state"] = "edit_card"  # card 1 has a disabled start: research may have started
+        tree = AutoTree(spec)
+        with self.assertRaises(steps.StepError) as cm:
+            steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)
+        self.assertEqual(cm.exception.code, "UNREVIEWED_START")
+        self.assertEqual(sorted(acts(tree)), [("act", "plan1_cancel", "invoke"), ("act", "plan2_cancel", "invoke")])
+
+    def test_countdown_not_cancelled_stops_running_response(self):
+        # after the cancel a new non-card turn generates while the card's start stays enabled
+        spec = load("plan_flow_ko.json")
+        spec["state"] = "bound"
+        spec["auto"] = [a for a in spec["auto"] if a["from"] != "edit_canned_gen"]
+        spec["auto"].append({"from": "cancelled", "to": "edit_canned_gen", "after_snapshots": 2})
+        spec["transitions"].append({"from": "edit_canned_gen", "on": ["act", "b_stop", "invoke"], "to": "edit_canned"})
+        tree = AutoTree(spec)
+        with self.assertRaises(steps.StepError) as cm:
+            steps.wait_plan_and_cancel(tree, locs(), cfg(turn_timeout_s=3), BOUND, 0)
+        e = cm.exception
+        self.assertEqual(e.code, "COUNTDOWN_NOT_CANCELLED")
+        self.assertTrue(e.details["stop_invoked"])
+        self.assertTrue(e.details["stopped"])
+        self.assertEqual(acts(tree), [("act", "plan1_cancel", "invoke"), ("act", "plan1_edit", "invoke"),
+                                      ("act", "b_stop", "invoke")])
+
+    def test_backend_errors_fall_through_programming_errors_propagate(self):
+        class Broken(AutoTree):
+            exc = {}
+
+            def act(self, node_id, pattern):
+                if node_id in self.exc:
+                    raise self.exc[node_id]
+                return super().act(node_id, pattern)
+
+        spec = load("plan_flow_ko.json")
+        spec["state"] = "bound"
+        set_auto(spec, "card", "researching", 10000)  # countdown longer than the watch window
+        tree = Broken(copy.deepcopy(spec))
+        tree.exc = {"plan1_cancel": OSError("com"), "plan1_edit": PatternNotSupported("no")}
+        with self.assertRaises(steps.StepError) as cm:
+            steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)
+        self.assertEqual(cm.exception.code, "COUNTDOWN_NOT_CANCELLED")
+        self.assertEqual([x["error"] for x in cm.exception.details["act_errors"]], ["OSError", "PatternNotSupported"])
+        tree = Broken(copy.deepcopy(spec))
+        tree.exc = {"plan1_cancel": LookupError("gone")}
+        self.assertEqual(steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)["cancel"], "edit_fallback")
+        tree = Broken(copy.deepcopy(spec))
+        tree.exc = {"plan1_cancel": TypeError("bug")}
+        with self.assertRaises(TypeError):
+            steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)
+        self.assertEqual(steps.BackendError, (PatternNotSupported, LookupError, OSError))
+        spec2 = load("plan_flow_ko.json")
+        spec2["state"] = "fresh_neon_std"
+        tree = Broken(spec2)
+        tree.exc = {"b_tools": OSError("com")}
+        with self.assertRaises(steps.StepError) as cm:
+            steps.enable_deep_research(tree, locs(), cfg())
+        self.assertEqual(cm.exception.code, "UI_ACTION_FAILED")
+        self.assertEqual(cm.exception.details["error"], "OSError")
+
+    def test_card_losing_start_without_cancel_is_unreviewed(self):
+        spec = load("plan_flow_ko.json")
+        st = copy.deepcopy(spec["states"]["card_fired"])
+        for d in nodes({"states": {"s": st}}):
+            if d["id"] == "c1_bar":
+                d["children"] = [c for c in d["children"] if c["id"] not in ("plan1_start", "plan1_cancel")]
+        spec["states"]["card_lost"] = st
+        spec["transitions"].append({"from": "card_lost", "on": ["act", "b_stop", "invoke"], "to": "stopped"})
+        spec["state"] = "bound"
+        set_auto(spec, "bound", "card_lost", 3)
+        tree = AutoTree(spec)
+        with self.assertRaises(steps.StepError) as cm:
+            steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)
+        self.assertEqual(cm.exception.code, "UNREVIEWED_START")
+        self.assertEqual(acts(tree), [("act", "b_stop", "invoke")])
+        self.assertLess(len(tree.seen), 20)  # detected in the poll loop, not at PLAN_TIMEOUT
+
+    def test_card_count_drop_with_stop_is_unreviewed(self):
+        spec = load("plan_flow_no_cancel.json")
+        spec["state"] = "researching"  # the earlier card is gone, a response is running
+        tree = AutoTree(spec)
+        with self.assertRaises(steps.StepError) as cm:
+            steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 1)
+        self.assertEqual(cm.exception.code, "UNREVIEWED_START")
+        self.assertEqual(acts(tree), [("act", "b_stop", "invoke")])
+
+    def test_edit_invokes_plan_edit_unless_previous_was_edit_fallback(self):
+        spec = load("plan_flow_no_cancel.json")
+        spec["state"] = "canned"  # a non-card turn follows the card, but no edit_fallback result is known
+        tree = AutoTree(spec)
+        with self.assertRaises(steps.StepError) as cm:
+            steps.edit_plan(tree, locs(), cfg(turn_timeout_s=2), BOUND, "2번 단계를 빼 주세요.")
+        self.assertEqual(cm.exception.code, "UI_TIMEOUT")
+        self.assertEqual(acts(tree), [("act", "plan1_edit", "invoke")])
 
     def test_stop_wait_reports_unstopped(self):
         self.assertEqual(steps.StepConfig().stop_timeout_s, 300)
