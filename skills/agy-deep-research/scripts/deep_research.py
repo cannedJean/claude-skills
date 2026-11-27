@@ -7,7 +7,8 @@ Subcommands
   setup       synchronize bundled scripts and SKILL.md into ~/.gemini/config/skills/local-gemini-deep-research;
               --with-venv also creates the driver venv and installs the hash-pinned comtypes (requirements-uia.txt)
   doctor      read-only check of our hidden instance: locators resolved / missed (+ privacy-filtered candidates),
-              instances, binding, sign-in state; --snapshot writes a scrubbed allowed-region snapshot (tool dir)
+              instances, binding, sign-in state; --snapshot writes a scrubbed allowed-region snapshot (tool dir);
+              an instance doctor started itself is closed again at the end (a reused one stays)
   signin      start the dedicated profile visibly on the default desktop, wait until the user has signed in
               (only true/false is logged), then quit it through the app menu
   app         `app status` lists our Gemini instances; `app close` closes them (never the user's Gemini)
@@ -1058,6 +1059,9 @@ def cmd_preflight(a) -> int:
         codes.append("UIA_UNAVAILABLE")
         warnings.append("UI Automation venv missing or incomplete: run `%s`" % setup_command())
     if plat == "win32":
+        checks["app"] = app_install_check()
+        if not checks["app"]["ok"]:
+            codes.append("APP_NOT_INSTALLED")
         try:
             host, host_error = _parts(a).host, None
         except Exception as exc:  # noqa: BLE001 - the inventory is a warning, never fatal
@@ -1146,8 +1150,8 @@ def uia_check(vdir: Path | None = None) -> dict:
     return rec
 
 
-def _run_command(argv: list) -> int:
-    return subprocess.run(argv).returncode
+def _run_command(argv: list, env: dict | None = None) -> int:
+    return subprocess.run(argv, env=env).returncode
 
 
 def setup_venv(a) -> tuple[dict, int]:
@@ -1220,6 +1224,20 @@ def installed_app_version(app_root: Path | None = None) -> str | None:
     return best
 
 
+def app_install_check() -> dict:
+    """The app's launcher stub and at least one app-<version> folder exist (stat / listing only)."""
+    try:
+        stub = Path(_rdr().default_stub())
+    except gemini_host.HostError:
+        return {"ok": False, "launcher": False, "version": None, "code": "APP_NOT_INSTALLED"}
+    launcher = stub.is_file()
+    version = installed_app_version(stub.parent) if launcher else None
+    rec = {"ok": bool(launcher and version), "launcher": launcher, "version": version}
+    if not rec["ok"]:
+        rec["code"] = "APP_NOT_INSTALLED"
+    return rec
+
+
 def app_version_check(host=None) -> dict:
     """Diagnostic only (never blocks): the installed version vs the one host.json recorded at the last successful
     start of our instance."""
@@ -1233,33 +1251,81 @@ def app_version_check(host=None) -> dict:
 @dataclass
 class CliParts:
     """What doctor / signin / app need. `host`: gemini_host.Host (its `os` is the HostOS, its `cfg` the stub,
-    profile and switches); `open_tree(session)`: the driver's tree for an instance on the hidden desktop;
-    `tree_on(desktop, pids)`: a UiTree of those pids' windows for a thread on `desktop` (the real one switches the
-    thread first unless it is the default desktop); `quit_via_menu`: override of the app-menu quit."""
+    dedicated data dir and switches); `open_tree(session)`: the driver's tree for an instance on the hidden desktop
+    (it moves the calling thread there for good: the process ends after the command);
+    `run_on(desktop, pids, fn)`: fn(tree) with a UiTree of those pids' windows, run in a fresh thread put on
+    `desktop` (the calling thread's desktop is never changed); tests inject `tree_on(desktop, pids)` instead, which
+    is called in the caller's thread; `quit_via_menu`: override of the app-menu quit."""
     host: Any
     open_tree: Callable[[Any], Any]
-    tree_on: Callable[[str, list], Any]
+    tree_on: Optional[Callable[[str, list], Any]] = None
     locs: Optional[dict] = None
     clock: Callable[[], float] = time.time
     sleep: Callable[[float], None] = time.sleep
     tool_dir: Optional[Path] = None
     quit_via_menu: Optional[Callable[[str, list, list], None]] = None
+    run_on: Optional[Callable[[str, list, Callable[[Any], Any]], Any]] = None
+
+
+def _with_tree(parts: CliParts, desktop: str, pids: list, fn: Callable[[Any], Any]):
+    if parts.run_on is not None:
+        return parts.run_on(desktop, list(pids), fn)
+    return fn(parts.tree_on(desktop, list(pids)))
+
+
+_GENERIC_ALL = 0x10000000
+
+
+def run_on_desktop(desktop: str, pids: list, fn: Callable[[Any], Any]):
+    """fn(UiaTree of `pids`) in a new thread switched onto `desktop` (SetThreadDesktop before comtypes is touched
+    in that thread, COM initialised for the thread); the thread ends afterwards, so no thread's desktop is left
+    changed. Refused inside the test sandbox."""
+    import threading
+    gemini_host.refuse_in_sandbox()
+    box: dict = {}
+
+    def work():
+        handle = None
+        try:
+            import ctypes
+            import ctypes.wintypes as wt
+            u32 = ctypes.WinDLL("user32", use_last_error=True)
+            if desktop.lower() != DEFAULT_DESKTOP.lower():
+                u32.OpenDesktopW.restype = wt.HANDLE
+                u32.OpenDesktopW.argtypes = [wt.LPCWSTR, wt.DWORD, wt.BOOL, wt.DWORD]
+                u32.SetThreadDesktop.argtypes = [wt.HANDLE]
+                u32.CloseDesktop.argtypes = [wt.HANDLE]
+                handle = u32.OpenDesktopW(desktop, 0, False, _GENERIC_ALL)
+                if not handle:
+                    raise gemini_host.HostError("HOST_DESKTOP_LOST", "the hidden desktop cannot be opened")
+                if not u32.SetThreadDesktop(handle):
+                    raise OSError(ctypes.get_last_error(), "SetThreadDesktop failed")
+            import comtypes  # first touched on this thread after the switch
+            comtypes.CoInitialize()
+            try:
+                import uia_backend
+                keep = frozenset(pids)
+                box["value"] = fn(uia_backend.UiaTree(uia_backend.load_com(), lambda pid: pid in keep))
+            finally:
+                comtypes.CoUninitialize()
+        except BaseException as exc:  # noqa: BLE001 - re-raised in the caller's thread
+            box["error"] = exc
+        finally:
+            if handle:
+                u32.CloseDesktop(handle)
+
+    t = threading.Thread(target=work, name="agy-dr-uia-" + desktop, daemon=True)
+    t.start()
+    t.join()
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
 
 
 def default_cli_parts(a) -> CliParts:
     """The real host and trees, built by the driver's factory (refused inside the test sandbox first)."""
-    rdr = _rdr()
-    dp = rdr.default_driver_factory(a)
-
-    def tree_on(desktop: str, pids: list):
-        if desktop.lower() != DEFAULT_DESKTOP.lower():
-            rdr._switch_thread_desktop(desktop)  # before comtypes is imported (measured requirement)
-        import uia_backend
-        com = uia_backend.load_com()
-        keep = frozenset(pids)
-        return uia_backend.UiaTree(com, lambda pid: pid in keep)
-
-    return CliParts(host=dp.host, open_tree=dp.open_tree, tree_on=tree_on)
+    dp = _rdr().default_driver_factory(a)
+    return CliParts(host=dp.host, open_tree=dp.open_tree, run_on=run_on_desktop)
 
 
 def _parts(a) -> CliParts:
@@ -1278,20 +1344,39 @@ def _same_file(x: Path, y: Path) -> bool:
         return False
 
 
+REEXEC_VAR = "AGY_DR_REEXEC"
+
+
+def comtypes_pinned() -> bool:
+    """The pinned comtypes is installed for this interpreter (package metadata only; comtypes is not imported)."""
+    import importlib.metadata
+    try:
+        return importlib.metadata.version("comtypes") == COMTYPES_PIN.split("==", 1)[1]
+    except importlib.metadata.PackageNotFoundError:
+        return False
+
+
 def _uia_reexec(a, required: bool = True) -> int | None:
-    """None: go on in this process. Otherwise this command was re-run in the driver venv (comtypes) and the
-    child's exit code is returned. Refused inside the test sandbox unless the parts are injected."""
+    """None: go on in this process. Otherwise this command was re-run in the driver venv (pinned comtypes) and the
+    child's exit code is returned. Refused inside the test sandbox unless the parts are injected; a re-run child
+    (AGY_DR_REEXEC=1) never re-runs again."""
     if getattr(a, "_parts_factory", None) is not None:
         return None
     gemini_host.refuse_in_sandbox()
-    import importlib.util
-    if importlib.util.find_spec("comtypes") is not None:  # found, not imported: the desktop switch comes first
+    if comtypes_pinned():
+        return None
+    import uia_backend
+    if os.environ.get(REEXEC_VAR) == "1":
+        if required:
+            raise uia_backend.UiaUnavailable("reexec_loop", detail="the driver venv has no %s" % COMTYPES_PIN)
         return None
     py = venv_python(venv_dir())
     if py.is_file() and not _same_file(Path(sys.executable), py):
-        return subprocess.run([str(py), "-I", str(SCRIPT_DIR / "deep_research.py"), *a._argv]).returncode
+        env = gemini_host.clean_env(os.environ)
+        env[REEXEC_VAR] = "1"
+        runner = getattr(a, "_runner", None) or _run_command
+        return runner([str(py), "-I", str(SCRIPT_DIR / "deep_research.py"), *a._argv], env=env)
     if required:
-        import uia_backend
         raise uia_backend.UiaUnavailable("comtypes", detail="the driver venv is missing")
     return None
 
@@ -1386,7 +1471,7 @@ def _quit_fn(parts: CliParts, locs: dict):
         return parts.quit_via_menu
 
     def quit_via_menu(desktop: str, pids: list, hwnds: list) -> None:
-        menu_quit(parts.tree_on(desktop, list(pids)), locs, parts.clock, parts.sleep)
+        _with_tree(parts, desktop, pids, lambda tree: menu_quit(tree, locs, parts.clock, parts.sleep))
 
     return quit_via_menu
 
@@ -1486,6 +1571,18 @@ def _outside_app_dir(path: Path) -> None:
         raise gemini_host.HostRefused("refusing to write under the Gemini app directory")
 
 
+def _doctor_close(parts: CliParts, locs: dict, session) -> tuple[bool, dict]:
+    host = parts.host
+    try:
+        mine = [i for i in host.instances(active_job_ids()) if i.browser_pid == session.browser_pid]
+        if not mine:
+            return True, {"remaining": 0, "method": "none"}
+        res = host.close(mine[0], _quit_fn(parts, locs))
+        return res.remaining == 0, _close_json(mine[0], res)
+    except Exception as exc:  # noqa: BLE001 - reported; `app close` can finish the job
+        return False, {"error": type(exc).__name__}
+
+
 def cmd_doctor(a) -> int:
     rc = _unsupported("doctor", a)
     if rc is not None:
@@ -1505,20 +1602,29 @@ def cmd_doctor(a) -> int:
                            if ours else None)
             else:
                 session = host.ensure(None)
-            insts = host.instances(active_job_ids())
-            state = host.load_state() or {}
-            out.update(host_mode=session.mode if session else None,
-                       host_reason=session.reason if session else None,
-                       app_version=state.get("app_version") if session else None,
-                       instances=[instance_json(i) for i in insts],
-                       locators_override=_override_keys())
+            started = session is not None and session.reason != "reused"
             snap = None
-            if session is None:
-                out.update(binding=None, privacy_region=None, signed_in=None, locators=None,
-                           message="no instance of ours on the hidden desktop (run doctor without --no-start)")
-            else:
-                report, snap = doctor_report(parts.open_tree(session), locs)
-                out.update(report)
+            try:
+                insts = host.instances(active_job_ids())
+                state = host.load_state() or {}
+                out.update(host_mode=session.mode if session else None,
+                           host_reason=session.reason if session else None,
+                           app_version=state.get("app_version") if session else None,
+                           instances=[instance_json(i) for i in insts],
+                           locators_override=_override_keys(), started=started, closed=None)
+                if session is None:
+                    out.update(binding=None, privacy_region=None, signed_in=None, locators=None,
+                               message="no instance of ours on the hidden desktop (run doctor without --no-start)")
+                else:
+                    mine = [i for i in insts if i.browser_pid == session.browser_pid]
+                    if len(mine) != 1:
+                        raise gemini_host.HostError("HOST_DESKTOP_LOST", "our Gemini instance is gone")
+                    report, snap = _with_tree(parts, session.desktop, mine[0].pids,
+                                              lambda tree: doctor_report(tree, locs))
+                    out.update(report)
+            finally:
+                if started:  # doctor never leaves behind an instance it started itself; a reused one stays
+                    out["closed"], out["close"] = _doctor_close(parts, locs, session)
         if a.snapshot and snap is not None:
             base = Path(parts.tool_dir) if parts.tool_dir is not None else tool_dir()
             path = base / "doctor" / ("snapshot-%s.json" % _dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
@@ -1545,13 +1651,15 @@ def _ours_on(host, desktop: str, since: float | None = None) -> tuple[list, list
 
 
 def _signed_in_now(parts: CliParts, locs: dict, pids: list) -> bool:
-    try:
-        tree = parts.tree_on(DEFAULT_DESKTOP, pids)
+    def check(tree) -> bool:
         convs = _conversation_docs(tree)
         if len(convs) != 1:
             return False
         doc = tree.snapshot(convs[0].id)
         return signed_in_state(doc, locators.LocatorContext(tree, doc, locs, set()))
+
+    try:
+        return bool(_with_tree(parts, DEFAULT_DESKTOP, pids, check))
     except (KeyError, OSError, uitree.PatternNotSupported, locators.LocatorMiss):
         return False   # the page is still loading or changing: try again
 
@@ -1599,7 +1707,7 @@ def cmd_signin(a) -> int:
             env = gemini_host.clean_env(os.environ if cfg.environ is None else cfg.environ)
             t0 = parts.clock()
             host.os.launch(cmd, "%s\\%s" % (gemini_host.WINDOW_STATION, DEFAULT_DESKTOP), env, cfg.profile_dir)
-            log("signin: started the dedicated profile on the default desktop; sign in there (nothing is typed "
+            log("signin: started the dedicated data dir on the default desktop; sign in there (nothing is typed "
                 "for you)")
             signed, pids = False, []
             try:
@@ -1609,7 +1717,7 @@ def cmd_signin(a) -> int:
                     if hwnds:
                         break
                     if parts.clock() - t0 >= gemini_host.START_TIMEOUT_S:
-                        raise gemini_host.HostError("HOST_START_TIMEOUT", "the dedicated-profile window did not "
+                        raise gemini_host.HostError("HOST_START_TIMEOUT", "the dedicated data-dir window did not "
                                                     "appear on the default desktop")
                     parts.sleep(cfg.poll_s)
                 deadline = parts.clock() + float(a.timeout)
@@ -1633,7 +1741,7 @@ def cmd_signin(a) -> int:
         rc = 0 if signed else 2
         if not signed:
             out.update(code="NOT_SIGNED_IN", exit_code=2,
-                       message="no signed-in account was detected before the window closed or the timeout")
+                       message="no sign-in was detected before the window closed or the timeout")
         _emit(out)
         return rc
     except Exception as exc:  # noqa: BLE001

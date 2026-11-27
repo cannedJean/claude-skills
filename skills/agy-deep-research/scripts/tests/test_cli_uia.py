@@ -68,16 +68,27 @@ def page(signed_in=False):
 class QuitTree(FakeTree):
     """Invoking `종료` ends our instance (the user's processes are never touched by the tree)."""
 
-    def __init__(self, spec, fake):
+    def __init__(self, spec, fake, pids=OUR_PIDS):
         super().__init__(spec)
-        self.fake = fake
+        self.fake, self.pids = fake, set(pids)
 
     def act(self, node_id, pattern):
         super().act(node_id, pattern)
         if node_id == "pm_quit":
             for pid in list(self.fake.procs):
-                if pid in OUR_PIDS:
+                if pid in self.pids:
                     self.fake.kill(pid)
+
+
+def install_fake_app():
+    """A launcher stub and one app-1.2.3 folder in the SANDBOX %LOCALAPPDATA% (never the real one)."""
+    base = os.environ["LOCALAPPDATA"]
+    assert "agy-dr-sandbox-" in base, base
+    root = Path(base) / "Google" / "Gemini"
+    (root / "app-1.2.3").mkdir(parents=True, exist_ok=True)
+    for exe in (root / "Gemini.exe", root / "app-1.2.3" / "Gemini.exe"):
+        if not exe.exists():
+            exe.write_bytes(b"")
 
 
 def add_our_instance(fake, desktop=OURS):
@@ -99,6 +110,7 @@ class CliHarness(unittest.TestCase):
                                            "AGY_DR_SKILL_DIR": str(self.tmp / "target")})
         env.start()
         self.addCleanup(env.stop)
+        install_fake_app()
         self.fake = FakeOS()
         self.host = make_host(self.fake)
         self.tree_calls = []
@@ -232,6 +244,25 @@ class PreflightTests(CliHarness):
             _, res, _, _ = self.run_cli(["preflight"], parts=self.parts())
         self.assertFalse(res["checks"]["app_version"]["changed"])
 
+    def test_app_not_installed(self):
+        self.make_venv()
+        _, res, _, _ = self.run_cli(["preflight"], parts=self.parts())
+        self.assertEqual(res["checks"]["app"], {"ok": True, "launcher": True, "version": "1.2.3"})
+        self.assertNotIn("APP_NOT_INSTALLED", res["codes"])
+        rdr = dr._rdr()
+        with mock.patch.object(rdr, "default_stub", return_value=str(self.tmp / "none" / "Gemini.exe")):
+            rc, res, _, _ = self.run_cli(["preflight"], parts=self.parts())
+        self.assertEqual(rc, 4)
+        self.assertIn("APP_NOT_INSTALLED", res["codes"])
+        self.assertEqual(res["checks"]["app"]["code"], "APP_NOT_INSTALLED")
+        stub_only = self.tmp / "stub_only"
+        stub_only.mkdir()
+        (stub_only / "Gemini.exe").write_bytes(b"")
+        with mock.patch.object(rdr, "default_stub", return_value=str(stub_only / "Gemini.exe")):
+            _, res, _, _ = self.run_cli(["preflight"], parts=self.parts())
+        self.assertEqual(res["checks"]["app"], {"ok": False, "launcher": True, "version": None,
+                                                "code": "APP_NOT_INSTALLED"})
+
     def test_installed_app_version_reads_the_newest_app_folder(self):
         root = self.tmp / "Local" / "Google" / "Gemini"
         for ver in ("1.2.3", "1.10.0", "2.0.0-empty"):
@@ -325,6 +356,49 @@ class DoctorTests(CliHarness):
         # read-only: nothing acted on, typed or launched
         self.assertEqual(self.tree.actions, [])
         self.assertEqual(self.fake.launches(), [])
+        self.assertEqual((res["started"], res["closed"]), (False, None))   # a reused instance stays
+        self.assertIn(7000, self.fake.procs)
+
+    def test_doctor_closes_the_instance_it_started(self):
+        add_user_instance(self.fake)
+        self.fake.on_launch = lambda cmd, desk: start_d2_instance(self.fake)
+        tree = QuitTree(page(), self.fake)
+        rc, res, text, _ = self.run_cli(["doctor"], parts=self.parts(tree))
+        self.assertEqual(rc, 0, res)
+        self.assertEqual((res["host_mode"], res["host_reason"], res["started"], res["closed"]),
+                         ("D2", None, True, True))
+        self.assertEqual((res["close"]["method"], res["close"]["remaining"]), ("menu", 0))
+        self.assertEqual(res["locators"]["prompt_input"]["status"], "resolved")
+        self.assertFalse(OUR_PIDS & set(self.fake.procs))
+        self.assertTrue(USER_PIDS <= set(self.fake.procs))
+        self.assertEqual(self.fake.terminated(), [])
+        self.assertEqual([x[1] for x in tree.actions], ["tb_menu", "pm_file", "pm_quit"])  # report acted on nothing
+        for desktop, pids in self.tree_calls:
+            self.assertEqual(desktop, OURS)
+            self.assertTrue(set(pids) <= OUR_PIDS)
+        self.assert_no_secrets(text)
+
+    def test_doctor_close_failure_is_reported(self):
+        self.fake.on_launch = lambda cmd, desk: start_d2_instance(self.fake)
+        self.host.close = mock.Mock(side_effect=OSError("boom"))
+        rc, res, _, _ = self.run_cli(["doctor"], parts=self.parts(FakeTree(page())))
+        self.assertEqual((rc, res["started"], res["closed"], res["close"]), (0, True, False, {"error": "OSError"}))
+
+    def test_doctor_d1_fallback_reason_survives_scrub(self):
+        def guard_exit(cmd, desk):
+            if UDD in cmd:
+                self.fake.at(1.0, lambda: self.fake.add_proc(7000, 4242, '"%s" %s' % (APP, UDD)))
+                self.fake.at(2.0, lambda: self.fake.kill(7000))
+            else:
+                self.fake.at(1.0, lambda: self.fake.add_proc(8000, 4343, '"%s"' % APP))
+                self.fake.at(2.0, lambda: self.fake.add_window(OURS, 8000))
+        self.fake.on_launch = guard_exit
+        tree = QuitTree(page(), self.fake, pids={8000})
+        rc, res, _, _ = self.run_cli(["doctor"], parts=self.parts(tree))
+        self.assertEqual(rc, 0, res)
+        self.assertEqual((res["host_mode"], res["host_reason"]), ("D1", "data_dir_switch_ignored"))
+        self.assertEqual((res["started"], res["closed"]), (True, True))
+        self.assertNotIn(8000, self.fake.procs)
 
     def test_miss_candidates_never_come_from_the_sidebar(self):
         add_our_instance(self.fake)
@@ -448,6 +522,108 @@ class SigninTests(CliHarness):
             rc, res, _, _ = self.run_cli(["signin"], parts=self.parts(FakeTree(page())))
         self.assertEqual(res["code"], "HOST_BUSY")
         self.assertEqual(self.fake.launches(), [])
+
+
+class ScrubSurvivalTests(CliHarness):
+    """Host reasons and messages must reach the user: none may contain a word privacy.scrub blanks."""
+
+    def test_every_host_message_literal_survives_scrub(self):
+        import ast
+        import privacy
+        src = Path(gh.__file__).read_text(encoding="utf-8")
+        seen = 0
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", "")) in (
+                    "HostError", "Decision", "_fail", "HostSession"):
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant):
+                        parts = [arg]
+                    elif isinstance(arg, ast.JoinedStr):
+                        parts = [v for v in arg.values if isinstance(v, ast.Constant)]
+                    else:
+                        parts = []
+                    for c in parts:
+                        if isinstance(c.value, str):
+                            seen += 1
+                            self.assertEqual(privacy.scrub(c.value), c.value, c.value)
+        self.assertGreater(seen, 8)
+        for reason in ("reused", "data_dir_switch_ignored"):
+            self.assertEqual(privacy.scrub(reason), reason)
+
+    def test_host_busy_from_ensure_survives_scrub(self):
+        add_our_instance(self.fake, desktop="Default")   # the dedicated data dir runs visibly (signin left over)
+        rc, res, _, _ = self.run_cli(["doctor"], parts=self.parts(FakeTree(page())))
+        self.assertEqual(res["code"], "HOST_BUSY")
+        self.assertIn("dedicated data-dir instance runs outside the hidden desktop", res["message"])
+
+    def test_signin_start_timeout_message_survives_scrub(self):
+        rc, res, _, err = self.run_cli(["signin"], parts=self.parts(FakeTree(page())))
+        self.assertEqual(res["code"], "HOST_START_TIMEOUT")
+        self.assertIn("dedicated data-dir window did not", res["message"])
+        self.assertIn("started the dedicated data dir on the default desktop", err)
+
+    def test_signin_not_signed_in_message_survives_scrub(self):
+        self.fake.on_launch = lambda cmd, desk: start_d2_instance(self.fake, desktop="Default")
+        _, res, _, _ = self.run_cli(["signin", "--timeout", "5"], parts=self.parts(QuitTree(page(), self.fake)))
+        self.assertTrue(res["message"].startswith("no sign-in was detected"), res["message"])
+
+
+class ReexecTests(CliHarness):
+    def argv_run(self, env_extra=None, pinned=False):
+        ran = []
+
+        def runner(argv, env=None):
+            ran.append((argv, env))
+            return 7
+        env = dict({"NODE_OPTIONS": "x", "ELECTRON_RUN_AS_NODE": "1"}, **(env_extra or {}))
+        with mock.patch.object(gh, "refuse_in_sandbox"), \
+                mock.patch.object(dr, "comtypes_pinned", return_value=pinned), \
+                mock.patch.dict(os.environ, env):
+            rc, res, _, _ = self.run_cli(["doctor", "--no-start"], runner=runner)
+        return rc, res, ran
+
+    def test_reexec_argv_env_and_runner(self):
+        self.make_venv()
+        rc, res, ran = self.argv_run()
+        self.assertEqual(rc, 7)
+        ((argv, env),) = ran
+        self.assertEqual(argv, [str(dr.venv_python(self.venv)), "-I", str(dr.SCRIPT_DIR / "deep_research.py"),
+                                "doctor", "--no-start"])
+        self.assertEqual(env[dr.REEXEC_VAR], "1")
+        self.assertNotIn("NODE_OPTIONS", env)
+        self.assertNotIn("ELECTRON_RUN_AS_NODE", env)
+
+    def test_reexec_child_never_reexecs_again(self):
+        self.make_venv()
+        with mock.patch.object(dr, "_parts", side_effect=AssertionError("must not build the host")):
+            rc, res, ran = self.argv_run({dr.REEXEC_VAR: "1"})
+        self.assertEqual(ran, [])
+        self.assertEqual((rc, res["code"], res["details"]["reason"]), (3, "UIA_UNAVAILABLE", "reexec_loop"))
+
+    def test_pinned_comtypes_runs_in_process(self):
+        self.make_venv()
+        with mock.patch.object(dr, "_parts", side_effect=gh.HostRefused("sandbox")):
+            rc, res, ran = self.argv_run(pinned=True)
+        self.assertEqual(ran, [])
+        self.assertEqual(res["code"], "HOST_REFUSED")
+
+    def test_no_venv_is_uia_unavailable(self):
+        rc, res, ran = self.argv_run()
+        self.assertEqual((ran, res["code"]), ([], "UIA_UNAVAILABLE"))
+        self.assertEqual(res["setup_command"], dr.setup_command())
+
+    def test_comtypes_pinned_reads_metadata_only(self):
+        import importlib.metadata as md
+        with mock.patch.object(md, "version", return_value="1.4.10"):
+            self.assertFalse(dr.comtypes_pinned())
+        with mock.patch.object(md, "version", return_value="1.4.11"):
+            self.assertTrue(dr.comtypes_pinned())
+        with mock.patch.object(md, "version", side_effect=md.PackageNotFoundError("comtypes")):
+            self.assertFalse(dr.comtypes_pinned())
+
+    def test_real_run_on_desktop_is_refused_in_the_sandbox(self):
+        with self.assertRaises(gh.HostRefused):
+            dr.run_on_desktop(OURS, [1], lambda tree: None)
 
 
 class AppTests(CliHarness):

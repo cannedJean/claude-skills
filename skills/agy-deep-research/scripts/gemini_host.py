@@ -234,7 +234,7 @@ def decide_mode(job_mode: Optional[str], d2: Optional[Literal["ok", "blocked", "
             return Decision("D2", None, None)
         if d2 == "timeout":
             return Decision(None, "HOST_START_TIMEOUT", "Gemini did not start in time")
-        return Decision(None, "HOST_MODE_UNAVAILABLE", f"job is pinned to D2 but the profile launch is {d2}")
+        return Decision(None, "HOST_MODE_UNAVAILABLE", f"job is pinned to D2 but the dedicated data-dir launch is {d2}")
     if job_mode == "D1":
         if user_gemini_running:
             return Decision(None, "GEMINI_IN_USE", "job is pinned to D1 but a Gemini process of the user is running")
@@ -243,8 +243,8 @@ def decide_mode(job_mode: Optional[str], d2: Optional[Literal["ok", "blocked", "
         return Decision("D2", None, None)
     if d2 == "blocked":
         if not user_gemini_running:
-            return Decision("D1", None, "profile_switch_ignored")
-        return Decision(None, "GEMINI_IN_USE", "the profile switch is ignored and a Gemini process of the user is running")
+            return Decision("D1", None, "data_dir_switch_ignored")
+        return Decision(None, "GEMINI_IN_USE", "the data-dir switch is ignored and a Gemini process of the user is running")
     return Decision(None, "HOST_START_TIMEOUT", "Gemini did not start in time")
 
 
@@ -377,7 +377,7 @@ class HostSession:
     mode: Literal["D2", "D1"]
     desktop: str
     browser_pid: int
-    reason: Optional[str] = None  # "reused" | "profile_switch_ignored" | None
+    reason: Optional[str] = None  # "reused" | "data_dir_switch_ignored" | None
 
 
 @dataclass
@@ -611,7 +611,7 @@ class Host:
                                 f"job is pinned to {job_mode} but the running instance is {mode}")
             return self._session(mode, root, "reused")
         if any(self._ours_d2(p) for p in byid.values()):
-            raise HostError("HOST_BUSY", "the dedicated-profile instance runs outside the hidden desktop "
+            raise HostError("HOST_BUSY", "the dedicated data-dir instance runs outside the hidden desktop "
                                          "(signin or a visible debug window); close it first")
         if job_mode == "D1":
             dec = decide_mode("D1", None, self._user_running(byid, blind))

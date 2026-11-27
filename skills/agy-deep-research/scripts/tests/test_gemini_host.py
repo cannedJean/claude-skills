@@ -141,7 +141,7 @@ class ClassifyTests(unittest.TestCase):
 class DecideTests(unittest.TestCase):
     def test_decide_blocked_falls_back_to_d1_only_without_user_app(self):
         d = gh.decide_mode(None, "blocked", False)
-        self.assertEqual((d.mode, d.reason), ("D1", "profile_switch_ignored"))
+        self.assertEqual((d.mode, d.reason), ("D1", "data_dir_switch_ignored"))
         d = gh.decide_mode(None, "blocked", True)
         self.assertEqual((d.mode, d.code), (None, "GEMINI_IN_USE"))
         self.assertEqual(gh.decide_mode(None, "ok", True).mode, "D2")
@@ -212,7 +212,7 @@ class ReviewFixTests(unittest.TestCase):
         cases = [
             ((None, "ok", False), D("D2", None, None)),
             ((None, "ok", True), D("D2", None, None)),
-            ((None, "blocked", False), D("D1", None, "profile_switch_ignored")),
+            ((None, "blocked", False), D("D1", None, "data_dir_switch_ignored")),
             (("D2", "ok", False), D("D2", None, None)),
             (("D1", "ok", False), D("D1", None, None)),
             (("D1", "blocked", False), D("D1", None, None)),

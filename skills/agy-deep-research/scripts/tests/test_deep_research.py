@@ -62,6 +62,14 @@ class DeepResearchTestBase(unittest.TestCase):
         (site / "comtypes-1.4.11.dist-info").mkdir()
         (self.venv_dir / "Scripts").mkdir()
         (self.venv_dir / "Scripts" / "python.exe").write_bytes(b"")
+        # ... and an installed app (APP_NOT_INSTALLED otherwise): empty files in the SANDBOX %LOCALAPPDATA% only
+        base = os.environ["LOCALAPPDATA"]
+        assert "agy-dr-sandbox-" in base, base
+        app_root = Path(base) / "Google" / "Gemini"
+        (app_root / "app-1.2.3").mkdir(parents=True, exist_ok=True)
+        for exe in (app_root / "Gemini.exe", app_root / "app-1.2.3" / "Gemini.exe"):
+            if not exe.exists():
+                exe.write_bytes(b"")
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp_root, ignore_errors=True)

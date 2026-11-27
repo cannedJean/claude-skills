@@ -188,7 +188,7 @@ class EnsureTests(unittest.TestCase):
                 fake.at(2.0, lambda: fake.add_window(OURS, 8000))
         fake.on_launch = guard_exit
         s = make_host(fake).ensure(None)
-        self.assertEqual((s.mode, s.browser_pid, s.reason), ("D1", 8000, "profile_switch_ignored"))
+        self.assertEqual((s.mode, s.browser_pid, s.reason), ("D1", 8000, "data_dir_switch_ignored"))
         cmds = [c[1] for c in fake.launches()]
         self.assertEqual(cmds, [gh.build_launch_command(STUB, PROFILE, gh.ALLOWED_FLAG_SWITCHES),
                                 gh.build_launch_command(STUB, None, [])])
@@ -201,7 +201,7 @@ class EnsureTests(unittest.TestCase):
             fake.at(2.0, lambda: fake.add_window(OURS, 8000))
         fake.on_launch = ignored
         s = make_host(fake).ensure(None)
-        self.assertEqual((s.mode, s.browser_pid, s.reason), ("D1", 8000, "profile_switch_ignored"))
+        self.assertEqual((s.mode, s.browser_pid, s.reason), ("D1", 8000, "data_dir_switch_ignored"))
         self.assertEqual(len(fake.launches()), 1)
 
     def test_d2_slow_start_is_pending_then_ok(self):
