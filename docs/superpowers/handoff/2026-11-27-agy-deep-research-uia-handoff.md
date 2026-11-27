@@ -35,7 +35,7 @@ Review status: **reviewed** = task review + fixes + scoped re-review clean; **fi
 | R1 approve + long research wait | 46cfa9b (Claude), 677fd65 (relay codes), 378cbea (fix 1, agy Neon) | fix 1 re-reviewed (Claude): 12/12 addressed; **1 Important open**: plan/edit report `cards` = turns with a start button, approve now compares `expect_cards` with turns holding any plan control → false `PLAN_CARD_STALE` when a startless plan-control turn precedes the reviewed card (steps.py ~770/791 vs approve). Minor open: docstring says UNEXPECTED_SURFACE "started? no" for approve, but after the Invoke it may have started. |
 | Docs | 1b309f1 (§23 live results), 59d8305 (plan 3), 2b35d11 + this commit (paths → placeholder) | — |
 
-Test state at handoff: run_verification 7/7 at 378cbea (lead, before the handoff docs); **final full test run after this commit not executed** (docs-only commit).
+Test state at handoff: run_verification 7/7 at 378cbea (lead, before the handoff docs). Supervisor run at e1cbaea (2026-11-27): agy-deep-research `unittest discover` 781 tests OK (1 skipped); agy-delegate 98 tests OK with system Python.
 
 Review artifacts and per-task ledgers (not in git, may be missing): `<work folder>\uia\.superpowers\sdd\…\progress.md`. The B5 and R1 review texts that drove the last fixes are summarised in §4.
 
