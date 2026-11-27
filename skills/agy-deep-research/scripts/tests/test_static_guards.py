@@ -94,6 +94,13 @@ class StaticGuardsTest(unittest.TestCase):
                 res = rv.check_forbidden_automation(self.skill)
                 self.assertTrue(res["passed"], (ok, res["errors"]))
 
+    def test_flags_switches_after_comma_or_quote(self):
+        for lit in ("a,--no-sandbox", 'x "--no-sandbox"', "x '--no-sandbox'", '"--remote-allow-origins=*"',
+                    "--disable-renderer-backgrounding,--no-sandbox"):
+            with self.subTest(lit=lit):
+                self.put("gemini_host.py", ALLOWED_HOST + f"\nBAD = {lit!r}\n")
+                self.assertFalse(rv.check_forbidden_automation(self.skill)["passed"], lit)
+
     def test_allows_the_four_switches(self):
         self.put("gemini_host.py", ALLOWED_HOST)
         res = rv.check_forbidden_automation(self.skill)

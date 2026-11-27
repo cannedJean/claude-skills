@@ -319,8 +319,9 @@ ALLOWED_SWITCHES = {
     "--disable-features=CalculateNativeWinOcclusion",
 }
 _SWITCH_LITERAL = re.compile(r"^--[A-Za-z][\w-]*(=.*)?$", re.S)
-# every switch inside a string literal, also after other text ("--user-data-dir=x --no-sandbox", " --no-sandbox")
-_EMBEDDED_SWITCH = re.compile(r"(?:^|(?<=\s))--[A-Za-z][\w-]*(?:=\S*)?")
+# every switch inside a string literal, also after other text, a comma or a quote
+# ("--user-data-dir=x --no-sandbox", " --no-sandbox", "a,--no-sandbox", 'x "--no-sandbox"')
+_EMBEDDED_SWITCH = re.compile(r"(?:^|(?<=[\s,\"']))--[A-Za-z][\w-]*(?:=[^\s,\"']*)?")
 _APP_DIR_LITERAL = re.compile(r"Google[\\/]+Gemini", re.I)
 # Receiver-qualified (os.x / shutil.x) so str.replace / dict.copy never count as writes.
 _OS_WRITES = {"replace", "remove", "makedirs", "mkdir", "rename", "unlink", "rmdir", "open"}
