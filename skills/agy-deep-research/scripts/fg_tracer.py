@@ -5,26 +5,33 @@ r"""fg_tracer.py - R6 invariant tracer: the driver never changes the default des
 default, input desktop) every `period_s`, and every `window_every` samples the visible top-level windows there.
 It records, per change, only the foreground process image basename and whether it is a Gemini app process and
 whether it belongs to OUR instance. "Ours" = a pid of our verified instance tree: `our_pids()` is a callable that
-returns the pids (in detached mode gemini_host.Host.instances(), which never lists the user's instances); it is
-called again every `refresh_s` because our instance may start after the tracer, and every pid it ever returned
-stays ours for the tracer's lifetime, so a foreground event seen before the pid was known is re-classified at
-stop(). The user's own Gemini windows are visible and come to the foreground on the default desktop all the time
-(live 2026-11-27: 58 foreground changes, ours 0): they are counted (`gemini_foreground_events`,
-`visible_windows`) but are never a violation. Violation = one of our pids owned the foreground window, or owned a
-visible top-level window on this desktop (`ours.foreground_events` / `ours.visible_window_samples` > 0).
+returns the pids (in detached mode `host_pids_source`: `gemini_host.Host.instances()`, any Gemini process tree
+matching our dedicated `--user-data-dir`, and the verified tree of the session in `host.json` / the job's
+`relay/driver_state.json` so even a D1 instance that lands on the default desktop is caught); it is called again
+every `refresh_s` because our instance may start after the tracer, and every pid it ever returned stays ours for
+the tracer's lifetime, so a foreground event seen before the pid was known is re-classified at stop(). The user's
+own Gemini windows are visible and come to the foreground on the default desktop all the time (live 2026-11-27:
+58 foreground changes, ours 0): they are counted (`gemini_foreground_events`, `visible_windows`) but are never a
+violation. Violation = one of our pids owned the foreground window, or owned a visible top-level window on this
+desktop (`ours.foreground_events` / `ours.visible_window_samples` > 0).
 
 No window title is ever read. The OS surface is `FgOS` (injectable); `Win32FgOS` is the real one (ctypes, loaded
 lazily) and refuses every call with gemini_host.HostRefused("sandbox") under AGY_DR_TEST_SANDBOX=1.
 
-Detached mode (started by relay_step.py around a plan / edit driver run, on the default desktop):
+Detached mode (started by deep_research.py on the user's default desktop around each agy relay step — never by
+relay_step.py, which runs on agy's hidden `exebox-*` desktop):
 
-    python fg_tracer.py --job <job dir> --watch-pid <pid> [--run-id ID] [--max-s SEC] [--stop-on-eof]
+    python -I fg_tracer.py --job <job dir> [--watch-pid <pid>] [--stop-file <path>...] [--run-id ID]
+                           [--max-s SEC] [--stop-on-eof] [--seed-pid PID...]
 
-appends one scrubbed JSON object per line to <job>/relay/foreground.jsonl (protected from agy by the agy-delegate
-confine hook): a `start` record, one `foreground` record per foreground change, one `visible` record per change of
-the visible-Gemini-window state, and an `end` record with the summary. Every record carries `run` and holds only
-event names, times, counts, process image basenames and booleans. It exits when the watched pid ends, when stdin
-reaches EOF (`--stop-on-eof`: the relay closes the pipe to stop it), or after `--max-s` seconds.
+appends one scrubbed JSON object per line to `<job>/relay/foreground.jsonl` (protected from agy by the agy-delegate
+confine hook; `--job` and every `--stop-file` must resolve inside the given job directory): a `start` record, one
+`foreground` record per foreground change, one `visible` record per change of the visible-Gemini-window state, and
+an `end` record with the summary. Every record carries `run` and holds only event names, times, counts, process
+image basenames and booleans. For synchronous steps (`plan`, `edit`, `collect` wait) `deep_research.py` passes
+`--watch-pid` and `--stop-on-eof`; for detached-worker steps (`approve`, `auto`, `collect --detach`, including
+`--no-wait`) it passes `--stop-file <job>/relay/result.json` (plus a per-run stop file) so the tracer stays alive
+on the default desktop until the worker finishes and writes `result.json`, or `--max-s` seconds pass.
 Exit codes: 0 ok | 3 environment error (refused, no Win32) | 5 bad arguments. Python 3.9+, stdlib only.
 """
 from __future__ import annotations
@@ -57,6 +64,8 @@ JSONL_NAME = "foreground.jsonl"
 DEFAULT_MAX_S = 3600.0
 WATCH_EVERY_S = 0.5
 MAX_EVENTS = 100000
+DEFAULT_DESKTOP = "Default"
+DRIVER_STATE_REL = os.path.join("relay", "driver_state.json")
 
 
 def now_iso() -> str:
@@ -339,30 +348,154 @@ class Win32FgOS:
             k.CloseHandle(h)
 
 
-def host_pids_source(host) -> Callable[[], List[int]]:
-    """Our verified instance pids from a gemini_host.Host (never the user's instances)."""
+def _inside_dir(base: str, target: str) -> bool:
+    """True only when `target` (after resolving symlinks and '..') lies strictly inside `base`."""
+    try:
+        base_r = os.path.normcase(os.path.realpath(base))
+        target_r = os.path.normcase(os.path.realpath(target))
+        if target_r == base_r:
+            return False
+        return os.path.commonpath([base_r, target_r]) == base_r
+    except (OSError, ValueError):
+        return False
+
+
+def _read_driver_state(job: Optional[str]) -> Optional[dict]:
+    if not job:
+        return None
+    path = os.path.join(os.path.realpath(job), DRIVER_STATE_REL)
+    if not _inside_dir(job, path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _tree_pids(pid: int, byid: dict) -> List[int]:
+    root = gemini_host.Host._root(pid, byid)
+    if root is None:
+        return []
+    return [p.pid for p in gemini_host.Host._tree(root, byid)]
+
+
+def _session_record_pids(rec: Optional[dict], byid: dict, profile_dir: str, *, require_created: bool) -> List[int]:
+    """Verified process tree for a browser_pid recorded in host.json or relay/driver_state.json."""
+    if not isinstance(rec, dict):
+        return []
+    raw_pid = rec.get("browser_pid")
+    if isinstance(raw_pid, bool) or not isinstance(raw_pid, int) or raw_pid <= 0:
+        return []
+    proc = byid.get(raw_pid)
+    if proc is None:
+        return []
+    mode = rec.get("mode") or rec.get("host_mode")
+    if require_created:
+        if not gemini_host._same_process(rec, proc.pid, proc.created):
+            return []
+    else:
+        at = rec.get("at")
+        if isinstance(at, (int, float)) and not isinstance(at, bool):
+            if proc.created > float(at) + gemini_host.LAUNCH_SLACK_S:
+                return []
+    if mode == "D2" and not gemini_host.is_our_instance(proc, profile_dir):
+        return []
+    if mode == "D1" and gemini_host.parse_user_data_dir(proc.cmdline) is not None:
+        return []
+    return _tree_pids(raw_pid, byid)
+
+
+def host_pids_source(host, job: Optional[str] = None,
+                     seed_pids: Optional[Callable[[], Iterable[int]]] = None) -> Callable[[], List[int]]:
+    """Our verified instance pids from a gemini_host.Host (never the user's instances):
+    - every instance Host.instances() lists;
+    - any inspected Gemini process (and its verified tree) matching our dedicated data dir (`--user-data-dir`),
+      including any Gemini window on the Default desktop whose tree matches the dedicated data dir;
+    - the verified process tree of the session recorded in host.json (catches a D1 instance that ended up on the
+      Default desktop) and in <job>/relay/driver_state.json, plus any live `seed_pids`."""
     def pids() -> List[int]:
-        return [pid for inst in host.instances() for pid in inst.pids]
+        found: set = set()
+        for inst in host.instances():
+            found.update(inst.pids)
+        procs = []
+        os_api = getattr(host, "os", None)
+        if os_api is not None and hasattr(os_api, "processes"):
+            try:
+                procs = list(os_api.processes())
+            except gemini_host.HostRefused:
+                raise
+            except Exception:  # noqa: BLE001 - keep what instances() already found
+                procs = []
+        byid = {p.pid: p for p in procs if p.inspected and gemini_host.is_gemini_image(p.image)}
+        profile_dir = getattr(getattr(host, "cfg", None), "profile_dir", "") or ""
+        if profile_dir and byid:
+            for p in byid.values():
+                if gemini_host.is_our_instance(p, profile_dir):
+                    found.update(_tree_pids(p.pid, byid))
+            if os_api is not None and hasattr(os_api, "desktop_windows"):
+                try:
+                    default_wins = list(os_api.desktop_windows(DEFAULT_DESKTOP))
+                except gemini_host.HostRefused:
+                    raise
+                except Exception:  # noqa: BLE001
+                    default_wins = []
+                for w in default_wins:
+                    if w.pid in byid:
+                        root = gemini_host.Host._root(w.pid, byid)
+                        if root is not None:
+                            tree = gemini_host.Host._tree(root, byid)
+                            if any(gemini_host.is_our_instance(tp, profile_dir) for tp in tree):
+                                found.update(tp.pid for tp in tree)
+        host_rec = None
+        if hasattr(host, "load_state"):
+            try:
+                host_rec = host.load_state()
+            except Exception:  # noqa: BLE001
+                host_rec = None
+        found.update(_session_record_pids(host_rec, byid, profile_dir, require_created=True))
+        found.update(_session_record_pids(_read_driver_state(job), byid, profile_dir, require_created=False))
+        if seed_pids is not None:
+            for raw in (seed_pids() or ()):
+                sp = int(raw)
+                if sp <= 0:
+                    continue
+                if sp in byid:
+                    found.update(_tree_pids(sp, byid))
+                else:
+                    found.add(sp)
+        return sorted(found)
     return pids
 
 
-def default_parts() -> Tuple[FgOS, Callable[[], List[int]]]:
+def default_parts(job: Optional[str] = None,
+                  seed_pids: Optional[Callable[[], Iterable[int]]] = None) -> Tuple[FgOS, Callable[[], List[int]]]:
     """The real FgOS and the real Host pid source (both refused inside the test sandbox)."""
     gemini_host.refuse_in_sandbox()
     host = gemini_host.Host(gemini_host.Win32HostOS(),
                             gemini_host.HostConfig(stub="", profile_dir=gemini_host.default_profile_dir()))
-    return Win32FgOS(), host_pids_source(host)
+    return Win32FgOS(), host_pids_source(host, job=job, seed_pids=seed_pids)
 
 
 # --- detached mode ---------------------------------------------------------------------------------------------------
 class JsonlWriter:
     """Appends one scrubbed JSON object per line (flushed per record) to <job>/relay/foreground.jsonl."""
 
-    def __init__(self, path: str, run_id: str):
+    def __init__(self, path: str, run_id: str, job: Optional[str] = None):
+        if job is not None:
+            parent = os.path.dirname(path)
+            if not _inside_dir(job, parent) or not _inside_dir(job, path):
+                raise ValueError("writer path resolves outside the job directory")
         self.path, self.run_id = path, run_id
+        self.job = os.path.realpath(job) if job is not None else None
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        if self.job is not None and not _inside_dir(self.job, self.path):
+            raise ValueError("writer path resolves outside the job directory")
 
     def __call__(self, rec: dict) -> None:
+        if self.job is not None and not _inside_dir(self.job, self.path):
+            raise ValueError("writer path resolves outside the job directory")
         rec = dict(rec, run=self.run_id)
         if _scrub is not None:
             rec = _scrub(rec)
@@ -372,15 +505,29 @@ class JsonlWriter:
 
 
 def jsonl_path(job: str) -> str:
-    return os.path.join(job, "relay", JSONL_NAME)
+    base = os.path.realpath(job)
+    relay = os.path.join(base, "relay")
+    path = os.path.join(relay, JSONL_NAME)
+    if not _inside_dir(base, relay) or not _inside_dir(base, path):
+        raise ValueError("foreground.jsonl resolves outside the job directory")
+    return os.path.realpath(path)
 
 
-def run_detached(job: str, watch_pid: int, os_api: FgOS, our_pids: Optional[Callable[[], Iterable[int]]],
+def run_detached(job: str, watch_pid: Optional[int], os_api: FgOS,
+                 our_pids: Optional[Callable[[], Iterable[int]]],
                  run_id: str = "", max_s: float = DEFAULT_MAX_S, period_s: float = 0.02,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
-                 stop_event: Optional[threading.Event] = None) -> dict:
-    """Trace until the watched pid ends, `stop_event` is set or `max_s` passes; returns the end record."""
-    writer = JsonlWriter(jsonl_path(job), run_id)
+                 stop_event: Optional[threading.Event] = None,
+                 stop_files: Iterable[str] = ()) -> dict:
+    """Trace until the watched pid ends, a stop file appears, `stop_event` is set, or `max_s` passes; returns the
+    end record."""
+    job_real = os.path.realpath(job)
+    stop_list = []
+    for sf in stop_files:
+        if not _inside_dir(job_real, sf):
+            raise ValueError("stop file resolves outside the job directory")
+        stop_list.append(sf)
+    writer = JsonlWriter(jsonl_path(job_real), run_id, job=job_real)
     tracer = FgTracer(os_api, period_s=period_s, our_pids=our_pids, clock=clock, on_record=writer)
     t0 = clock()
     writer({"event": "start", "at": now_iso(), "period_s": period_s, "max_s": max_s})
@@ -397,7 +544,9 @@ def run_detached(job: str, watch_pid: int, os_api: FgOS, our_pids: Optional[Call
         now = clock()
         if stop_event is not None and stop_event.is_set():
             reason = "stopped"
-        elif last_watch is None or now - last_watch >= WATCH_EVERY_S:
+        elif stop_list and any(os.path.exists(sf) for sf in stop_list):
+            reason = "stop_file"
+        elif watch_pid and (last_watch is None or now - last_watch >= WATCH_EVERY_S):
             last_watch = now
             try:
                 alive = os_api.pid_alive(watch_pid)
@@ -441,7 +590,11 @@ def _stdin_eof_event() -> threading.Event:
 def main(argv=None, parts_factory: Optional[Callable[[], Tuple[FgOS, Callable[[], Iterable[int]]]]] = None) -> int:
     p = argparse.ArgumentParser(description="R6 foreground tracer (detached mode): writes <job>/relay/foreground.jsonl")
     p.add_argument("--job", required=True, help="job directory")
-    p.add_argument("--watch-pid", type=int, required=True, help="exit when this process ends")
+    p.add_argument("--watch-pid", type=int, default=None, help="exit when this process ends")
+    p.add_argument("--stop-file", action="append", default=[],
+                   help="exit when this file (resolved inside --job) appears")
+    p.add_argument("--seed-pid", action="append", type=int, default=[],
+                   help="additional verified pid of our instance")
     p.add_argument("--run-id", default="", help="tag written on every record")
     p.add_argument("--max-s", type=float, default=DEFAULT_MAX_S, help="exit after this many seconds")
     p.add_argument("--stop-on-eof", action="store_true", help="exit when stdin reaches EOF")
@@ -449,16 +602,41 @@ def main(argv=None, parts_factory: Optional[Callable[[], Tuple[FgOS, Callable[[]
         a = p.parse_args(argv)
     except SystemExit:
         return 5
-    job = os.path.abspath(a.job)
-    if not os.path.isdir(job) or a.watch_pid <= 0 or a.max_s <= 0:
+    job = os.path.realpath(a.job)
+    if not os.path.isdir(job) or a.max_s <= 0:
+        return 5
+    if a.watch_pid is not None and a.watch_pid <= 0:
+        return 5
+    if a.watch_pid is None and not a.stop_file and not a.stop_on_eof:
+        return 5
+    if any(sp <= 0 for sp in a.seed_pid):
         return 5
     try:
-        os_api, our_pids = (parts_factory or default_parts)()
+        out_path = jsonl_path(job)
+    except ValueError:
+        return 5
+    for sf in a.stop_file:
+        if not _inside_dir(job, sf):
+            return 5
+    seed_fn = (lambda: list(a.seed_pid)) if a.seed_pid else None
+    try:
+        if parts_factory is not None:
+            os_api, base_pids = parts_factory()
+            if seed_fn is not None:
+                our_pids = (lambda: sorted(set(base_pids() if base_pids is not None else ()) | set(seed_fn())))
+            else:
+                our_pids = base_pids
+        else:
+            os_api, our_pids = default_parts(job=job, seed_pids=seed_fn)
     except gemini_host.HostRefused as exc:
-        JsonlWriter(jsonl_path(job), a.run_id)({"event": "end", "reason": "refused", "error": exc.reason})
+        JsonlWriter(out_path, a.run_id, job=job)({"event": "end", "reason": "refused", "error": exc.reason})
         return 3
     stop = _stdin_eof_event() if a.stop_on_eof else None
-    end = run_detached(job, a.watch_pid, os_api, our_pids, run_id=a.run_id, max_s=a.max_s, stop_event=stop)
+    try:
+        end = run_detached(job, a.watch_pid, os_api, our_pids, run_id=a.run_id, max_s=a.max_s,
+                           stop_event=stop, stop_files=a.stop_file)
+    except ValueError:
+        return 5
     return 3 if end.get("reason") == "refused" else 0
 
 

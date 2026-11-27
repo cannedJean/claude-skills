@@ -1268,6 +1268,8 @@ class CliParts:
     quit_via_menu: Optional[Callable[[str, list, list], None]] = None
     run_on: Optional[Callable[[str, list, Callable[[Any], Any]], Any]] = None
     fg_os: Optional[Any] = None
+    fg_period_s: float = 0.02
+    fg_refresh_s: float = 1.0
 
 
 def _with_tree(parts: CliParts, desktop: str, pids: list, fn: Callable[[Any], Any]):
@@ -1588,10 +1590,16 @@ def _doctor_close(parts: CliParts, locs: dict, session) -> tuple[bool, dict]:
 
 def _doctor_tracer(parts: CliParts):
     """R6 in doctor: a short in-process trace of the default desktop's foreground for the whole command. `ours` are
-    the pids of the instances Host lists (never the user's); doctor adds them (tracer.add_pids) as it learns them."""
+    refreshed live every second from host_pids_source(parts.host) from the very start (including dedicated data dir
+    trees and host.json D1 sessions, never the user's Gemini)."""
     if parts.fg_os is None:
         return None
-    tracer = fg_tracer.FgTracer(parts.fg_os)
+    tracer = fg_tracer.FgTracer(
+        parts.fg_os,
+        period_s=parts.fg_period_s,
+        our_pids=fg_tracer.host_pids_source(parts.host),
+        refresh_s=parts.fg_refresh_s,
+    )
     try:
         tracer.start()
     except gemini_host.HostRefused:
@@ -1620,10 +1628,24 @@ def cmd_doctor(a) -> int:
         host = parts.host
         out: dict = {"status": "ok", "command": "doctor", "foreground": None}
         tracer = _doctor_tracer(parts)
+        doctor_exc = None
+        snap = None
         try:
             snap = _doctor_run(a, parts, locs, host, out, tracer.add_pids if tracer is not None else None)
+        except Exception as exc:  # noqa: BLE001 - still stop the tracer and report an R6 violation if one occurred
+            doctor_exc = exc
         finally:
             out["foreground"] = _doctor_tracer_stop(tracer)
+        if out["foreground"].get("violated"):   # R6 (spec 20-11): our instance was the foreground or visible
+            if doctor_exc is not None:
+                out["driver_code"] = _rdr()._describe(doctor_exc)[0]
+            out.update(status="error", code="FOREGROUND_INVARIANT_VIOLATED", exit_code=2,
+                       message="our Gemini instance became the foreground window or showed a window on the default "
+                               "desktop")
+            _emit(out)
+            return 2
+        if doctor_exc is not None:
+            return _fail("doctor", doctor_exc)
         if a.snapshot and snap is not None:
             base = Path(parts.tool_dir) if parts.tool_dir is not None else tool_dir()
             path = base / "doctor" / ("snapshot-%s.json" % _dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
@@ -1632,12 +1654,6 @@ def cmd_doctor(a) -> int:
             out["snapshot"] = str(path)
         else:
             out["snapshot"] = None
-        if out["foreground"].get("violated"):   # R6 (spec 20-11): our instance was the foreground or visible
-            out.update(status="error", code="FOREGROUND_INVARIANT_VIOLATED", exit_code=2,
-                       message="our Gemini instance became the foreground window or showed a window on the default "
-                               "desktop")
-            _emit(out)
-            return 2
         _emit(out)
         return 0
     except Exception as exc:  # noqa: BLE001 - every failure becomes one scrubbed error record
@@ -1654,6 +1670,8 @@ def _doctor_run(a, parts: CliParts, locs: dict, host, out: dict, add_pids: Optio
                        if ours else None)
         else:
             session = host.ensure(None)
+        if add_pids is not None and session is not None and session.browser_pid:
+            add_pids([session.browser_pid])
         started = session is not None and session.reason != "reused"
         snap = None
         try:
@@ -1821,6 +1839,321 @@ def cmd_app(a) -> int:
         return _fail(name, exc)
 
 
+# --------------------------------------------------------------------------- R6 foreground tracer (default desktop)
+# deep_research.py runs on the user's default desktop (never inside agy's hidden exebox-* desktop), so every
+# plan / edit / approve / collect / auto step starts fg_tracer.py here and merges <job>/relay/foreground.jsonl
+# into the step result. Outside the test sandbox on Windows (without explicit visible/debug mode), an unmeasured
+# step fails closed with FOREGROUND_UNMEASURED (exit 2).
+FG_TRACER = "fg_tracer.py"
+FG_JSONL = "foreground.jsonl"
+FG_START_WAIT_S = 5.0
+FG_STOP_WAIT_S = 5.0
+FG_DETACHED_FLAGS = 0x00000008 | 0x00000200   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: no console window
+
+
+def _is_windows_env(a=None, platform: str | None = None) -> bool:
+    if platform is not None:
+        return platform == "win32"
+    if a is not None and getattr(a, "_platform", None) is not None:
+        return a._platform == "win32"
+    return os.name == "nt"
+
+
+def _in_test_sandbox(a=None, sandbox: bool | None = None) -> bool:
+    if sandbox is not None:
+        return bool(sandbox)
+    if a is not None and getattr(a, "_sandbox", None) is not None:
+        return bool(a._sandbox)
+    return os.environ.get("AGY_DR_TEST_SANDBOX") == "1"
+
+
+def _fg_unmeasured_allowed(a=None, *, visible_mode: bool = False,
+                           platform: str | None = None, sandbox: bool | None = None) -> bool:
+    return bool(visible_mode or _in_test_sandbox(a, sandbox) or not _is_windows_env(a, platform))
+
+
+def _fg_lines(path: str | Path, run_id: str) -> list[dict]:
+    out: list[dict] = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict) and rec.get("run") == run_id:
+                    out.append(rec)
+    except OSError:
+        pass
+    return out
+
+
+def fg_summary_from_lines(lines: list[dict]) -> dict:
+    """The tracer's end record, or (it was killed) a summary rebuilt from its change records."""
+    ends = [r for r in lines if r.get("event") == "end"]
+    if ends:
+        end = {k: v for k, v in ends[-1].items() if k not in ("event", "run")}
+        end["complete"] = end.get("reason") != "refused"
+        return end
+    fg = [r for r in lines if r.get("event") == "foreground"]
+    vis = [r for r in lines if r.get("event") == "visible"]
+    ours_fg = sum(1 for r in fg if r.get("ours"))
+    ours_vis = sum(1 for r in vis if r.get("ours"))
+    return {
+        "gemini_foreground_events": sum(1 for r in fg if r.get("gemini") or r.get("ours")),
+        "foreground_changes": len(fg),
+        "visible_windows": sum(1 for r in vis if r.get("gemini_windows")),
+        "ours": {"foreground_events": ours_fg, "visible_window_samples": ours_vis},
+        "violated": bool(ours_fg or ours_vis),
+        "complete": False,
+        "reason": "no_end_record",
+        "_has_events": bool(fg or vis),
+    }
+
+
+def start_fg_tracer(
+    job: str | Path,
+    relay_dir: str | Path,
+    run_id: str,
+    max_s: float,
+    *,
+    detached_worker: bool = False,
+    visible_mode: bool = False,
+    platform: str | None = None,
+    sandbox: bool | None = None,
+    popen=None,
+    start_wait_s: float = FG_START_WAIT_S,
+) -> dict:
+    """R6: start fg_tracer.py detached on this (default) desktop with `-I`, list argv, no shell, sys.executable,
+    DETACHED_PROCESS, cwd = the job.
+    - Sync steps (detached_worker=False): watches this process (`--watch-pid`, `--stop-on-eof`, stdin=PIPE).
+    - Detached worker steps (detached_worker=True): watches `<job>/relay/result.json` and a per-run stop file
+      (`<job>/relay/fg_stop_<run_id>`, stdin=DEVNULL) so the tracer survives `deep_research.py --no-wait` and
+      exits cleanly when the worker writes `relay/result.json`.
+    Never started inside the test sandbox or in explicit visible/debug mode."""
+    job_str = str(Path(job).resolve())
+    relay_str = str(Path(relay_dir).resolve())
+    stop_file = os.path.join(relay_str, f"fg_stop_{run_id}") if detached_worker else None
+    h: dict = {
+        "run_id": run_id,
+        "path": os.path.join(relay_str, FG_JSONL),
+        "proc": None,
+        "detached_worker": bool(detached_worker),
+        "stop_file": stop_file,
+        "visible_mode": bool(visible_mode),
+        "started": False,
+    }
+    if stop_file and os.path.exists(stop_file):
+        with contextlib.suppress(OSError):
+            os.unlink(stop_file)
+    script = str(SCRIPT_DIR / FG_TRACER)
+    if visible_mode:
+        h["reason"] = "visible_mode"
+    elif _in_test_sandbox(sandbox=sandbox):
+        h["reason"] = "sandbox"
+    elif not _is_windows_env(platform=platform):
+        h["reason"] = "platform"
+    elif not os.path.isfile(script):
+        h["reason"] = "tracer_missing"
+    if h.get("reason"):
+        return h
+    argv = [sys.executable, "-I", script, "--job", job_str]
+    if detached_worker:
+        argv += ["--stop-file", os.path.join(relay_str, "result.json"), "--stop-file", stop_file]
+        stdin_arg = subprocess.DEVNULL
+    else:
+        argv += ["--watch-pid", str(os.getpid()), "--stop-on-eof"]
+        stdin_arg = subprocess.PIPE
+    argv += ["--run-id", run_id, "--max-s", str(int(max(1, max_s)))]
+    launcher = popen or subprocess.Popen
+    try:
+        h["proc"] = launcher(
+            argv,
+            cwd=job_str,
+            stdin=stdin_arg,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            creationflags=FG_DETACHED_FLAGS,
+        )
+    except OSError as e:
+        h["reason"] = f"start_failed: {type(e).__name__}"
+        return h
+    h["pid"] = getattr(h["proc"], "pid", None)
+    t_end = time.time() + float(start_wait_s)
+    while time.time() < t_end and h["proc"].poll() is None:
+        if any(r.get("event") == "start" for r in _fg_lines(h["path"], run_id)):
+            h["started"] = True
+            break
+        time.sleep(0.05)
+    return h
+
+
+def stop_fg_tracer(h: dict | None, *, stop_wait_s: float = FG_STOP_WAIT_S) -> dict:
+    """Stop the tracer (close stdin or touch its stop file; kill after `stop_wait_s`) and read this run's records
+    from `<job>/relay/foreground.jsonl`. Also handles a persisted `job['fg_tracer']` record from `--no-wait`."""
+    if not isinstance(h, dict):
+        return {"measured": False, "reason": "not_started", "violated": False}
+    proc = h.get("proc")
+    stop_file = h.get("stop_file")
+    created_stop = False
+    if proc is None:
+        if h.get("reason"):
+            return {"measured": False, "reason": h["reason"], "violated": False}
+        if not (h.get("detached_worker") or h.get("pid")) or not h.get("path") or not h.get("run_id"):
+            return {"measured": False, "reason": "not_started", "violated": False}
+        pid = h.get("pid")
+        if stop_file and not os.path.exists(stop_file) and (not pid or pid_alive(pid)):
+            try:
+                Path(stop_file).parent.mkdir(parents=True, exist_ok=True)
+                Path(stop_file).write_text("", encoding="utf-8")
+                created_stop = True
+            except OSError:
+                pass
+        t_end = time.time() + float(stop_wait_s)
+        while time.time() < t_end:
+            lines_now = _fg_lines(h["path"], h["run_id"])
+            if any(r.get("event") == "end" for r in lines_now):
+                break
+            if not pid or not pid_alive(pid):
+                break
+            time.sleep(0.05)
+    else:
+        if h.get("detached_worker"):
+            if stop_file and not os.path.exists(stop_file):
+                try:
+                    Path(stop_file).parent.mkdir(parents=True, exist_ok=True)
+                    Path(stop_file).write_text("", encoding="utf-8")
+                    created_stop = True
+                except OSError:
+                    pass
+        else:
+            try:
+                if proc.stdin:
+                    proc.stdin.close()
+            except OSError:
+                pass
+        try:
+            proc.wait(timeout=stop_wait_s)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+                proc.wait(timeout=stop_wait_s)
+            except Exception:  # noqa: BLE001 - the summary below is rebuilt from the records written so far
+                pass
+    if created_stop and stop_file:
+        with contextlib.suppress(OSError):
+            os.unlink(stop_file)
+    lines = _fg_lines(h["path"], h["run_id"])
+    if not lines:
+        return {"measured": False, "reason": "no_records", "violated": False}
+    summary = fg_summary_from_lines(lines)
+    has_events = summary.pop("_has_events", True)
+    out = {"measured": True, "late_start": not h.get("started")}
+    out.update(summary)
+    if out.get("reason") == "refused":
+        out["measured"] = False
+    elif out.get("reason") == "no_end_record" and not has_events:
+        out["measured"] = False
+        out["reason"] = "no_samples"
+    elif "samples" in out and out.get("samples", 0) == 0 and not out.get("violated"):
+        out["measured"] = False
+        out["reason"] = "no_samples"
+    out["violated"] = bool(out.get("violated"))
+    return out
+
+
+def _fg_job_record(h: dict, seq: int) -> dict:
+    return {
+        "seq": seq,
+        "run_id": h["run_id"],
+        "path": h["path"],
+        "pid": h.get("pid"),
+        "detached_worker": bool(h.get("detached_worker")),
+        "stop_file": h.get("stop_file"),
+        "started": bool(h.get("started")),
+        "reason": h.get("reason"),
+        "visible_mode": bool(h.get("visible_mode")),
+    }
+
+
+def _saved_fg_handle(job: dict) -> dict | None:
+    rec = job.get("fg_tracer")
+    if isinstance(rec, dict) and rec.get("seq") == job.get("seq"):
+        return rec
+    return None
+
+
+def _attach_fg(target: dict | None, fg: dict, visible_mode: bool = False) -> None:
+    if isinstance(target, dict):
+        target["foreground_invariant"] = fg
+        target["foreground_invariant_violated"] = bool(fg.get("violated"))
+        if visible_mode:
+            target["visible_mode"] = True
+
+
+def _persist_fg_on_result(job_dir: Path, res: dict | None) -> None:
+    result_file = job_dir / "relay" / "result.json"
+    if isinstance(res, dict) and result_file.is_file():
+        with contextlib.suppress(OSError):
+            write_json_atomic(result_file, res)
+
+
+def _enforce_fg_invariant(
+    job_dir: Path,
+    job: dict,
+    res: dict | None,
+    fg: dict,
+    *,
+    a=None,
+    visible_mode: bool = False,
+    highlights: list[str] | None = None,
+    status: str | None = None,
+) -> None:
+    """Merge `fg` onto `res` (and relay/result.json if present) and `job`, failing closed with exit 2 on
+    FOREGROUND_INVARIANT_VIOLATED or FOREGROUND_UNMEASURED (outside sandbox / visible mode)."""
+    violated = bool(fg.get("violated"))
+    _attach_fg(res, fg, visible_mode=visible_mode)
+    _persist_fg_on_result(job_dir, res)
+    job["foreground_invariant"] = fg
+    job["foreground_invariant_violated"] = violated
+    extra: dict = {"foreground_invariant": fg, "foreground_invariant_violated": violated}
+    if visible_mode:
+        extra["visible_mode"] = True
+    driver_code = res.get("code") if isinstance(res, dict) and res.get("status") == "error" else None
+    if violated:
+        if driver_code:
+            extra["driver_code"] = driver_code
+        fail_job(
+            job_dir,
+            job,
+            res or {},
+            "FOREGROUND_INVARIANT_VIOLATED",
+            "our Gemini instance became the foreground window or showed a window on the default desktop",
+            2,
+            highlights=highlights,
+            status=status,
+            hint="nothing from this step is used; report it (R6), do not retry until the cause is known",
+            **extra,
+        )
+    if not fg.get("measured") and not _fg_unmeasured_allowed(a, visible_mode=visible_mode):
+        if driver_code:
+            extra["driver_code"] = driver_code
+        reason = fg.get("reason") or "unknown"
+        fail_job(
+            job_dir,
+            job,
+            res or {},
+            "FOREGROUND_UNMEASURED",
+            f"R6 foreground tracer did not measure this step ({reason}); refusing to proceed unmeasured",
+            2,
+            highlights=highlights,
+            status=status,
+            hint="ensure fg_tracer.py can run on the default desktop (or pass --show for explicit visible debug mode)",
+            **extra,
+        )
+
+
 # --------------------------------------------------------------------------- agy-delegate invocation
 def load_job(job_dir: Path) -> dict:
     job_file = job_dir / "job.json"
@@ -1922,6 +2255,9 @@ def stream_progress_and_finalize(
     out_path: Path,
     timeout_sec: int = DEFAULT_TIMEOUT,
     poll_interval: float = 0.25,
+    fg_handle: dict | None = None,
+    a=None,
+    visible_mode: bool = False,
 ) -> int:
     relay_dir = job_dir / "relay"
     progress_file = relay_dir / "progress.jsonl"
@@ -1988,9 +2324,17 @@ def stream_progress_and_finalize(
                     res = read_json_safe(result_file)
                     if res and res.get("seq") == job.get("seq"):
                         break
+                    eff_handle = fg_handle if fg_handle is not None else _saved_fg_handle(job)
+                    fg_dead = stop_fg_tracer(eff_handle) if eff_handle is not None else None
+                    if fg_dead is not None and fg_dead.get("violated"):
+                        _enforce_fg_invariant(job_dir, job, {"status": "error", "code": "WORKER_DIED"},
+                                              fg_dead, a=a, visible_mode=visible_mode, highlights=highlights)
                     job["status"] = "error"
                     job["error_code"] = "WORKER_DIED"
                     job["progress_highlights"] = highlights
+                    if fg_dead is not None:
+                        job["foreground_invariant"] = fg_dead
+                        job["foreground_invariant_violated"] = bool(fg_dead.get("violated"))
                     adopt_pinned_conversation(job_dir, job)   # auto: keep the new chat's conversation for a later collect
                     save_job(job_dir, job)
                     die(
@@ -2004,7 +2348,10 @@ def stream_progress_and_finalize(
 
         time.sleep(poll_interval)
 
-    return finalize_completed_report(job_dir, job, res, out_path, highlights)
+    return finalize_completed_report(
+        job_dir, job, res, out_path, highlights,
+        fg_handle=fg_handle, a=a, visible_mode=visible_mode,
+    )
 
 
 def write_output_meta(
@@ -2021,6 +2368,8 @@ def write_output_meta(
     conversation_id: str = "",
     report_title: str = "",
     report_warnings: list[str] | None = None,
+    fg: dict | None = None,
+    visible_mode: bool = False,
 ) -> Path:
     meta_path = Path(str(out_path) + ".meta.json")
     meta = {
@@ -2049,6 +2398,8 @@ def write_output_meta(
         "gemini_model": job.get("gemini_model", DEFAULT_GEMINI_MODEL),
         "gemini_thinking": job.get("gemini_thinking", DEFAULT_GEMINI_THINKING),
     }
+    if fg is not None:
+        _attach_fg(meta, fg, visible_mode=visible_mode)
     write_json_atomic(meta_path, meta)
     return meta_path
 
@@ -2059,9 +2410,26 @@ def finalize_completed_report(
     res: dict,
     out_path: Path,
     highlights: list[str] | None = None,
+    fg: dict | None = None,
+    fg_handle: dict | None = None,
+    a=None,
+    visible_mode: bool = False,
 ) -> int:
     if highlights is None:
         highlights = list(job.get("progress_highlights") or [])
+
+    if fg is None:
+        eff_handle = fg_handle if fg_handle is not None else _saved_fg_handle(job)
+        if eff_handle is not None:
+            visible_mode = bool(visible_mode or eff_handle.get("visible_mode"))
+            fg = stop_fg_tracer(eff_handle)
+        else:
+            reason = ("visible_mode" if visible_mode else
+                      "sandbox" if _in_test_sandbox(a) else
+                      "platform" if not _is_windows_env(a) else "no_tracer")
+            fg = {"measured": False, "reason": reason, "violated": False}
+
+    _enforce_fg_invariant(job_dir, job, res, fg, a=a, visible_mode=visible_mode, highlights=highlights)
 
     if res.get("status") != "completed":
         code = res.get("code") or "RESEARCH_FAILED"
@@ -2115,6 +2483,8 @@ def finalize_completed_report(
         conversation_id=conversation_id,
         report_title=report_title,
         report_warnings=report_warnings,
+        fg=fg,
+        visible_mode=visible_mode,
     )
 
     job.update({
@@ -2135,6 +2505,7 @@ def finalize_completed_report(
         "gemini_model": job.get("gemini_model", DEFAULT_GEMINI_MODEL),
         "gemini_thinking": job.get("gemini_thinking", DEFAULT_GEMINI_THINKING),
     })
+    _attach_fg(job, fg, visible_mode=visible_mode)
     for stale in ("error_code", "error_message", "rejected_files"):   # earlier refusals stay in job["rejections"]
         job.pop(stale, None)
     save_job(job_dir, job)
@@ -2159,6 +2530,7 @@ def finalize_completed_report(
         "gemini_model": job.get("gemini_model", DEFAULT_GEMINI_MODEL),
         "gemini_thinking": job.get("gemini_thinking", DEFAULT_GEMINI_THINKING),
     }
+    _attach_fg(summary, fg, visible_mode=visible_mode)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 
@@ -2185,6 +2557,7 @@ def cmd_plan(a) -> int:
 
     dr_skill_dir = resolve_active_dr_skill_dir(getattr(a, "dr_skill_dir", None))
     eff_deadline = resolve_effective_deadline(getattr(a, "deadline", None), job["gemini_model"])
+    visible_mode = bool(getattr(a, "show", False))
     req = {
         "relay_version": RELAY_VERSION,
         "step": "plan",
@@ -2199,26 +2572,43 @@ def cmd_plan(a) -> int:
             "GEMINI_DR_THINKING": job["gemini_thinking"],
         },
     }
-    if getattr(a, "show", False):
+    if visible_mode:
         req["show"] = True
     write_json_atomic(relay_dir / "request.json", req)
 
-    rc, agy_summary, dr_res = invoke_agy_relay(
-        job_dir, "plan", seq, getattr(a, "dr_skill_dir", None),
-        agy_model=job["agy_model"], agy_effort=job["agy_effort"],
+    run_id = f"plan_{seq}-{os.getpid()}-{int(time.time() * 1000)}"
+    fg_handle = start_fg_tracer(
+        job_dir, relay_dir, run_id, 2 * eff_deadline + 60,
+        detached_worker=False, visible_mode=visible_mode,
+        platform=getattr(a, "_platform", None), sandbox=getattr(a, "_sandbox", None),
+        popen=getattr(a, "_fg_popen", None),
     )
+    if fg_handle.get("proc") is None and not _fg_unmeasured_allowed(a, visible_mode=visible_mode):
+        _enforce_fg_invariant(job_dir, job, {}, stop_fg_tracer(fg_handle), a=a, visible_mode=visible_mode, status="error")
+
+    try:
+        rc, agy_summary, dr_res = invoke_agy_relay(
+            job_dir, "plan", seq, getattr(a, "dr_skill_dir", None),
+            agy_model=job["agy_model"], agy_effort=job["agy_effort"],
+        )
+    finally:
+        fg = stop_fg_tracer(fg_handle)
     if agy_summary.get("confinement"):
         job["last_confinement"] = agy_summary["confinement"]
+
+    _enforce_fg_invariant(job_dir, job, dr_res, fg, a=a, visible_mode=visible_mode, status="error")
 
     if not dr_res:
         job["status"] = "error"
         save_job(job_dir, job)
-        die("relay/result.json was not produced during plan step", 3, code="NO_RELAY_RESULT", agy_rc=rc)
+        die("relay/result.json was not produced during plan step", 3, code="NO_RELAY_RESULT", agy_rc=rc,
+            foreground_invariant=fg, foreground_invariant_violated=bool(fg.get("violated")))
 
     if dr_res.get("status") != "plan_ready":
         code = dr_res.get("code") or "PLAN_FAILED"
         msg = dr_res.get("message") or f"plan step failed with status {dr_res.get('status')!r}"
-        fail_job(job_dir, job, dr_res, code, msg, int(dr_res.get("exit_code") or 2), status="error")
+        fail_job(job_dir, job, dr_res, code, msg, int(dr_res.get("exit_code") or 2), status="error",
+                 foreground_invariant=fg, foreground_invariant_violated=bool(fg.get("violated")))
 
     # Conversation identity: the plan's conversation becomes the job's for every later step
     plan_url = dr_res.get("url")
@@ -2246,6 +2636,7 @@ def cmd_plan(a) -> int:
         "plan_iterations": iteration,
         "latest_plan_file": str(plan_file),
     })
+    _attach_fg(job, fg, visible_mode=visible_mode)
     save_job(job_dir, job)
 
     out = {
@@ -2259,6 +2650,7 @@ def cmd_plan(a) -> int:
         "plan_file": str(plan_file),
         "plan": plan_text,
     }
+    _attach_fg(out, fg, visible_mode=visible_mode)
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 
@@ -2292,6 +2684,7 @@ def cmd_edit(a) -> int:
 
     dr_skill_dir = resolve_active_dr_skill_dir(getattr(a, "dr_skill_dir", None))
     eff_deadline = resolve_effective_deadline(getattr(a, "deadline", None), job["gemini_model"])
+    visible_mode = bool(getattr(a, "show", False))
     req = {
         "relay_version": RELAY_VERSION,
         "step": "edit",
@@ -2307,30 +2700,48 @@ def cmd_edit(a) -> int:
             "GEMINI_DR_THINKING": job["gemini_thinking"],
         },
     }
-    if getattr(a, "show", False):
+    if visible_mode:
         req["show"] = True
     write_json_atomic(relay_dir / "request.json", req)
 
-    rc, agy_summary, dr_res = invoke_agy_relay(
-        job_dir, "edit", seq, getattr(a, "dr_skill_dir", None),
-        agy_model=job["agy_model"], agy_effort=job["agy_effort"],
+    plan_status = job.get("status")
+    run_id = f"edit_{seq}-{os.getpid()}-{int(time.time() * 1000)}"
+    fg_handle = start_fg_tracer(
+        job_dir, relay_dir, run_id, 2 * eff_deadline + 60,
+        detached_worker=False, visible_mode=visible_mode,
+        platform=getattr(a, "_platform", None), sandbox=getattr(a, "_sandbox", None),
+        popen=getattr(a, "_fg_popen", None),
     )
+    if fg_handle.get("proc") is None and not _fg_unmeasured_allowed(a, visible_mode=visible_mode):
+        _enforce_fg_invariant(job_dir, job, {}, stop_fg_tracer(fg_handle), a=a, visible_mode=visible_mode, status=plan_status)
+
+    try:
+        rc, agy_summary, dr_res = invoke_agy_relay(
+            job_dir, "edit", seq, getattr(a, "dr_skill_dir", None),
+            agy_model=job["agy_model"], agy_effort=job["agy_effort"],
+        )
+    finally:
+        fg = stop_fg_tracer(fg_handle)
     if agy_summary.get("confinement"):
         job["last_confinement"] = agy_summary["confinement"]
+
+    _enforce_fg_invariant(job_dir, job, dr_res, fg, a=a, visible_mode=visible_mode, status="error")
 
     if not dr_res:
         job["status"] = "error"
         save_job(job_dir, job)
-        die("relay/result.json was not produced during edit step", 3, code="NO_RELAY_RESULT", agy_rc=rc)
+        die("relay/result.json was not produced during edit step", 3, code="NO_RELAY_RESULT", agy_rc=rc,
+            foreground_invariant=fg, foreground_invariant_violated=bool(fg.get("violated")))
 
-    plan_status = job.get("status")
     if dr_res.get("status") not in ("plan_revised", "plan_ready"):
         code = dr_res.get("code") or "EDIT_FAILED"
         msg = dr_res.get("message") or f"edit step failed with status {dr_res.get('status')!r}"
         # refused for identity before the edit button or the feedback touched the page: the reviewed plan stands
         # (the edit button alone only adds a canned turn; the reviewed plan changes only once feedback is typed)
         untouched = code == "CONVERSATION_MISMATCH" and not dr_res.get("prompt_sent")
-        fail_job(job_dir, job, dr_res, code, msg, int(dr_res.get("exit_code") or 2), status=plan_status if untouched else "error")
+        fail_job(job_dir, job, dr_res, code, msg, int(dr_res.get("exit_code") or 2),
+                 status=plan_status if untouched else "error",
+                 foreground_invariant=fg, foreground_invariant_violated=bool(fg.get("violated")))
 
     got = conversation_id_from_url(dr_res.get("url"))
     want = conversation_id_from_url(resume_url)
@@ -2353,6 +2764,7 @@ def cmd_edit(a) -> int:
         "plan_iterations": iteration,
         "latest_plan_file": str(plan_file),
     })
+    _attach_fg(job, fg, visible_mode=visible_mode)
     save_job(job_dir, job)
 
     out = {
@@ -2366,6 +2778,7 @@ def cmd_edit(a) -> int:
         "plan_file": str(plan_file),
         "plan": plan_text,
     }
+    _attach_fg(out, fg, visible_mode=visible_mode)
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 
@@ -2396,6 +2809,7 @@ def cmd_approve(a) -> int:
             f.unlink()
 
     dr_skill_dir = resolve_active_dr_skill_dir(getattr(a, "dr_skill_dir", None))
+    visible_mode = bool(getattr(a, "show", False))
     req = {
         "relay_version": RELAY_VERSION,
         "step": "approve",
@@ -2414,14 +2828,33 @@ def cmd_approve(a) -> int:
             "GEMINI_DR_THINKING": job["gemini_thinking"],
         },
     }
-    if getattr(a, "show", False):
+    if visible_mode:
         req["show"] = True
     write_json_atomic(relay_dir / "request.json", req)
 
-    rc, agy_summary, dr_res = invoke_agy_relay(
-        job_dir, "approve", seq, getattr(a, "dr_skill_dir", None),
-        agy_model=job["agy_model"], agy_effort=job["agy_effort"],
+    run_id = f"approve_{seq}-{os.getpid()}-{int(time.time() * 1000)}"
+    fg_handle = start_fg_tracer(
+        job_dir, relay_dir, run_id, timeout_sec + 600,
+        detached_worker=True, visible_mode=visible_mode,
+        platform=getattr(a, "_platform", None), sandbox=getattr(a, "_sandbox", None),
+        popen=getattr(a, "_fg_popen", None),
     )
+    if fg_handle.get("proc") is None and not _fg_unmeasured_allowed(a, visible_mode=visible_mode):
+        _enforce_fg_invariant(
+            job_dir, job, {}, stop_fg_tracer(fg_handle), a=a, visible_mode=visible_mode,
+            status=job.get("plan_status_before_approve") or "error",
+        )
+    job["fg_tracer"] = _fg_job_record(fg_handle, seq)
+    save_job(job_dir, job)
+
+    try:
+        rc, agy_summary, dr_res = invoke_agy_relay(
+            job_dir, "approve", seq, getattr(a, "dr_skill_dir", None),
+            agy_model=job["agy_model"], agy_effort=job["agy_effort"],
+        )
+    except BaseException:
+        stop_fg_tracer(fg_handle)
+        raise
     if agy_summary.get("confinement"):
         job["last_confinement"] = agy_summary["confinement"]
 
@@ -2429,9 +2862,12 @@ def cmd_approve(a) -> int:
     res_now = read_json_safe(result_file)
 
     if res_now and res_now.get("status") == "error":
+        fg = stop_fg_tracer(fg_handle)
+        _enforce_fg_invariant(job_dir, job, res_now, fg, a=a, visible_mode=visible_mode)
         code = res_now.get("code") or "APPROVE_FAILED"
         msg = res_now.get("message") or "approve step failed"
-        fail_job(job_dir, job, res_now, code, msg, int(res_now.get("exit_code") or 2))
+        fail_job(job_dir, job, res_now, code, msg, int(res_now.get("exit_code") or 2),
+                 foreground_invariant=fg, foreground_invariant_violated=bool(fg.get("violated")))
 
     pid = (started or {}).get("worker_pid") or (started or {}).get("pid")
     job["status"] = "running"
@@ -2449,13 +2885,19 @@ def cmd_approve(a) -> int:
             "pid": pid,
             "url": job.get("url"),
             "out_path": str(out_path),
+            "fg_run_id": run_id,
             "message": "Detached Deep Research worker started; run `status` or `collect` to monitor/fetch.",
         }
+        if visible_mode:
+            out["visible_mode"] = True
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0
 
     poll_interval = float(os.environ.get("AGY_DR_POLL_INTERVAL") or getattr(a, "poll_interval", 0.25) or 0.25)
-    return stream_progress_and_finalize(job_dir, job, out_path, timeout_sec=timeout_sec, poll_interval=poll_interval)
+    return stream_progress_and_finalize(
+        job_dir, job, out_path, timeout_sec=timeout_sec, poll_interval=poll_interval,
+        fg_handle=fg_handle, a=a, visible_mode=visible_mode,
+    )
 
 
 def _init_job_internal(a) -> tuple[str, Path, dict]:
@@ -2609,6 +3051,7 @@ def cmd_collect(a) -> int:
     out_path = Path(a.out).expanduser().resolve() if getattr(a, "out", None) else Path(job.get("out_path") or (job_dir / "report.md")).resolve()
     timeout_sec = resolve_effective_timeout(getattr(a, "timeout", None), job.get("gemini_model", DEFAULT_GEMINI_MODEL))
     poll_interval = float(os.environ.get("AGY_DR_POLL_INTERVAL") or getattr(a, "poll_interval", 0.25) or 0.25)
+    visible_mode = bool(getattr(a, "show", False))
 
     relay_dir = job_dir / "relay"
     result_file = relay_dir / "result.json"
@@ -2636,11 +3079,13 @@ def cmd_collect(a) -> int:
     res_now = read_json_safe(result_file)
     started = read_json_safe(started_file) or {}
     pid = started.get("worker_pid") or started.get("pid") or job.get("worker_pid")
+    saved_fg = _saved_fg_handle(job)
+    saved_visible = bool(visible_mode or (saved_fg or {}).get("visible_mode"))
 
     # Case 0: the detached approve worker of this sequence was refused before it clicked anything: report it and
     # put the plan back up for approval (a fresh collect would only find the unstarted plan card)
     if res_now and res_now.get("status") == "error" and res_now.get("seq") == job.get("seq") and approve_clicked_nothing(res_now):
-        return finalize_completed_report(job_dir, job, res_now, out_path)
+        return finalize_completed_report(job_dir, job, res_now, out_path, fg_handle=saved_fg, a=a, visible_mode=saved_visible)
 
     # Case 1: Current sequence already produced a completed result.json on disk
     if res_now and res_now.get("status") == "completed" and res_now.get("seq") == job.get("seq"):
@@ -2654,7 +3099,8 @@ def cmd_collect(a) -> int:
                     fmt = f"[progress {ev.get('elapsed_s', 0)}s] {(ev.get('text') or '').strip()}"
                     if fmt not in highlights:
                         highlights.append(fmt)
-        return finalize_completed_report(job_dir, job, res_now, out_path, highlights)
+        return finalize_completed_report(job_dir, job, res_now, out_path, highlights,
+                                         fg_handle=saved_fg, a=a, visible_mode=saved_visible)
 
     # Case 2: Detached worker is still alive
     if pid and pid_alive(pid):
@@ -2669,7 +3115,10 @@ def cmd_collect(a) -> int:
             }
             print(json.dumps(out, ensure_ascii=False, indent=2))
             return 0
-        return stream_progress_and_finalize(job_dir, job, out_path, timeout_sec=timeout_sec, poll_interval=poll_interval)
+        return stream_progress_and_finalize(
+            job_dir, job, out_path, timeout_sec=timeout_sec, poll_interval=poll_interval,
+            fg_handle=saved_fg, a=a, visible_mode=saved_visible,
+        )
 
     # Case 3: Worker is not running and no completed result is on disk -> run a 'collect' relay step via agy
     if adopt_pinned_conversation(job_dir, job):   # e.g. an auto run that timed out or died after binding its new chat
@@ -2685,11 +3134,12 @@ def cmd_collect(a) -> int:
             f.unlink()
 
     dr_skill_dir = resolve_active_dr_skill_dir(getattr(a, "dr_skill_dir", None))
+    is_detach = bool(getattr(a, "detach", False))
     req = {
         "relay_version": RELAY_VERSION,
         "step": "collect",
         "seq": seq,
-        "mode": "detach" if getattr(a, "detach", False) else "wait",
+        "mode": "detach" if is_detach else "wait",
         "driver": str(dr_skill_dir / "scripts" / "run_deep_research.py"),
         "resume_url": resume_url,
         "output": str(staged_report_path(job_dir, seq)),
@@ -2703,26 +3153,78 @@ def cmd_collect(a) -> int:
     }
     if job.get("approval_reason"):
         req["allow_probe_error"] = False
+    if visible_mode:
+        req["show"] = True
     write_json_atomic(relay_dir / "request.json", req)
 
-    rc, agy_summary, dr_res = invoke_agy_relay(
-        job_dir, "collect", seq, getattr(a, "dr_skill_dir", None),
-        agy_model=job.get("agy_model"), agy_effort=job.get("agy_effort"),
+    run_id = f"collect_{seq}-{os.getpid()}-{int(time.time() * 1000)}"
+    fg_handle = start_fg_tracer(
+        job_dir, relay_dir, run_id, timeout_sec + 600,
+        detached_worker=is_detach, visible_mode=visible_mode,
+        platform=getattr(a, "_platform", None), sandbox=getattr(a, "_sandbox", None),
+        popen=getattr(a, "_fg_popen", None),
     )
+    if fg_handle.get("proc") is None and not _fg_unmeasured_allowed(a, visible_mode=visible_mode):
+        _enforce_fg_invariant(job_dir, job, {}, stop_fg_tracer(fg_handle), a=a, visible_mode=visible_mode)
+    job["fg_tracer"] = _fg_job_record(fg_handle, seq)
+    save_job(job_dir, job)
+
+    if is_detach:
+        try:
+            rc, agy_summary, dr_res = invoke_agy_relay(
+                job_dir, "collect", seq, getattr(a, "dr_skill_dir", None),
+                agy_model=job.get("agy_model"), agy_effort=job.get("agy_effort"),
+            )
+        except BaseException:
+            stop_fg_tracer(fg_handle)
+            raise
+        if agy_summary.get("confinement"):
+            job["last_confinement"] = agy_summary["confinement"]
+        res_after = read_json_safe(result_file) or dr_res
+        if res_after and res_after.get("status") == "started":
+            if getattr(a, "no_wait", False):
+                res_after = dict(res_after, fg_run_id=run_id)
+                if visible_mode:
+                    res_after["visible_mode"] = True
+                print(json.dumps(res_after, ensure_ascii=False, indent=2))
+                return 0
+            return stream_progress_and_finalize(
+                job_dir, job, out_path, timeout_sec=timeout_sec, poll_interval=poll_interval,
+                fg_handle=fg_handle, a=a, visible_mode=visible_mode,
+            )
+        fg = stop_fg_tracer(fg_handle)
+        if not res_after:
+            _enforce_fg_invariant(job_dir, job, {}, fg, a=a, visible_mode=visible_mode)
+            die("relay/result.json was not produced during collect step", 3, code="NO_RELAY_RESULT", agy_rc=rc,
+                foreground_invariant=fg, foreground_invariant_violated=bool(fg.get("violated")))
+        return finalize_completed_report(job_dir, job, res_after, out_path, fg=fg, a=a, visible_mode=visible_mode)
+
+    try:
+        rc, agy_summary, dr_res = invoke_agy_relay(
+            job_dir, "collect", seq, getattr(a, "dr_skill_dir", None),
+            agy_model=job.get("agy_model"), agy_effort=job.get("agy_effort"),
+        )
+    finally:
+        fg = stop_fg_tracer(fg_handle)
     if agy_summary.get("confinement"):
         job["last_confinement"] = agy_summary["confinement"]
 
     res_after = read_json_safe(result_file) or dr_res
     if not res_after:
-        die("relay/result.json was not produced during collect step", 3, code="NO_RELAY_RESULT", agy_rc=rc)
+        _enforce_fg_invariant(job_dir, job, {}, fg, a=a, visible_mode=visible_mode)
+        die("relay/result.json was not produced during collect step", 3, code="NO_RELAY_RESULT", agy_rc=rc,
+            foreground_invariant=fg, foreground_invariant_violated=bool(fg.get("violated")))
 
     if res_after.get("status") == "started":
         if getattr(a, "no_wait", False):
             print(json.dumps(res_after, ensure_ascii=False, indent=2))
             return 0
-        return stream_progress_and_finalize(job_dir, job, out_path, timeout_sec=timeout_sec, poll_interval=poll_interval)
+        return stream_progress_and_finalize(
+            job_dir, job, out_path, timeout_sec=timeout_sec, poll_interval=poll_interval,
+            fg_handle=fg_handle, a=a, visible_mode=visible_mode,
+        )
 
-    return finalize_completed_report(job_dir, job, res_after, out_path)
+    return finalize_completed_report(job_dir, job, res_after, out_path, fg=fg, a=a, visible_mode=visible_mode)
 
 
 def run_cmd_init(a) -> int:
@@ -2822,6 +3324,7 @@ def run_cmd_auto(a) -> int:
         with contextlib.suppress(OSError):
             stale.unlink()
     dr_skill_dir = resolve_active_dr_skill_dir(getattr(a, "dr_skill_dir", None))
+    visible_mode = bool(getattr(a, "show", False))
     req = {
         "relay_version": RELAY_VERSION,
         "step": "auto",
@@ -2838,14 +3341,30 @@ def run_cmd_auto(a) -> int:
             "GEMINI_DR_THINKING": job["gemini_thinking"],
         },
     }
-    if getattr(a, "show", False):
+    if visible_mode:
         req["show"] = True
     write_json_atomic(relay_dir / "request.json", req)
 
-    rc, agy_summary, dr_res = invoke_agy_relay(
-        job_dir, "auto", seq, getattr(a, "dr_skill_dir", None),
-        agy_model=job["agy_model"], agy_effort=job["agy_effort"],
+    run_id = f"auto_{seq}-{os.getpid()}-{int(time.time() * 1000)}"
+    fg_handle = start_fg_tracer(
+        job_dir, relay_dir, run_id, timeout_sec + 600,
+        detached_worker=True, visible_mode=visible_mode,
+        platform=getattr(a, "_platform", None), sandbox=getattr(a, "_sandbox", None),
+        popen=getattr(a, "_fg_popen", None),
     )
+    if fg_handle.get("proc") is None and not _fg_unmeasured_allowed(a, visible_mode=visible_mode):
+        _enforce_fg_invariant(job_dir, job, {}, stop_fg_tracer(fg_handle), a=a, visible_mode=visible_mode, status="error")
+    job["fg_tracer"] = _fg_job_record(fg_handle, seq)
+    save_job(job_dir, job)
+
+    try:
+        rc, agy_summary, dr_res = invoke_agy_relay(
+            job_dir, "auto", seq, getattr(a, "dr_skill_dir", None),
+            agy_model=job["agy_model"], agy_effort=job["agy_effort"],
+        )
+    except BaseException:
+        stop_fg_tracer(fg_handle)
+        raise
     if agy_summary.get("confinement"):
         job["last_confinement"] = agy_summary["confinement"]
 
@@ -2855,9 +3374,12 @@ def run_cmd_auto(a) -> int:
     started = read_json_safe(started_file)
 
     if res_now and res_now.get("status") == "error":
+        fg = stop_fg_tracer(fg_handle)
+        _enforce_fg_invariant(job_dir, job, res_now, fg, a=a, visible_mode=visible_mode)
         code = res_now.get("code") or "AUTO_FAILED"
         msg = res_now.get("message") or "auto step failed"
-        fail_job(job_dir, job, res_now, code, msg, int(res_now.get("exit_code") or 2))
+        fail_job(job_dir, job, res_now, code, msg, int(res_now.get("exit_code") or 2),
+                 foreground_invariant=fg, foreground_invariant_violated=bool(fg.get("violated")))
 
     pid = (started or {}).get("worker_pid") or (started or {}).get("pid")
     job["status"] = "running"
@@ -2874,12 +3396,18 @@ def run_cmd_auto(a) -> int:
             "seq": seq,
             "pid": pid,
             "out_path": str(out_path),
+            "fg_run_id": run_id,
         }
+        if visible_mode:
+            out["visible_mode"] = True
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0
 
     poll_interval = float(os.environ.get("AGY_DR_POLL_INTERVAL") or getattr(a, "poll_interval", 0.25) or 0.25)
-    return stream_progress_and_finalize(job_dir, job, out_path, timeout_sec=timeout_sec, poll_interval=poll_interval)
+    return stream_progress_and_finalize(
+        job_dir, job, out_path, timeout_sec=timeout_sec, poll_interval=poll_interval,
+        fg_handle=fg_handle, a=a, visible_mode=visible_mode,
+    )
 
 
 def _add_prompt_composer_options(parser: argparse.ArgumentParser) -> None:
@@ -3003,6 +3531,7 @@ def build_parser() -> argparse.ArgumentParser:
     co.add_argument("--timeout", type=int, default=None, help="collect timeout in seconds (default: 1200, or 1800 for Argon)")
     co.add_argument("--poll-interval", type=float, default=0.25, help="progress poll interval in seconds")
     co.add_argument("--dr-skill-dir", help="override local-gemini-deep-research skill directory")
+    co.add_argument("--show", action="store_true", help="show Gemini desktop app window")
 
     for sp in (cp, ini, pl, ed, ap, au, co):
         _add_model_options(sp)
@@ -3010,11 +3539,14 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv=None, *, platform: str | None = None, parts_factory=None, runner=None) -> int:
-    """`platform`, `parts_factory` (a -> CliParts) and `runner` (argv -> exit code) are test injections."""
+def main(argv=None, *, platform: str | None = None, parts_factory=None, runner=None,
+         sandbox: bool | None = None, fg_popen=None) -> int:
+    """`platform`, `parts_factory` (a -> CliParts), `runner` (argv -> exit code), `sandbox` and `fg_popen` are test
+    injections."""
     argv = list(sys.argv[1:] if argv is None else argv)
     a = build_parser().parse_args(argv)
     a._argv, a._platform, a._parts_factory, a._runner = argv, platform, parts_factory, runner
+    a._sandbox, a._fg_popen = sandbox, fg_popen
     if a.cmd == "preflight":
         return cmd_preflight(a)
     if a.cmd == "setup":

@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -118,7 +119,7 @@ class CliHarness(unittest.TestCase):
         self.tree = None
         self.factory_calls = 0
 
-    def parts(self, tree=None, quit_via_menu=None, locs=None, fg_os=None):
+    def parts(self, tree=None, quit_via_menu=None, locs=None, fg_os=None, fg_period_s=0.02, fg_refresh_s=1.0):
         self.tree = tree
 
         def tree_on(desktop, pids):
@@ -129,7 +130,8 @@ class CliHarness(unittest.TestCase):
 
         return dr.CliParts(host=self.host, open_tree=lambda s: self.tree, tree_on=tree_on,
                            locs=locs or bundled_locs(), clock=self.fake.clock, sleep=self.fake.sleep,
-                           tool_dir=self.tmp / "tool", quit_via_menu=quit_via_menu, fg_os=fg_os)
+                           tool_dir=self.tmp / "tool", quit_via_menu=quit_via_menu, fg_os=fg_os,
+                           fg_period_s=fg_period_s, fg_refresh_s=fg_refresh_s)
 
     def run_cli(self, argv, parts=None, platform="win32", runner=None):
         def factory(a):
@@ -400,6 +402,52 @@ class DoctorTests(CliHarness):
         rc, res, _, _ = self.run_cli(["doctor"], parts=self.parts(FakeTree(page()), fg_os=fg))
         self.assertEqual((rc, res["code"]), (2, "FOREGROUND_INVARIANT_VIOLATED"))
         self.assertGreaterEqual(res["foreground"]["ours"]["visible_window_samples"], 1)
+
+    def test_doctor_violation_before_ensure_returns_or_when_ensure_raises_is_reported(self):
+        fg = FakeFg()
+
+        def failing_ensure(_mode):
+            # Our instance pops up on the Default desktop, steals foreground, then vanishes and ensure raises —
+            # add_pids is never called, and instances() at stop() is empty.
+            add_our_instance(self.fake, desktop="Default")
+            fg.fg = (70000, 7000)
+            fg.windows = [window(7000)]
+            before_calls = len(self.fake.calls)
+            before_fg = fg.calls
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                saw_proc = any(c[0] == "processes" for c in self.fake.calls[before_calls:])
+                if saw_proc and fg.calls > before_fg + 1:
+                    break
+                time.sleep(0.005)
+            time.sleep(0.02)
+            fg.fg = (500, 50)
+            fg.windows = []
+            self.fake.kill(7000)
+            self.fake.kill(7001)
+            raise gh.HostError("HOST_START_TIMEOUT", "our instance did not appear on the hidden desktop")
+
+        self.host.ensure = failing_ensure
+        rc, res, text, _ = self.run_cli(
+            ["doctor"],
+            parts=self.parts(FakeTree(page()), fg_os=fg, fg_period_s=0.005, fg_refresh_s=0.005),
+        )
+        self.assertEqual((rc, res["status"], res["code"], res["exit_code"]),
+                         (2, "error", "FOREGROUND_INVARIANT_VIOLATED", 2), res)
+        self.assertEqual(res["driver_code"], "HOST_START_TIMEOUT")
+        self.assertTrue(res["foreground"]["violated"])
+        self.assertGreaterEqual(res["foreground"]["ours"]["foreground_events"], 1)
+        self.assert_no_secrets(text)
+
+    def test_doctor_violation_on_host_busy_before_add_pids_is_reported(self):
+        add_our_instance(self.fake, desktop="Default")   # ensure() raises HOST_BUSY before add_pids ever runs
+        fg = FakeFg()
+        fg.fg = (70000, 7000)
+        fg.windows = [window(7000)]
+        rc, res, _, _ = self.run_cli(["doctor"], parts=self.parts(FakeTree(page()), fg_os=fg))
+        self.assertEqual((rc, res["code"], res["driver_code"]), (2, "FOREGROUND_INVARIANT_VIOLATED", "HOST_BUSY"))
+        self.assertTrue(res["foreground"]["violated"])
+        self.assertTrue(res["foreground"]["ours"]["pids_known"])
 
     def test_doctor_closes_the_instance_it_started(self):
         add_user_instance(self.fake)
