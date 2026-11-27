@@ -9,9 +9,10 @@ keys and a missing override file is ignored (both deliberate).
 The bundled file must define `version` and `locators`.
 
 Notes for callers:
-- `plan_edit` and `plan_cancel_countdown` resolve only inside the turn holding
-  the newest ENABLED `plan_start`; when no turn has an enabled start they raise
-  LocatorMiss (even the optional cancel), so a stale card is never bound.
+- `plan_edit` and `plan_cancel_countdown` anchor on the NEWEST turn holding any
+  plan control (plan_start, plan_edit, plan_cancel_countdown,
+  plan_retry_without_dr); if that turn's plan_start is not present and enabled
+  they raise LocatorMiss (even the optional cancel). An older card is never used.
   `plan_start` itself resolves in the newest turn holding one (enabled or not).
 - An `optional` locator's absence may be used as a state only when a positive
   anchor (`prompt_input` / `tools` / `plan_start`) resolved in the same
@@ -53,7 +54,9 @@ FALLBACK_CANDIDATES = 3  # listed (never added to the snippet) when nothing is s
 PLAN_ANCHORED = ("plan_start", "plan_edit", "plan_cancel_countdown")
 # ... of those, the ones that act on a live card: only the turn holding the newest ENABLED plan_start
 PLAN_ENABLED_ANCHORED = ("plan_edit", "plan_cancel_countdown")
-NO_ENABLED_START_HINT = "no plan card with an enabled plan_start: not binding a stale card"
+# a turn holding any of these is a plan card turn: the newest one is the only card plan actions may touch
+PLAN_CONTROLS = ("plan_start", "plan_edit", "plan_cancel_countdown", "plan_retry_without_dr")
+NO_ENABLED_START_HINT = "the newest plan card has no enabled plan_start: not binding it or an older card"
 # scopes whose roots come from the bound conversation document (ctx.doc)
 DOC_SCOPES = ("document", "main", "composer", "plan_card")
 REQUIRED = ("ct", "names", "scope", "expect")
@@ -256,13 +259,20 @@ def _scope_roots(scope: str, ctx: LocatorContext, key: Optional[str] = None) -> 
         # the plan card is the newest turn that holds a plan_start button (an enabled one for plan actions)
         akey = "plan_start" if key in PLAN_ANCHORED else key
         aent = ctx.locs["locators"].get(akey) if akey else None
-        need_enabled = key in PLAN_ENABLED_ANCHORED
+        if key in PLAN_ENABLED_ANCHORED:
+            ents = [ctx.locs["locators"][k] for k in PLAN_CONTROLS if k in ctx.locs["locators"]]
+            start = ctx.locs["locators"].get("plan_start")
+            for turn in reversed(turns):
+                nodes = [n for n, _ in turn.walk()]
+                if any(_matches(n, e) for n in nodes for e in ents):
+                    # the newest card only: never walk back to an older one
+                    ok = start is not None and any(_matches(n, start) and n.enabled for n in nodes)
+                    return [turn] if ok else []
+            return []
         if aent is not None:
             for turn in reversed(turns):
-                if any(_matches(n, aent) and (n.enabled or not need_enabled) for n, _ in turn.walk()):
+                if any(_matches(n, aent) for n, _ in turn.walk()):
                     return [turn]
-        if need_enabled:
-            return []
         return turns[-1:]
     if scope == "composer":
         akey = conf.get("anchor", "prompt_input")

@@ -509,15 +509,37 @@ class LocatorReviewFixTests(unittest.TestCase):
 
     # ---- B14: plan_edit / plan_cancel_countdown bind only the newest ENABLED start ----
     def test_plan_actions_bind_newest_enabled_start(self):
+        # corrected B14: the anchor is the NEWEST turn holding any plan control; an older card is never used
         spec = _spec()
         _add(spec, "turn0", _btn("old_start", "연구 시작"))
         _add(spec, "turn0", _btn("old_edit", "연구 계획 수정"))
         _add(spec, "turn0", _btn("old_cancel", "취소"))
-        _get(spec, "plan_start")["enabled"] = False  # the newest card's start is disabled
         ctx = _ctx(spec)
-        self.assertEqual(_ids("plan_edit", ctx), ["old_edit"])
-        self.assertEqual(_ids("plan_cancel_countdown", ctx), ["old_cancel"])
-        self.assertEqual(_ids("plan_start", ctx), ["plan_start"])  # plan_start itself: newest card, as before
+        self.assertEqual(_ids("plan_edit", ctx), ["plan_edit"])
+        self.assertEqual(_ids("plan_cancel_countdown", ctx), ["plan_cancel"])
+        _get(spec, "plan_start")["enabled"] = False  # the newest card's start is disabled: no walking back
+        for key in ("plan_edit", "plan_cancel_countdown"):
+            with self.subTest(key=key):
+                p = _payload(spec, key)
+                self.assertEqual((p["code"], p["found"]), ("UI_LOCATOR_MISS", 0))
+                self.assertNotIn("old_", json.dumps(p))
+        self.assertEqual(_ids("plan_start", _ctx(spec)), ["plan_start"])  # plan_start itself: newest card, as before
+
+    def test_plan_actions_anchor_on_newest_turn_with_any_plan_control(self):
+        for control in (_btn("new_edit", "연구 계획 수정"), _btn("new_cancel", "취소"),
+                        _btn("new_retry", "Retry without Deep Research")):
+            with self.subTest(control=control["id"]):
+                spec = _spec()  # turn1 holds the enabled card; a newer turn has a plan control but no start
+                _add(spec, "conv", {"id": "turn2", "ct": "Group",
+                                    "automation_id": "model-response-message-content-newer", "children": [control]})
+                for key in ("plan_edit", "plan_cancel_countdown"):
+                    p = _payload(spec, key)
+                    self.assertEqual(p["found"], 0, key)
+                    self.assertNotIn("plan_edit", [c.get("name") for c in p["candidates"]])
+        spec = _spec()  # a newer turn without any plan control does not move the anchor
+        _add(spec, "conv", {"id": "turn2", "ct": "Group", "automation_id": "model-response-message-content-later",
+                            "children": [{"id": "t2", "ct": "Text", "name": "후속 답변"}]})
+        self.assertEqual(_ids("plan_edit", _ctx(spec)), ["plan_edit"])
 
     def test_plan_actions_miss_without_an_enabled_start(self):
         spec = _spec()
