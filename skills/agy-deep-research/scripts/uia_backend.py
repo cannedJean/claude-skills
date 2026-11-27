@@ -12,12 +12,21 @@ desktop BEFORE calling `load_com()`; `desktop_root()` is then that desktop's UIA
 
 Node ids: the UIA RuntimeId joined with "." (unique and stable for an element). A RuntimeId that is
 missing, empty or shared by several elements of one snapshot is disambiguated as
-`<rid|norid>~<anchor>:<index path>` (anchor = the snapshot root's id), so ids are never empty and
-never duplicated (privacy fails closed on either).
+`<rid|norid>~<parent>:<k>` (parent = the parent's id, hashed when it is itself a fallback id;
+k = index among the earlier siblings with the same RuntimeId), so ids are never empty and never
+duplicated (privacy fails closed on either), and inserting a sibling with its own unique RuntimeId
+does not shift them. Siblings that UIA cannot tell apart can still trade ids when one is inserted
+before the other; callers act only on nodes of the latest snapshot. The RuntimeId
+is read from the cache; a failed live fallback counts as "no RuntimeId".
+
+Only our windows are read: `window_filter(process_id)` picks top-level windows before any subtree
+is cached (documents() searches only those; desktop_root() caches the root with its children only,
+then each kept window's subtree).
 
 Errors (match steps.BackendError): pattern missing -> PatternNotSupported; element gone or unknown
 id -> KeyError (ElementGone); other COM failure -> UiaComError (an OSError).
 """
+import hashlib
 import os
 import sys
 from dataclasses import dataclass, field
@@ -77,7 +86,10 @@ CONTROL_TYPES = {
 }
 HEADING_NONE = 80050  # HeadingLevel_None; 80051..80056 = H1..H6
 TREESCOPE_ELEMENT, TREESCOPE_CHILDREN, TREESCOPE_SUBTREE = 1, 2, 7
+CACHE_SCOPES = {"element": TREESCOPE_ELEMENT, "children": TREESCOPE_ELEMENT | TREESCOPE_CHILDREN,
+                "subtree": TREESCOPE_SUBTREE}
 UIA_E_ELEMENTNOTAVAILABLE = -2147220991  # 0x80040201
+UIA_E_INVALIDOPERATION = -2146233079  # 0x80131509 -> UiaComError like any other failure
 
 
 class UiaUnavailable(RuntimeError):
@@ -127,10 +139,12 @@ class UiaCom(Protocol):
     def find_by_automation_id(self, element: Any, automation_id: str) -> List[Any]:
         """Elements of `element`'s subtree (itself included) with this AutomationId."""
 
-    def build_cache(self, element: Any, props, subtree: bool = True) -> CachedElement: ...
+    def build_cache(self, element: Any, props, scope: str = "subtree") -> CachedElement:
+        """scope: "element" (no children), "children" (direct children, no grandchildren), "subtree"."""
 
     def pattern(self, element: Any, name: str) -> Any:
-        """Pattern object for `name` in PATTERN_IDS, or None if the element does not support it."""
+        """Pattern object for `name` in PATTERN_IDS, or None if the element does not support it.
+        Its methods raise ElementGone / UiaComError (never a raw COM error)."""
 
     def runtime_id(self, element: Any) -> Optional[Tuple[int, ...]]: ...
 
@@ -203,9 +217,22 @@ def _rid_key(rid) -> str:
     return ".".join(parts)
 
 
+def _parent_ref(parent_id: str) -> str:
+    """A parent's id inside a fallback id: kept as is when it is a plain RuntimeId, else a short hash
+    (so ids stay bounded under chains of elements without RuntimeId)."""
+    if "~" not in parent_id:
+        return parent_id
+    return "h" + hashlib.sha1(parent_id.encode("utf-8")).hexdigest()[:12]
+
+
 class UiaTree(UiTree):
     """UiTree over a UiaCom. `window_filter(process_id) -> bool` selects the top-level windows that are
-    ours (the caller's verified Gemini process tree); windows of other processes are never read."""
+    ours (the caller's verified Gemini process tree). Other processes' windows are never read below
+    the top level: `documents()` searches only filtered windows, and `desktop_root()` caches the root
+    with its direct children only (Element+Children), then the subtree of each kept window.
+
+    Each new snapshot of a root (a document, the desktop, the document list) drops the ids that root
+    registered before and no longer contains, so a stale id raises ElementGone instead of resolving."""
 
     def __init__(self, com: UiaCom, window_filter: Callable[[int], bool]):
         if not callable(window_filter):
@@ -214,40 +241,49 @@ class UiaTree(UiTree):
         self._filter = window_filter
         self._elements: Dict[str, Any] = {}
         self._patterns: Dict[str, frozenset] = {}
+        self._owners: Dict[str, set] = {}   # node id -> snapshot roots that registered it
+        self._by_root: Dict[str, set] = {}  # snapshot root -> node ids it registered last time
         self._documents: Dict[str, Any] = {}
 
     # -- building ----------------------------------------------------
-    def _ids(self, entries: List[Tuple[Any, str]], anchor: str, pinned: Optional[str]) -> List[str]:
-        """entries = [(element, index_path)], first is the root; `pinned` forces the root's id."""
-        bases = [_rid_key(self._com.runtime_id(el)) for el, _ in entries]
-        counts: Dict[str, int] = {}
-        for i, b in enumerate(bases):
-            if i == 0 and pinned is not None:
-                b = pinned
-            counts[b] = counts.get(b, 0) + 1
-        ids = []
-        for i, ((_, path), b) in enumerate(zip(entries, bases)):
-            if i == 0 and pinned is not None:
-                ids.append(pinned)
-            elif b and counts[b] == 1:
-                ids.append(b)
-            else:
-                ids.append("%s~%s:%s" % (b or "norid", anchor, path))
-        return ids
+    def _rid(self, cached: CachedElement) -> str:
+        """The cached RuntimeId; else the live one; a failed live read means "no RuntimeId"."""
+        key = _rid_key(cached.props.get("RuntimeId"))
+        if key:
+            return key
+        try:
+            return _rid_key(self._com.runtime_id(cached.element))
+        except (LookupError, OSError, PatternNotSupported):
+            return ""
 
     def _to_node(self, cached: CachedElement, pinned: Optional[str] = None) -> Node:
-        flat: List[Tuple[CachedElement, str, int]] = []  # (cached, path, parent index)
-        stack = [(cached, "0", -1)]
+        flat: List[Tuple[CachedElement, int, int]] = []  # (cached, parent index, index in parent)
+        stack = [(cached, -1, 0)]
         while stack:
-            c, path, parent = stack.pop()
+            c, parent, pos = stack.pop()
             idx = len(flat)
-            flat.append((c, path, parent))
+            flat.append((c, parent, pos))
             for i in range(len(c.children) - 1, -1, -1):
-                stack.append((c.children[i], "%s.%d" % (path, i), idx))
-        root_base = pinned if pinned is not None else (_rid_key(self._com.runtime_id(cached.element)) or "norid")
-        ids = self._ids([(c.element, p) for c, p, _ in flat], root_base, pinned)
+                stack.append((c.children[i], idx, i))
+        bases = [self._rid(c) for c, _, _ in flat]
+        if pinned is not None:
+            bases[0] = pinned
+        counts: Dict[str, int] = {}
+        for b in bases:
+            counts[b] = counts.get(b, 0) + 1
+        ids: List[str] = []
+        seen: Dict[Tuple[int, str], int] = {}  # (parent index, base) -> fallback siblings so far
         nodes: List[Node] = []
-        for (c, _, parent), nid in zip(flat, ids):
+        for i, ((c, parent, _pos), b) in enumerate(zip(flat, bases)):
+            if i == 0:
+                nid = b if (pinned is not None or (b and counts[b] == 1)) else "%s~root:0" % (b or "norid")
+            elif b and counts[b] == 1:
+                nid = b
+            else:
+                k = seen.get((parent, b), 0)
+                seen[(parent, b)] = k + 1
+                nid = "%s~%s:%d" % (b or "norid", _parent_ref(ids[parent]), k)
+            ids.append(nid)
             pr = c.props
             node = Node(
                 id=nid, ct=control_type_name(pr.get("ControlType")), role=_str(pr.get("AriaRole")),
@@ -256,11 +292,40 @@ class UiaTree(UiTree):
                 offscreen=_bool(pr.get("IsOffscreen"), False), value=_str(pr.get("ValueValue")),
                 automation_id=_str(pr.get("AutomationId")), patterns=_patterns(pr))
             nodes.append(node)
-            self._elements[nid] = c.element
-            self._patterns[nid] = node.patterns
             if parent >= 0:
                 nodes[parent].children.append(node)
+        if len(set(ids)) != len(ids):  # not reachable by construction; privacy must never see duplicates
+            raise UiaComError("duplicate node ids in snapshot")
         return nodes[0]
+
+    def _register(self, root_key: str, elements: Dict[str, Any], patterns: Dict[str, frozenset]) -> None:
+        new = set(elements)
+        for nid in self._by_root.get(root_key, set()) - new:
+            owners = self._owners.get(nid)
+            if owners is not None:
+                owners.discard(root_key)
+                if not owners:
+                    del self._owners[nid]
+                    self._elements.pop(nid, None)
+                    self._patterns.pop(nid, None)
+        self._by_root[root_key] = new
+        for nid, el in elements.items():
+            self._elements[nid] = el
+            self._patterns[nid] = patterns[nid]
+            self._owners.setdefault(nid, set()).add(root_key)
+
+    def _build(self, root_key: str, cached: CachedElement, pinned: Optional[str] = None) -> Node:
+        node = self._to_node(cached, pinned)
+        elements: Dict[str, Any] = {}
+        patterns: Dict[str, frozenset] = {}
+        pairs = [(node, cached)]
+        while pairs:
+            n, c = pairs.pop()
+            elements[n.id] = c.element
+            patterns[n.id] = n.patterns
+            pairs.extend(zip(n.children, c.children))
+        self._register(root_key, elements, patterns)
+        return node
 
     def _windows(self, class_name: Optional[str]) -> List[Any]:
         return [w for w in self._com.find_windows(class_name) if self._filter(self._com.process_id(w))]
@@ -271,37 +336,41 @@ class UiaTree(UiTree):
         found = []
         for w in self._windows(WINDOW_CLASS):
             found.extend(self._com.find_by_automation_id(w, DOCUMENT_AUTOMATION_ID))
-        bases = [_rid_key(self._com.runtime_id(el)) for el in found]
+        cached = [self._com.build_cache(el, NODE_PROPS, scope="element") for el in found]
+        bases = [self._rid(c) for c in cached]
         counts: Dict[str, int] = {}
         for b in bases:
             counts[b] = counts.get(b, 0) + 1
         ids = [b if b and counts[b] == 1 else "%s~documents:%d" % (b or "norid", i) for i, b in enumerate(bases)]
-        docs = []
-        self._documents = {}
-        for el, nid in zip(found, ids):
-            node = self._to_node(self._com.build_cache(el, NODE_PROPS, subtree=False), pinned=nid)
-            self._documents[nid] = el
+        docs, elements, patterns = [], {}, {}
+        for c, nid in zip(cached, ids):
+            node = self._to_node(c, pinned=nid)
+            elements[nid] = c.element
+            patterns[nid] = node.patterns
             docs.append(node)
+        self._register("\x00documents", elements, patterns)
+        self._documents = dict(elements)
         return docs
 
     def desktop_root(self) -> Node:
-        """The calling thread's desktop root; only top-level windows passing window_filter are kept."""
-        cached = self._com.build_cache(self._com.root(), NODE_PROPS, subtree=True)
+        """The calling thread's desktop root plus the subtrees of the top-level windows passing
+        window_filter; the subtrees of other windows are never requested."""
+        root = self._com.build_cache(self._com.root(), NODE_PROPS, scope="children")
         kept = []
-        for child in cached.children:
+        for child in root.children:
             pid = child.props.get("ProcessId")
             if not isinstance(pid, int) or isinstance(pid, bool):
                 pid = self._com.process_id(child.element)
             if self._filter(pid):
-                kept.append(child)
-        cached.children = kept
-        return self._to_node(cached)
+                kept.append(self._com.build_cache(child.element, NODE_PROPS, scope="subtree"))
+        root.children = kept
+        return self._build("\x00desktop", root)
 
     def snapshot(self, doc_id: str) -> Node:
         if doc_id not in self._documents:
             raise ElementGone("no such document: %s" % doc_id)
-        cached = self._com.build_cache(self._documents[doc_id], NODE_PROPS, subtree=True)
-        return self._to_node(cached, pinned=doc_id)
+        cached = self._com.build_cache(self._documents[doc_id], NODE_PROPS, scope="subtree")
+        return self._build("doc:" + doc_id, cached, pinned=doc_id)
 
     def _element(self, node_id: str) -> Any:
         if node_id not in self._elements:
@@ -332,6 +401,35 @@ class UiaTree(UiTree):
 
 
 # -- real COM --------------------------------------------------------------------
+class _PatternProxy:
+    """A comtypes pattern whose method calls and CurrentValue reads go through ComtypesUia._call."""
+
+    def __init__(self, obj, call):
+        self._obj, self._callf = obj, call
+
+    def Invoke(self):
+        return self._callf(lambda: self._obj.Invoke())
+
+    def Toggle(self):
+        return self._callf(lambda: self._obj.Toggle())
+
+    def Expand(self):
+        return self._callf(lambda: self._obj.Expand())
+
+    def Collapse(self):
+        return self._callf(lambda: self._obj.Collapse())
+
+    def DoDefaultAction(self):
+        return self._callf(lambda: self._obj.DoDefaultAction())
+
+    def SetValue(self, text):
+        return self._callf(lambda: self._obj.SetValue(text))
+
+    @property
+    def CurrentValue(self):
+        return self._callf(lambda: self._obj.CurrentValue)
+
+
 class ComtypesUia:
     """UiaCom over a comtypes IUIAutomation object. Every call refuses under the test sandbox."""
 
@@ -367,18 +465,20 @@ class ComtypesUia:
     def find_by_automation_id(self, element, automation_id):
         return self._find_all(element, TREESCOPE_SUBTREE, "AutomationId", automation_id)
 
-    def build_cache(self, element, props, subtree=True):
+    def build_cache(self, element, props, scope="subtree"):
         _refuse_in_sandbox()
         props = list(props)
         unknown = [p for p in props if p not in PROPERTY_IDS]
         if unknown:
             raise ValueError("unknown UIA properties: %s" % ", ".join(unknown))
+        if scope not in CACHE_SCOPES:
+            raise ValueError("unknown cache scope %r" % (scope,))
 
         def run():
             cr = self._uia.CreateCacheRequest()
             for p in props:
                 cr.AddProperty(PROPERTY_IDS[p])
-            cr.TreeScope = TREESCOPE_SUBTREE if subtree else TREESCOPE_ELEMENT
+            cr.TreeScope = CACHE_SCOPES[scope]
             croot = element.BuildUpdatedCache(cr)
             top = CachedElement(element=croot)
             stack = [top]
@@ -389,7 +489,7 @@ class ComtypesUia:
                         c.props[p] = c.element.GetCachedPropertyValue(PROPERTY_IDS[p])
                     except self._com_error:
                         c.props[p] = None
-                if not subtree:
+                if scope == "element" or (scope == "children" and c is not top):
                     continue
                 kids = c.element.GetCachedChildren()
                 if not kids:  # NULL COM pointer for leaves
@@ -412,7 +512,8 @@ class ComtypesUia:
             if not unk:  # NULL pointer: not supported
                 return None
             return unk.QueryInterface(getattr(self._mod, iface))
-        return self._call(run)
+        obj = self._call(run)
+        return None if obj is None else _PatternProxy(obj, self._call)
 
     def runtime_id(self, element):
         def run():

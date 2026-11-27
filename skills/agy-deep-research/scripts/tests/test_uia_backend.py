@@ -55,9 +55,11 @@ class FakeEl:
     """A live element; `rid=None` means no RuntimeId, `rid=()` an empty one."""
 
     def __init__(self, ct=CT_TEXT, name="", rid="auto", pid=100, aid="", role="", aria="", heading=80050,
-                 value="", enabled=True, offscreen=False, patterns=(), children=(), cls="", supported=None):
+                 value="", enabled=True, offscreen=False, patterns=(), children=(), cls="", supported=None,
+                 cached_rid="same"):
         self.ct, self.name, self.pid, self.aid, self.role, self.aria = ct, name, pid, aid, role, aria
-        self.rid = _next_rid() if rid == "auto" else rid
+        self.rid = _next_rid() if rid == "auto" else rid  # live RuntimeId (an exception = the read fails)
+        self.cached_rid = self.rid if cached_rid == "same" else cached_rid
         self.heading, self.value, self.enabled, self.offscreen, self.cls = heading, value, enabled, offscreen, cls
         self.patterns = set(patterns)  # advertised (Is*PatternAvailable)
         self.supported = set(patterns) if supported is None else set(supported)  # what pattern() returns
@@ -69,7 +71,7 @@ class FakeEl:
             "ControlType": self.ct, "Name": self.name, "AutomationId": self.aid, "ClassName": self.cls,
             "IsEnabled": self.enabled, "IsOffscreen": self.offscreen, "AriaRole": self.role,
             "AriaProperties": self.aria, "HeadingLevel": self.heading, "ValueValue": self.value,
-            "ProcessId": self.pid, "RuntimeId": self.rid,
+            "ProcessId": self.pid, "RuntimeId": self.cached_rid,
             "IsInvokePatternAvailable": "invoke" in self.patterns,
             "IsTogglePatternAvailable": "toggle" in self.patterns,
             "IsExpandCollapsePatternAvailable": "expand_collapse" in self.patterns,
@@ -87,6 +89,7 @@ class FakeCom:
     def __init__(self, root):
         self._root = root
         self.cache_calls = []
+        self.rid_calls = []
 
     def root(self):
         return self._root
@@ -97,18 +100,23 @@ class FakeCom:
     def find_by_automation_id(self, element, automation_id):
         return [e for e in element.walk() if e.aid == automation_id]
 
-    def build_cache(self, element, props, subtree=True):
-        self.cache_calls.append((element, tuple(props), subtree))
+    def build_cache(self, element, props, scope="subtree"):
+        assert scope in ("element", "children", "subtree"), scope
+        self.cache_calls.append((element, tuple(props), scope))
 
-        def wrap(el):
+        def wrap(el, depth):
+            deeper = scope == "subtree" or (scope == "children" and depth == 0)
             return ub.CachedElement(element=el, props={p: el.prop(p) for p in props},
-                                    children=[wrap(c) for c in el.children] if subtree else [])
-        return wrap(element)
+                                    children=[wrap(c, depth + 1) for c in el.children] if deeper else [])
+        return wrap(element, 0)
 
     def pattern(self, element, name):
         return FakePattern(element, name) if name in element.supported else None
 
     def runtime_id(self, element):
+        self.rid_calls.append(element)
+        if isinstance(element.rid, Exception):
+            raise element.rid
         return element.rid
 
     def process_id(self, element):
@@ -241,6 +249,80 @@ class IdTest(unittest.TestCase):
         self.assertEqual(snap.value, "b")
 
 
+class StaleAndRuntimeIdTest(unittest.TestCase):
+    def test_stale_id_after_sibling_insertion_raises_element_gone(self):
+        a = FakeEl(ct=CT_BUTTON, rid=(42, 9), patterns=("invoke",))
+        doc = _doc("u", children=[a], rid=(42, 4))
+        tree = _tree(_desktop(_window(doc)))
+        did = tree.documents()[0].id
+        self.assertEqual(_ids(tree.snapshot(did)), ["42.4", "42.9"])
+        doc.children.append(FakeEl(ct=CT_BUTTON, rid=(42, 9), patterns=("invoke",)))  # clashing sibling
+        ids = _ids(tree.snapshot(did))
+        self.assertNotIn("42.9", ids)
+        with self.assertRaises(KeyError):
+            tree.act("42.9", "invoke")  # the old id must not resolve to either element any more
+        self.assertEqual(a.calls, [])
+
+    def test_removed_element_id_raises_element_gone(self):
+        gone = FakeEl(ct=CT_BUTTON, rid=None, patterns=("invoke",))
+        doc = _doc("u", children=[gone], rid=(42, 4))
+        tree = _tree(_desktop(_window(doc)))
+        did = tree.documents()[0].id
+        old = tree.snapshot(did).children[0].id
+        doc.children.clear()
+        tree.snapshot(did)
+        with self.assertRaises(KeyError):
+            tree.act(old, "invoke")
+        self.assertEqual(gone.calls, [])
+
+    def test_unique_sibling_insertion_does_not_shift_fallback_ids(self):
+        f1, f2 = FakeEl(rid=None), FakeEl(rid=None)
+        doc = _doc("u", children=[f1, f2], rid=(42, 4))
+        tree = _tree(_desktop(_window(doc)))
+        did = tree.documents()[0].id
+        before = _ids(tree.snapshot(did))
+        doc.children.insert(0, FakeEl(rid=(42, 31)))
+        after = _ids(tree.snapshot(did))
+        self.assertEqual(after, [before[0], "42.31"] + before[1:])
+
+    def test_deep_fallback_chain_ids_stay_unique_and_bounded(self):
+        leaf = FakeEl(rid=None)
+        for _ in range(40):
+            leaf = FakeEl(rid=None, children=[leaf, FakeEl(rid=None)])
+        tree = _tree(_desktop(_window(_doc("u", children=[leaf], rid=(42, 4)))))
+        ids = _ids(tree.snapshot(tree.documents()[0].id))
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertLess(max(len(i) for i in ids), 80)
+
+    def test_cached_runtime_id_is_used_without_a_live_read(self):
+        el = FakeEl(rid=(42, 66))
+        doc = _doc("u", children=[el], rid=(42, 4))
+        com = FakeCom(_desktop(_window(doc)))
+        tree = ub.UiaTree(com, lambda pid: pid == 100)
+        tree.snapshot(tree.documents()[0].id)
+        self.assertEqual(com.rid_calls, [])
+
+    def test_live_fallback_used_when_cache_lacks_runtime_id(self):
+        el = FakeEl(rid=(42, 67), cached_rid=None)
+        tree = _tree(_desktop(_window(_doc("u", children=[el], rid=(42, 4)))))
+        self.assertEqual(tree.snapshot(tree.documents()[0].id).children[0].id, "42.67")
+
+    def test_failed_live_runtime_id_counts_as_missing(self):
+        for exc in (ub.ElementGone("gone"), ub.UiaComError("E_FAIL")):
+            with self.subTest(exc=type(exc).__name__):
+                el = FakeEl(rid=exc, cached_rid=None)
+                doc = _doc("u", children=[el, FakeEl(rid=(42, 68))], rid=(42, 4))
+                tree = _tree(_desktop(_window(doc)))
+                snap = tree.snapshot(tree.documents()[0].id)
+                self.assertTrue(snap.children[0].id.startswith("norid~"))
+                self.assertEqual(snap.children[1].id, "42.68")
+
+    def test_failed_live_runtime_id_of_document_counts_as_missing(self):
+        tree = _tree(_desktop(_window(_doc("u", rid=OSError("gone")))))
+        docs = tree.documents()
+        self.assertTrue(docs[0].id.startswith("norid~"))
+
+
 class DocumentsTest(unittest.TestCase):
     def test_root_web_areas_of_filtered_windows_with_url(self):
         conv = _doc("https://gemini.google.com/app/0123456789abcdef", children=[FakeEl(name="secret title")])
@@ -257,7 +339,7 @@ class DocumentsTest(unittest.TestCase):
                          ["https://gemini.google.com/app/0123456789abcdef", "app://bundle/src/top_bar/top_bar.html"])
         self.assertTrue(all(d.automation_id == "RootWebArea" and d.ct == "Document" for d in docs))
         self.assertTrue(all(d.children == [] for d in docs))  # shallow: no sidebar content is read here
-        self.assertTrue(all(not sub for _, _, sub in com.cache_calls))
+        self.assertTrue(all(scope == "element" for _, _, scope in com.cache_calls))
 
     def test_snapshot_unknown_document_raises_key_error(self):
         tree = _tree(_desktop(_window(_doc("u"))))
@@ -287,6 +369,16 @@ class DocumentsTest(unittest.TestCase):
         self.assertNotIn("not ours", names)
         tree.act("42.50", "invoke")
         self.assertEqual(menu.calls, [("invoke", "Invoke")])
+
+    def test_desktop_root_never_requests_foreign_subtrees(self):
+        ours = _window(_doc("u"))
+        foreign = _window(FakeEl(name="not ours"), pid=555)
+        desk = _desktop(ours, foreign)
+        com = FakeCom(desk)
+        ub.UiaTree(com, lambda pid: pid == 100).desktop_root()
+        calls = [(el, scope) for el, _, scope in com.cache_calls]
+        self.assertEqual(calls, [(desk, "children"), (ours, "subtree")])
+        self.assertFalse(any(el is foreign or el in list(foreign.walk()) for el, _ in calls))
 
 
 class ActTest(unittest.TestCase):
@@ -421,6 +513,59 @@ class ComErrorMappingTest(unittest.TestCase):
         with self.assertRaises(OSError) as cm:
             self.com.pattern(el, "invoke")
         self.assertIsInstance(cm.exception, ub.UiaComError)
+
+    def _proxy(self, hresult):
+        err = self.err
+
+        class RaisingPattern:
+            def _boom(self, *_a):
+                raise err(hresult, "x", None)
+            Invoke = Toggle = Expand = Collapse = DoDefaultAction = SetValue = _boom
+
+            @property
+            def CurrentValue(self):
+                raise err(hresult, "x", None)
+
+        el = mock.Mock()
+        el.GetCurrentPattern.return_value.QueryInterface.return_value = RaisingPattern()
+        return self.com.pattern(el, "invoke")
+
+    def test_pattern_method_com_errors_are_mapped(self):
+        calls = {"Invoke": lambda p: p.Invoke(), "Toggle": lambda p: p.Toggle(), "Expand": lambda p: p.Expand(),
+                 "Collapse": lambda p: p.Collapse(), "DoDefaultAction": lambda p: p.DoDefaultAction(),
+                 "SetValue": lambda p: p.SetValue("t"), "CurrentValue": lambda p: p.CurrentValue}
+        for hresult, want in ((ub.UIA_E_ELEMENTNOTAVAILABLE, ub.ElementGone),
+                              (ub.UIA_E_INVALIDOPERATION, ub.UiaComError), (-2147467259, ub.UiaComError)):
+            for name, call in calls.items():
+                with self.subTest(hresult=hresult, method=name):
+                    with self.assertRaises(want) as cm:
+                        call(self._proxy(hresult))
+                    self.assertNotIsInstance(cm.exception, self.err)
+        self.assertTrue(issubclass(ub.ElementGone, LookupError))
+        self.assertTrue(issubclass(ub.UiaComError, OSError))
+
+    def test_pattern_proxy_passes_results_through(self):
+        el = mock.Mock()
+        pat = el.GetCurrentPattern.return_value.QueryInterface.return_value
+        pat.CurrentValue = "hello"
+        proxy = self.com.pattern(el, "value")
+        self.assertEqual(proxy.CurrentValue, "hello")
+        proxy.SetValue("x")
+        pat.SetValue.assert_called_once_with("x")
+
+    def test_pattern_proxy_refuses_under_sandbox(self):
+        el = mock.Mock()
+        pat = el.GetCurrentPattern.return_value.QueryInterface.return_value
+        proxy = self.com.pattern(el, "invoke")
+        with mock.patch.dict(os.environ, {"AGY_DR_TEST_SANDBOX": "1"}):
+            with self.assertRaises(ub.HostRefused):
+                proxy.Invoke()
+        pat.Invoke.assert_not_called()
+
+    def test_null_pattern_is_none(self):
+        el = mock.Mock()
+        el.GetCurrentPattern.return_value = None
+        self.assertIsNone(self.com.pattern(el, "toggle"))
 
     def test_unknown_property_or_pattern_name(self):
         with self.assertRaises(ValueError):
