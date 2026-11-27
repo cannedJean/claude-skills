@@ -22,8 +22,8 @@ In deep-research mode (AGY_CONFINE_MODE="deep-research"):
     .psm1 .vbs .vbe .js .jse .wsf .wsh .lnk .pif .scr .msc .hta .cpl), Python artefacts (.py .pyw .pyc .pyo .pyz
     .pth), anything under __pycache__, and files named python/python3/py with any extension.
   - run_command must match exactly INTERP [FLAGS] SCRIPT --job JOB [--worker] (no ' ^ % ! & | < > ( ) ; ` $ or
-    newline anywhere; tokens fully double-quoted or unquoted; paths compared literally, case and separator folded
-    only): INTERP a bare python / python3 / py (optionally .exe) or the literal sys.executable, FLAGS from
+    newline anywhere; only ASCII space/tab between tokens; tokens fully double-quoted or unquoted; paths compared
+    literally, ASCII A-Z case and separator folded only, non-ASCII case look-alikes refused): INTERP a bare python / python3 / py (optionally .exe) or the literal sys.executable, FLAGS from
     -u -B -E -s -S -O -OO, SCRIPT the canonical
     <AGY_CONFINE_DR_DIR>/scripts/relay_step.py --job <workdir> without shell chaining / redirections; any other
     script (a relay_step.py in the work dir included) and all other shell commands are denied with rule "shell".
@@ -74,7 +74,7 @@ DOTDOT = re.compile(r"(^|[\\/])\.\.([\\/]|$)")
 # Metacharacters for shell chaining and redirection
 SHELL_META_RE = re.compile(r"""[&|;`><\r\n]|\$\(""")
 # token 0: a bare interpreter name (no path: never a copy agy could have planted) or exactly sys.executable
-PYTHON_EXE_RE = re.compile(r"^(python3?|py)(\.exe)?$", re.I)
+PYTHON_EXE_RE = re.compile(r"^(python3?|py)(\.exe)?\Z", re.I | re.A)  # re.A: no Unicode case look-alikes
 # deep-research: nothing agy writes in the work dir may be runnable (Windows executables/scripts) or importable
 EXEC_EXTS = (".bat", ".cmd", ".com", ".exe", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".lnk",
              ".pif", ".scr", ".msc", ".hta", ".cpl", ".py", ".pyw", ".pyc", ".pyo", ".pyz", ".pth",
@@ -238,12 +238,11 @@ def is_protected_file(rel: str, mode: str = "default") -> bool:
             return True
         # nothing agy writes in the work dir may be run or imported: executable/script extensions, Python artefacts,
         # __pycache__, and any file named like the interpreter (cmd.exe searches the current dir first)
-        names = [x.lower().rstrip(". ") for x in parts]
-        last = names[-1]
-        if "__pycache__" in names or last.endswith(EXEC_EXTS) or last in PROTECTED_NAMES:
-            return True
-        if last.split(".", 1)[0] in INTERPRETER_STEMS:
-            return True
+        # every path part, not only the last: a folder named python.exe/ or x.bat/ is refused too
+        for name in (x.lower().rstrip(". ") for x in parts):
+            if (name == "__pycache__" or name.endswith(EXEC_EXTS) or name in PROTECTED_NAMES
+                    or name.split(".", 1)[0] in INTERPRETER_STEMS):
+                return True
     return False
 
 
@@ -286,23 +285,23 @@ def _dr_tokens(cmd: str):
     quote at all; `--job="..."` is the one exception."""
     out, i, n = [], 0, len(cmd)
     while i < n:
-        if cmd[i].isspace():
+        if cmd[i] in " \t":
             i += 1
             continue
         if cmd[i] == '"':
             j = cmd.find('"', i + 1)
-            if j < 0 or (j + 1 < n and not cmd[j + 1].isspace()):
+            if j < 0 or (j + 1 < n and cmd[j + 1] not in " \t"):
                 return None
             out.append((cmd[i + 1:j], True))
             i = j + 1
             continue
         j = i
-        while j < n and not cmd[j].isspace():
+        while j < n and cmd[j] not in " \t":
             j += 1
         tok = cmd[i:j]
         if tok.startswith('--job="'):
             k = cmd.find('"', i + 7)
-            if k < 0 or (k + 1 < n and not cmd[k + 1].isspace()):
+            if k < 0 or (k + 1 < n and cmd[k + 1] not in " \t"):
                 return None
             out.append(("--job=" + cmd[i + 7:k], True))
             i = k + 1
@@ -314,13 +313,21 @@ def _dr_tokens(cmd: str):
     return out
 
 
+_ASCII_FOLD = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
 def _lit(path: str) -> str:
-    return path.replace("/", "\\").lower()
+    return path.replace("/", "\\").translate(_ASCII_FOLD)  # ASCII A-Z only: no Unicode case mapping
+
+
+def _case_lookalike(tok: str) -> bool:
+    """A non-ASCII character that str.lower() would change (U+212A KELVIN SIGN -> k, U+212B, U+2126, U+0130 ...)."""
+    return any(ord(c) > 127 and c.lower() != c for c in tok)
 
 
 def _literal_path_ok(tok: str, wanted) -> bool:
-    """tok names one of `wanted` literally: case and / vs \\ folded, nothing else (no . / .. components)."""
-    if any(part in (".", "..") for part in _lit(tok).split("\\")):
+    """tok names one of `wanted` literally: ASCII case and / vs \\ folded, nothing else (no . / .. components)."""
+    if _case_lookalike(tok) or any(part in (".", "..") for part in _lit(tok).split("\\")):
         return False
     return _lit(tok) in {_lit(w) for w in wanted if w}
 
@@ -334,7 +341,12 @@ def validate_deep_research_command(cmd: str, root: str, dr_dir: str, cwd: str = 
 
     if not isinstance(cmd, str) or not cmd.strip():
         return deny("empty command line")
-    raw = cmd.strip()
+    raw = cmd.strip(" \t")
+    odd_ws = sorted({c for c in raw if c.isspace() and c not in " \t"})
+    if odd_ws or raw != raw.strip():
+        return deny("only ASCII space and tab may separate tokens (found %r)" % "".join(odd_ws or raw))
+    if _case_lookalike(raw.split(None, 1)[0] if raw.split() else ""):
+        return deny("non-ASCII case look-alike in the interpreter")
     bad = sorted(DR_FORBIDDEN_CHARS.intersection(raw))
     if bad:
         return deny("forbidden character(s) %r in the command line" % "".join(bad))

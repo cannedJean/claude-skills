@@ -89,7 +89,8 @@ class Hook(unittest.TestCase):
         cp = subprocess.run([sys.executable, str(HOOK)], input=data, capture_output=True,
                             cwd=str(self.root / ".agents"), env=env)
         decision = json.loads(cp.stdout)["decision"]
-        entry = json.loads(log.read_text(encoding="utf-8").splitlines()[-1]) if log.exists() else {}
+        # JSON lines end in "\n" only: splitlines() would also split on U+0085 / U+2028 inside a logged command
+        entry = json.loads(log.read_text(encoding="utf-8").rstrip("\n").split("\n")[-1]) if log.exists() else {}
         return decision, entry.get("rule"), entry.get("reason", "")
 
     def test_viewing_an_inlined_file_is_denied(self):
@@ -397,6 +398,50 @@ class Hook(unittest.TestCase):
             with self.subTest(good=cmd):
                 dec, rule, reason = self.decide_audit("run_command", {"CommandLine": cmd})
                 self.assertEqual(dec, "ask", (cmd, rule, reason))
+
+    def test_deep_research_non_ascii_case_folding_denied(self):
+        R = str(self.root)
+        DR = str(self.dr_dir / "scripts" / "relay_step.py")
+        # U+212A KELVIN SIGN lowers to "k", U+212B ANGSTROM SIGN to "a with ring", U+2126 OHM SIGN to omega
+        for ch in ("\u212a", "\u212b", "\u2126", "\u0130"):
+            for cmd in (f'python "{DR.replace("relay_step", ch + "relay_step")}" --job "{R}"',
+                        f'python "{DR}" --job "{R + ch}"',
+                        f'"{sys.executable}{ch}" "{DR}" --job "{R}"', f'pyth{ch}n "{DR}" --job "{R}"'):
+                with self.subTest(ch=repr(ch), cmd=cmd[:20]):
+                    dec, rule, _ = self.decide_audit("run_command", {"CommandLine": cmd})
+                    self.assertEqual((dec, rule), ("deny", "shell"), cmd)
+        # the real attack: a look-alike that str.lower() folds onto the expected ASCII path
+        self.assertEqual("K".lower(), "k")
+        for cmd in (f'python "{DR.replace("k", chr(0x212a))}" --job "{R}"',      # dr_sKill
+                    f'python "{DR}" --job "{R.replace("k", chr(0x212a))}"',      # worK dir
+                    f'python "{DR}" --job="{R.replace("k", chr(0x212a))}"'):
+            with self.subTest(lookalike=cmd[-30:]):
+                self.assertIn(chr(0x212a), cmd)
+                dec, rule, _ = self.decide_audit("run_command", {"CommandLine": cmd})
+                self.assertEqual((dec, rule), ("deny", "shell"), cmd)
+        self.assertEqual(self.decide_audit("run_command", {"CommandLine": f'python "{DR}" --job "{R}"'})[0], "ask")
+
+    def test_deep_research_only_space_and_tab_separate_tokens(self):
+        R = str(self.root)
+        DR = str(self.dr_dir / "scripts" / "relay_step.py")
+        for ws in ("\xa0", "\u3000", "\x0b", "\x0c", "\x85", "\u2028", "\u2029", "\u1680", "\u2003", "\x1c"):
+            for cmd in (f'python{ws}"{DR}" --job "{R}"', f'python "{DR}"{ws}--job "{R}"',
+                        f'python "{DR}" --job "{R}"{ws}', f'{ws}python "{DR}" --job "{R}"'):
+                with self.subTest(ws=repr(ws), cmd=cmd[:12]):
+                    dec, rule, _ = self.decide_audit("run_command", {"CommandLine": cmd})
+                    self.assertEqual((dec, rule), ("deny", "shell"), repr(cmd))
+        self.assertEqual(self.decide_audit("run_command", {"CommandLine": f'python\t"{DR}"\t--job\t"{R}"'})[0], "ask")
+
+    def test_deep_research_protected_names_in_any_path_part(self):
+        for target in ("python.exe/x.txt", "py.com/notes.md", "x.bat/a.txt", "sub/python/a.txt", "PY/a.txt",
+                       "lib.dll/readme.txt", "evil.py./a.txt", "a/b.cmd /c.txt", "__pycache__/a.txt", "pyvenv.cfg/x"):
+            with self.subTest(target=target):
+                dec, rule, _ = self.decide_audit("write_to_file", {"TargetFile": target, "CodeContent": "x"})
+                self.assertEqual((dec, rule), ("deny", "protected"), target)
+        for ok in ("sub/notes.txt", "pyramid/a.txt", "data.json/../notes.txt", "reports/x.md"):
+            with self.subTest(ok=ok):
+                dec, _, _ = self.decide_audit("write_to_file", {"TargetFile": ok, "CodeContent": "x"})
+                self.assertEqual(dec, "ask", ok)
 
     def test_deep_research_more_loadable_file_writes_denied(self):
         for target in ("x.dll", "x.pyd", "x.msi", "x.reg", "x.url", "x.sct", "x.jar", "sub/X.DLL", "x.pyd.",
