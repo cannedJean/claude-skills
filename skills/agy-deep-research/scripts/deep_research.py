@@ -2,9 +2,16 @@
 """deep_research.py - Claude Code orchestrator for Gemini Deep Research via headless `agy`.
 
 Subcommands
-  preflight   verify agy, the bundled driver files, and skill script sync status
-  setup       synchronize bundled scripts and SKILL.md into ~/.gemini/config/skills/local-gemini-deep-research
-  init        create an isolated job directory outside any git repo and lock prompt.md + goal.md
+  preflight   verify the platform, agy, the bundled driver files, script sync, the UIA venv (comtypes), our Gemini
+              instances (orphan warning) and the app version against the one of the last successful start
+  setup       synchronize bundled scripts and SKILL.md into ~/.gemini/config/skills/local-gemini-deep-research;
+              --with-venv also creates the driver venv and installs the hash-pinned comtypes (requirements-uia.txt)
+  doctor      read-only check of our hidden instance: locators resolved / missed (+ privacy-filtered candidates),
+              instances, binding, sign-in state; --snapshot writes a scrubbed allowed-region snapshot (tool dir)
+  signin      start the dedicated profile visibly on the default desktop, wait until the user has signed in
+              (only true/false is logged), then quit it through the app menu
+  app         `app status` lists our Gemini instances; `app close` closes them (never the user's Gemini)
+  init      create an isolated job directory outside any git repo and lock prompt.md + goal.md
   plan        run the 'plan' relay step via agy-delegate --deep-research and capture the research plan
   edit        submit plan modification feedback ('edit' relay step) and capture the revised plan
   approve     enforce the Plan Approval Gate, start detached research execution, stream progress.jsonl, and collect report
@@ -29,8 +36,20 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable, Optional
 from urllib.parse import urlsplit
+
+_HERE = str(Path(__file__).resolve().parent)
+if _HERE not in sys.path:  # `python -I` (the venv re-run) does not put the script's directory on sys.path
+    sys.path.insert(0, _HERE)
+
+import gemini_host  # noqa: E402  (stdlib only on import; every Win32 call sits behind HostOS)
+import locators  # noqa: E402
+import privacy  # noqa: E402
+import steps  # noqa: E402
+import uitree  # noqa: E402
 
 for _s in (sys.stdout, sys.stderr):
     if hasattr(_s, "reconfigure"):
@@ -995,8 +1014,14 @@ def cmd_setup(a) -> int:
         "sync_status": sync_info["status"],
         "files": sync_info["files"],
     }
+    rc = 0
+    if getattr(a, "with_venv", False):
+        out["venv"], rc = setup_venv(a)
+        if rc:
+            out["status"] = "error"
+            out["code"] = out["venv"].get("code")
     print(json.dumps(out, ensure_ascii=False, indent=2))
-    return 0
+    return rc
 
 
 def cmd_preflight(a) -> int:
@@ -1019,17 +1044,630 @@ def cmd_preflight(a) -> int:
 
     bundled_ok = all((SCRIPT_DIR / name).is_file() for name in BUNDLED_SCRIPTS) and BUNDLED_REF_SKILL.is_file()
     checks["bundled_files"] = {"ok": bundled_ok}
-    checks["host"] = HOST   # the UI Automation driver itself is checked once it exists
+    checks["host"] = HOST
 
-    ok = bool(agy_ok and bundled_ok)
+    codes: list[str] = []
+    warnings: list[str] = []
+    plat = _platform(a)
+    checks["platform"] = {"ok": plat == "win32", "platform": plat}
+    if plat != "win32":
+        codes.append("UNSUPPORTED_PLATFORM")
+        checks["platform"]["code"] = "UNSUPPORTED_PLATFORM"
+    checks["uia"] = uia_check()
+    if not checks["uia"]["ok"]:
+        codes.append("UIA_UNAVAILABLE")
+        warnings.append("UI Automation venv missing or incomplete: run `%s`" % setup_command())
+    if plat == "win32":
+        try:
+            host, host_error = _parts(a).host, None
+        except Exception as exc:  # noqa: BLE001 - the inventory is a warning, never fatal
+            host, host_error = None, _rdr()._describe(exc)[0]
+        checks["instances"] = _preflight_instances(host, host_error, warnings)
+        checks["app_version"] = app_version_check(host)
+        if checks["app_version"]["changed"]:
+            warnings.append("the Gemini app version changed since the last successful start (%s -> %s): run "
+                            "`deep_research.py doctor` before the next job" % (
+                                checks["app_version"]["last_success"], checks["app_version"]["installed"]))
+
+    ok = bool(agy_ok and bundled_ok and not codes)
     res = {
         "ok": ok,
         "sync_status": sync_info["status"],
         "target_dir": str(target_dir),
         "checks": checks,
+        "codes": codes,
+        "warnings": warnings,
     }
+    if codes:
+        res["code"] = codes[0]
     print(json.dumps(res, ensure_ascii=False, indent=2))
     return 0 if ok else 4
+
+
+# --------------------------------------------------------------------------- UIA host: venv, doctor, signin, app
+# Every command here talks to the Gemini app only through gemini_host.Host (our instances only: the dedicated
+# profile, or a default-profile tree on our hidden desktop) and a UiTree whose windows are filtered to our pids.
+# Everything printed or written passes privacy.scrub; no node name outside the privacy-allowed region is output.
+COMTYPES_PIN = "comtypes==1.4.11"
+UIA_REQUIREMENTS = SCRIPT_DIR / "requirements-uia.txt"
+TERMINAL_JOB_STATUSES = ("completed", "error")   # any other job status may still own a conversation in our instance
+DEFAULT_DESKTOP = "Default"
+ACCOUNT_CONTROL_RE = re.compile(r"^\s*Google\s*(계정|Account)\s*:", re.I)   # matched in memory, never output
+SNAPSHOT_HIDDEN_CTS = ("Text", "ListItem", "Hyperlink")   # doctor --snapshot never records these names
+SIGNIN_TIMEOUT_S = 900
+SIGNIN_POLL_S = 3.0
+MENU_TIMEOUT_S = 5.0
+MENU_POLL_S = 0.25
+
+
+def _rdr():
+    import run_deep_research  # the driver: its host / tree factory and error mapping are reused here
+    return run_deep_research
+
+
+def _platform(a) -> str:
+    return getattr(a, "_platform", None) or sys.platform
+
+
+def tool_dir() -> Path:
+    """%LOCALAPPDATA%\\agy-deep-research (host.json, host.lock, venv, doctor snapshots) - never the app's dir."""
+    return Path(gemini_host.default_state_path()).parent
+
+
+def venv_dir() -> Path:
+    env = os.environ.get("AGY_DR_VENV")
+    return Path(env).expanduser() if env and env.strip() else tool_dir() / "venv"
+
+
+def venv_python(vdir: Path) -> Path:
+    return vdir / "Scripts" / "python.exe" if IS_WINDOWS else vdir / "bin" / "python"
+
+
+def setup_command() -> str:
+    return 'python "%s" setup --with-venv' % (SCRIPT_DIR / "deep_research.py")
+
+
+def _site_packages(vdir: Path) -> list:
+    cands = [vdir / "Lib" / "site-packages", *sorted((vdir / "lib").glob("python*/site-packages"))]
+    return [c for c in cands if c.is_dir()]
+
+
+def uia_check(vdir: Path | None = None) -> dict:
+    """Is the driver venv there with the pinned comtypes installed? A file check only: nothing is executed."""
+    vdir = vdir or venv_dir()
+    version = COMTYPES_PIN.split("==", 1)[1]
+    py = venv_python(vdir)
+    has_pkg = any((sp / "comtypes" / "__init__.py").is_file() and (sp / f"comtypes-{version}.dist-info").is_dir()
+                  for sp in _site_packages(vdir))
+    rec = {"ok": py.is_file() and has_pkg, "venv": str(vdir), "python": py.is_file(), "comtypes": has_pkg,
+           "pin": COMTYPES_PIN}
+    if not rec["ok"]:
+        rec.update(code="UIA_UNAVAILABLE", setup_command=setup_command())
+    return rec
+
+
+def _run_command(argv: list) -> int:
+    return subprocess.run(argv).returncode
+
+
+def setup_venv(a) -> tuple[dict, int]:
+    """Create the driver venv (when missing) and install the hash-pinned comtypes into it (`--require-hashes`)."""
+    if _platform(a) != "win32":
+        return {"ok": False, "code": "UNSUPPORTED_PLATFORM"}, 4
+    req = UIA_REQUIREMENTS
+    text = req.read_text(encoding="utf-8") if req.is_file() else ""
+    if not re.search(r"^%s --hash=sha256:[0-9a-f]{64}\s*$" % re.escape(COMTYPES_PIN), text, re.M):
+        return {"ok": False, "code": "UIA_SETUP_FAILED", "message": f"{req} must pin {COMTYPES_PIN} with its sha256"}, 3
+    runner = getattr(a, "_runner", None) or _run_command
+    vdir = venv_dir()
+    py = venv_python(vdir)
+    commands = []
+    if not py.is_file():
+        commands.append([sys.executable, "-m", "venv", str(vdir)])
+    commands.append([str(py), "-I", "-m", "pip", "install", "--disable-pip-version-check", "--no-input",
+                     "--require-hashes", "--only-binary=:all:", "--no-deps", "-r", str(req)])
+    for cmd in commands:
+        rc = runner(cmd)
+        if rc != 0:
+            return {"ok": False, "code": "UIA_SETUP_FAILED", "failed": cmd, "exit_code": rc, "commands": commands}, 3
+    return {"ok": True, "venv": str(vdir), "pin": COMTYPES_PIN, "commands": commands}, 0
+
+
+def active_job_ids(root: Path | None = None) -> list:
+    """Jobs that may still own a conversation in our instance (status not completed / error)."""
+    root = root or jobs_root()
+    out = []
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:
+        return out
+    for d in entries:
+        job = read_json_safe(d / "job.json") if d.is_dir() else None
+        if isinstance(job, dict) and job.get("status") not in TERMINAL_JOB_STATUSES:
+            jid = job.get("job_id")
+            out.append(jid if isinstance(jid, str) and jid.strip() else d.name)
+    return out
+
+
+def instance_json(inst) -> dict:
+    """An InstanceInfo without paths: the user-data dir is only "dedicated" or "default"."""
+    return {"desktop": inst.desktop, "mode": inst.mode, "browser_pid": inst.browser_pid, "pids": list(inst.pids),
+            "data_dir": "dedicated" if inst.profile else "default", "orphan": bool(inst.orphan),
+            "last_job": inst.last_job, "last_step_at": inst.last_step_at, "started_at": inst.started_at}
+
+
+def _version_key(v: str) -> tuple:
+    return tuple(int(x) if x.isdigit() else -1 for x in re.split(r"[.\-]", v))
+
+
+def installed_app_version(app_root: Path | None = None) -> str | None:
+    """The newest app-<version> folder that holds the app's executable (a directory listing; nothing is opened)."""
+    if app_root is None:
+        try:
+            app_root = Path(_rdr().default_stub()).parent
+        except gemini_host.HostError:
+            return None
+    try:
+        entries = list(Path(app_root).iterdir())
+    except OSError:
+        return None
+    best = None
+    for e in entries:
+        exe = e / "Gemini.exe"
+        v = gemini_host.app_version(str(exe)) if exe.is_file() else None
+        if v and (best is None or _version_key(v) > _version_key(best)):
+            best = v
+    return best
+
+
+def app_version_check(host=None) -> dict:
+    """Diagnostic only (never blocks): the installed version vs the one host.json recorded at the last successful
+    start of our instance."""
+    rec = (host.load_state() if host is not None else read_json_safe(Path(gemini_host.default_state_path()))) or {}
+    last = rec.get("app_version") if isinstance(rec.get("app_version"), str) else None
+    installed = installed_app_version()
+    changed = bool(installed and last and installed != last)
+    return {"installed": installed, "last_success": last, "changed": changed, "doctor_recommended": changed}
+
+
+@dataclass
+class CliParts:
+    """What doctor / signin / app need. `host`: gemini_host.Host (its `os` is the HostOS, its `cfg` the stub,
+    profile and switches); `open_tree(session)`: the driver's tree for an instance on the hidden desktop;
+    `tree_on(desktop, pids)`: a UiTree of those pids' windows for a thread on `desktop` (the real one switches the
+    thread first unless it is the default desktop); `quit_via_menu`: override of the app-menu quit."""
+    host: Any
+    open_tree: Callable[[Any], Any]
+    tree_on: Callable[[str, list], Any]
+    locs: Optional[dict] = None
+    clock: Callable[[], float] = time.time
+    sleep: Callable[[float], None] = time.sleep
+    tool_dir: Optional[Path] = None
+    quit_via_menu: Optional[Callable[[str, list, list], None]] = None
+
+
+def default_cli_parts(a) -> CliParts:
+    """The real host and trees, built by the driver's factory (refused inside the test sandbox first)."""
+    rdr = _rdr()
+    dp = rdr.default_driver_factory(a)
+
+    def tree_on(desktop: str, pids: list):
+        if desktop.lower() != DEFAULT_DESKTOP.lower():
+            rdr._switch_thread_desktop(desktop)  # before comtypes is imported (measured requirement)
+        import uia_backend
+        com = uia_backend.load_com()
+        keep = frozenset(pids)
+        return uia_backend.UiaTree(com, lambda pid: pid in keep)
+
+    return CliParts(host=dp.host, open_tree=dp.open_tree, tree_on=tree_on)
+
+
+def _parts(a) -> CliParts:
+    factory = getattr(a, "_parts_factory", None)
+    return factory(a) if factory is not None else default_cli_parts(a)
+
+
+def _locs(parts: CliParts) -> dict:
+    return parts.locs if parts.locs is not None else _rdr().load_bundled_locators()
+
+
+def _same_file(x: Path, y: Path) -> bool:
+    try:
+        return os.path.samefile(x, y)
+    except OSError:
+        return False
+
+
+def _uia_reexec(a, required: bool = True) -> int | None:
+    """None: go on in this process. Otherwise this command was re-run in the driver venv (comtypes) and the
+    child's exit code is returned. Refused inside the test sandbox unless the parts are injected."""
+    if getattr(a, "_parts_factory", None) is not None:
+        return None
+    gemini_host.refuse_in_sandbox()
+    import importlib.util
+    if importlib.util.find_spec("comtypes") is not None:  # found, not imported: the desktop switch comes first
+        return None
+    py = venv_python(venv_dir())
+    if py.is_file() and not _same_file(Path(sys.executable), py):
+        return subprocess.run([str(py), "-I", str(SCRIPT_DIR / "deep_research.py"), *a._argv]).returncode
+    if required:
+        import uia_backend
+        raise uia_backend.UiaUnavailable("comtypes", detail="the driver venv is missing")
+    return None
+
+
+def _emit(obj: dict) -> None:
+    print(json.dumps(privacy.scrub(obj), ensure_ascii=False, indent=2), flush=True)
+
+
+def _fail(cmd: str, exc: BaseException) -> int:
+    rdr = _rdr()
+    code, message, details = rdr._describe(exc)
+    rc = rdr.exit_code_for(code)
+    rec = {"status": "error", "command": cmd, "code": code, "exit_code": rc}
+    if message:
+        rec["message"] = message
+    if details:
+        rec["details"] = details
+    if code == "UIA_UNAVAILABLE":
+        rec["setup_command"] = setup_command()
+    log(f"ERROR: {cmd}: {code}")
+    _emit(rec)
+    return rc
+
+
+def _unsupported(cmd: str, a) -> int | None:
+    if _platform(a) == "win32":
+        return None
+    _emit({"status": "error", "command": cmd, "code": "UNSUPPORTED_PLATFORM", "exit_code": 4,
+           "message": "the Gemini desktop UI Automation host is Windows only", "platform": _platform(a)})
+    return 4
+
+
+def _preflight_instances(host, host_error: str | None, warnings: list) -> dict:
+    """Our instances (orphan warning); never blocks preflight."""
+    if host is None:
+        return {"ok": None, "error": host_error}
+    try:
+        insts = host.instances(active_job_ids())
+    except Exception as exc:  # noqa: BLE001 - an inventory failure is reported, not fatal
+        code = _rdr()._describe(exc)[0]
+        return {"ok": None, "error": code}
+    listed = [instance_json(i) for i in insts]
+    for i in listed:
+        if i["orphan"]:
+            warnings.append("orphan Gemini instance of this tool (browser pid %s, desktop %s): close it with "
+                            "`deep_research.py app close`" % (i["browser_pid"], i["desktop"]))
+    return privacy.scrub({"ok": True, "count": len(listed), "orphans": sum(1 for i in listed if i["orphan"]),
+                          "instances": listed})
+
+
+# --- app menu quit ----------------------------------------------------------------------------------------------
+def _act_any(tree, node, prefs=("invoke", "expand", "default_action")) -> str:
+    """Act with an advertised pattern first, then the others (menu items may not advertise theirs)."""
+    order = [p for p in prefs if p in node.patterns] + [p for p in prefs if p not in node.patterns]
+    last: BaseException | None = None
+    for p in order:
+        try:
+            tree.act(node.id, p)
+            return p
+        except (uitree.PatternNotSupported, KeyError, OSError) as exc:
+            last = exc
+    raise last if last is not None else uitree.PatternNotSupported(node.id)
+
+
+def _menu_find(tree, locs: dict, key: str, clock, sleep, timeout_s: float):
+    deadline = clock() + timeout_s
+    dummy = uitree.Node(id="-", ct="Document")   # menu locators use the top_bar / popup scopes only
+    while True:
+        ctx = locators.LocatorContext(tree, dummy, locs, set())
+        try:
+            found = locators.resolve(key, ctx)
+            if found:
+                return found[0]
+            miss = None
+        except locators.LocatorMiss as exc:
+            miss = exc
+        if clock() >= deadline:
+            if miss is not None:
+                raise miss
+            raise locators.LocatorMiss({"code": "UI_LOCATOR_MISS", "locator": key, "found": 0, "candidates": []})
+        sleep(MENU_POLL_S)
+
+
+def menu_quit(tree, locs: dict, clock=time.time, sleep=time.sleep, timeout_s: float = MENU_TIMEOUT_S) -> None:
+    """App menu `메인 메뉴` -> `파일` -> `종료` on a tree that holds only our instance's windows."""
+    for key in ("app_menu", "app_menu_file", "app_menu_quit"):
+        _act_any(tree, _menu_find(tree, locs, key, clock, sleep, timeout_s))
+
+
+def _quit_fn(parts: CliParts, locs: dict):
+    if parts.quit_via_menu is not None:
+        return parts.quit_via_menu
+
+    def quit_via_menu(desktop: str, pids: list, hwnds: list) -> None:
+        menu_quit(parts.tree_on(desktop, list(pids)), locs, parts.clock, parts.sleep)
+
+    return quit_via_menu
+
+
+def _close_json(inst, res) -> dict:
+    return {"desktop": inst.desktop, "mode": inst.mode, "browser_pid": inst.browser_pid,
+            "remaining": res.remaining, "method": res.method, "desktop_gone": res.desktop_gone,
+            "terminated": list(res.terminated), "menu_error": res.menu_error}
+
+
+# --- doctor -----------------------------------------------------------------------------------------------------
+def _conversation_docs(tree) -> list:
+    return [d for d in tree.documents()
+            if d.value == steps.FRESH_URL or steps.CONVERSATION_RE.match(d.value or "")]
+
+
+def signed_in_state(doc, ctx) -> bool:
+    """Account control present and no `로그인` link (both read in memory; only the bool leaves)."""
+    try:
+        sign = locators.resolve("sign_in", ctx)
+    except (locators.LocatorMiss, locators.LocatorConfigError):
+        return False
+    account = any(ACCOUNT_CONTROL_RE.match(n.name or "") for n, _ in doc.walk())
+    return bool(account) and sign == []
+
+
+def _override_keys() -> list:
+    data = read_json_safe(Path(_rdr().SCRIPT_DIR) / "locators.local.json") or {}
+    locs = data.get("locators") if isinstance(data.get("locators"), dict) else {}
+    return sorted(locs)
+
+
+def locator_report(ctx, locs: dict) -> dict:
+    out = {}
+    for key in sorted(locs.get("locators", {})):
+        ent = locs["locators"][key]
+        base = {"scope": ent.get("scope"), "expect": ent.get("expect")}
+        try:
+            found = locators.resolve(key, ctx)
+            out[key] = dict(base, status="resolved", found=len(found))
+        except locators.LocatorMiss as exc:
+            p = exc.payload  # candidates come only from the allowed region or GENERIC_LABELS (locators._candidates)
+            rec = dict(base, status="miss", found=p.get("found", 0), candidates=p.get("candidates", []))
+            for k in ("hint", "override_snippet"):
+                if p.get(k):
+                    rec[k] = p[k]
+            out[key] = rec
+        except locators.LocatorConfigError as exc:
+            out[key] = dict(base, status="config_error", error=str(exc)[:200])
+        except Exception as exc:  # noqa: BLE001 - a backend error on one locator must not stop the report
+            out[key] = dict(base, status="error", error=type(exc).__name__)
+    return out
+
+
+def allowed_snapshot(doc, allowed: set) -> dict:
+    """Allowed-region nodes only (Text / ListItem / Hyperlink names hidden), plus counts of everything else."""
+    nodes = []
+    for n, anc in doc.walk():
+        if n.id not in allowed:
+            continue
+        name = n.name or ""
+        nodes.append({"id": n.id, "depth": len(anc), "ct": n.ct, "role": n.role,
+                      "name": ("<hidden>" if name else "") if n.ct in SNAPSHOT_HIDDEN_CTS else name,
+                      "automation_id": n.automation_id, "heading": n.heading, "enabled": n.enabled,
+                      "offscreen": n.offscreen, "patterns": sorted(n.patterns)})
+    return {"allowed": nodes, "outside": privacy.outside_summary(doc, allowed)}
+
+
+def doctor_report(tree, locs: dict) -> tuple[dict, dict | None]:
+    """(report, snapshot or None). Read-only: snapshots and locator resolution, no act / set_value."""
+    convs = _conversation_docs(tree)
+    binding = {"conversation_documents": len(convs), "bindable": len(convs) == 1,
+               "kind": (("fresh" if convs[0].value == steps.FRESH_URL else "conversation") if len(convs) == 1
+                        else None)}
+    if len(convs) != 1:
+        return {"binding": binding, "privacy_region": None, "signed_in": None, "locators": None}, None
+    doc = tree.snapshot(convs[0].id)
+    region_ok, region = privacy.region_check(doc)
+    allowed = privacy.allowed_ids(doc)
+    ctx = locators.LocatorContext(tree, doc, locs, allowed)
+    rep = locator_report(ctx, locs)
+    report = {"binding": binding, "privacy_region": {"ok": region_ok, "reason": region},
+              "signed_in": signed_in_state(doc, locators.LocatorContext(tree, doc, locs, allowed)),
+              "locators": rep,
+              "summary": {s: sum(1 for r in rep.values() if r["status"] == s)
+                          for s in ("resolved", "miss", "config_error", "error")}}
+    return report, allowed_snapshot(doc, allowed)
+
+
+def _outside_app_dir(path: Path) -> None:
+    try:
+        app_root = Path(_rdr().default_stub()).parent.resolve()
+    except gemini_host.HostError:
+        return
+    p = path.resolve()
+    if p == app_root or app_root in p.parents:
+        raise gemini_host.HostRefused("refusing to write under the Gemini app directory")
+
+
+def cmd_doctor(a) -> int:
+    rc = _unsupported("doctor", a)
+    if rc is not None:
+        return rc
+    try:
+        rc = _uia_reexec(a)
+        if rc is not None:
+            return rc
+        parts = _parts(a)
+        locs = _locs(parts)
+        host = parts.host
+        out: dict = {"status": "ok", "command": "doctor", "foreground": None}   # foreground: the R6 tracer (B5)
+        with host.lock():
+            if a.no_start:
+                ours = [i for i in host.instances(active_job_ids()) if i.desktop == host.cfg.desktop]
+                session = (gemini_host.HostSession(ours[0].mode, ours[0].desktop, ours[0].browser_pid, "reused")
+                           if ours else None)
+            else:
+                session = host.ensure(None)
+            insts = host.instances(active_job_ids())
+            state = host.load_state() or {}
+            out.update(host_mode=session.mode if session else None,
+                       host_reason=session.reason if session else None,
+                       app_version=state.get("app_version") if session else None,
+                       instances=[instance_json(i) for i in insts],
+                       locators_override=_override_keys())
+            snap = None
+            if session is None:
+                out.update(binding=None, privacy_region=None, signed_in=None, locators=None,
+                           message="no instance of ours on the hidden desktop (run doctor without --no-start)")
+            else:
+                report, snap = doctor_report(parts.open_tree(session), locs)
+                out.update(report)
+        if a.snapshot and snap is not None:
+            base = Path(parts.tool_dir) if parts.tool_dir is not None else tool_dir()
+            path = base / "doctor" / ("snapshot-%s.json" % _dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
+            _outside_app_dir(path)
+            write_json_atomic(path, privacy.scrub(dict(snap, at=now_iso(), app_version=out.get("app_version"))))
+            out["snapshot"] = str(path)
+        else:
+            out["snapshot"] = None
+        _emit(out)
+        return 0
+    except Exception as exc:  # noqa: BLE001 - every failure becomes one scrubbed error record
+        return _fail("doctor", exc)
+
+
+# --- signin -----------------------------------------------------------------------------------------------------
+def _ours_on(host, desktop: str, since: float | None = None) -> tuple[list, list]:
+    """(our dedicated-profile pids, their main windows on `desktop`)."""
+    cfg = host.cfg
+    pids = sorted(p.pid for p in host.os.processes()
+                  if p.inspected and gemini_host.is_our_instance(p, cfg.profile_dir, since))
+    keep = set(pids)
+    hwnds = [w.hwnd for w in host.os.desktop_windows(desktop) if w.pid in keep and w.is_main]
+    return pids, hwnds
+
+
+def _signed_in_now(parts: CliParts, locs: dict, pids: list) -> bool:
+    try:
+        tree = parts.tree_on(DEFAULT_DESKTOP, pids)
+        convs = _conversation_docs(tree)
+        if len(convs) != 1:
+            return False
+        doc = tree.snapshot(convs[0].id)
+        return signed_in_state(doc, locators.LocatorContext(tree, doc, locs, set()))
+    except (KeyError, OSError, uitree.PatternNotSupported, locators.LocatorMiss):
+        return False   # the page is still loading or changing: try again
+
+
+def _signin_close(parts: CliParts, locs: dict, quit_fn) -> dict:
+    """Quit our visible instance through the app menu (our verified pids / windows only), then Host.close for
+    whatever of ours is left (WM_CLOSE to our windows, then TerminateProcess of our tree)."""
+    host, cfg = parts.host, parts.host.cfg
+    pids, hwnds = _ours_on(host, DEFAULT_DESKTOP)
+    menu_error = None
+    if pids:
+        try:
+            quit_fn(DEFAULT_DESKTOP, pids, hwnds)
+        except Exception as exc:  # noqa: BLE001 - fall back to Host.close
+            menu_error = type(exc).__name__
+        deadline = parts.clock() + cfg.quit_wait_s
+        while _ours_on(host, DEFAULT_DESKTOP)[0] and parts.clock() < deadline:
+            parts.sleep(cfg.poll_s)
+    closed = [_close_json(i, host.close(i, quit_fn)) for i in host.instances(active_job_ids())]
+    remaining = max(len(host.instances()), sum(c["remaining"] for c in closed))
+    method = "host_close" if closed else ("menu" if pids else "none")
+    return {"method": method, "menu_error": menu_error, "remaining": remaining, "closed": closed}
+
+
+def cmd_signin(a) -> int:
+    rc = _unsupported("signin", a)
+    if rc is not None:
+        return rc
+    try:
+        rc = _uia_reexec(a)
+        if rc is not None:
+            return rc
+        parts = _parts(a)
+        locs = _locs(parts)
+        host = parts.host
+        cfg = host.cfg
+        quit_fn = _quit_fn(parts, locs)
+        with host.lock():
+            mine = host.instances(active_job_ids())
+            if mine:
+                where = ", ".join(sorted({str(i.desktop) for i in mine}))
+                raise gemini_host.HostError("HOST_BUSY", f"our Gemini instance already runs (desktop {where}); "
+                                                         "close it with `deep_research.py app close` first")
+            cmd = gemini_host.build_launch_command(cfg.stub, cfg.profile_dir, list(cfg.flags))
+            env = gemini_host.clean_env(os.environ if cfg.environ is None else cfg.environ)
+            t0 = parts.clock()
+            host.os.launch(cmd, "%s\\%s" % (gemini_host.WINDOW_STATION, DEFAULT_DESKTOP), env, cfg.profile_dir)
+            log("signin: started the dedicated profile on the default desktop; sign in there (nothing is typed "
+                "for you)")
+            signed, pids = False, []
+            try:
+                since = t0 - gemini_host.LAUNCH_SLACK_S
+                while True:
+                    pids, hwnds = _ours_on(host, DEFAULT_DESKTOP, since)
+                    if hwnds:
+                        break
+                    if parts.clock() - t0 >= gemini_host.START_TIMEOUT_S:
+                        raise gemini_host.HostError("HOST_START_TIMEOUT", "the dedicated-profile window did not "
+                                                    "appear on the default desktop")
+                    parts.sleep(cfg.poll_s)
+                deadline = parts.clock() + float(a.timeout)
+                last = None
+                while True:
+                    pids, _ = _ours_on(host, DEFAULT_DESKTOP)
+                    if not pids:
+                        log("signin: the window was closed")
+                        break
+                    signed = _signed_in_now(parts, locs, pids)
+                    if signed != last:
+                        log(f"signin: signed_in={'true' if signed else 'false'}")
+                        last = signed
+                    if signed or parts.clock() >= deadline:
+                        break
+                    parts.sleep(SIGNIN_POLL_S)
+            finally:
+                close = _signin_close(parts, locs, quit_fn)
+        out = {"status": "ok" if signed else "error", "command": "signin", "signed_in": signed,
+               "visible_mode": True, "desktop": DEFAULT_DESKTOP, "close": close}
+        rc = 0 if signed else 2
+        if not signed:
+            out.update(code="NOT_SIGNED_IN", exit_code=2,
+                       message="no signed-in account was detected before the window closed or the timeout")
+        _emit(out)
+        return rc
+    except Exception as exc:  # noqa: BLE001
+        return _fail("signin", exc)
+
+
+# --- app status | close -----------------------------------------------------------------------------------------
+def cmd_app(a) -> int:
+    name = f"app {a.app_cmd}"
+    rc = _unsupported(name, a)
+    if rc is not None:
+        return rc
+    try:
+        if a.app_cmd == "status":
+            parts = _parts(a)
+            insts = parts.host.instances(active_job_ids())
+            _emit({"status": "ok", "command": name, "count": len(insts), "instances": [instance_json(i) for i in insts]})
+            return 0
+        rc = _uia_reexec(a, required=False)   # without comtypes the menu quit fails and Host falls back to WM_CLOSE
+        if rc is not None:
+            return rc
+        parts = _parts(a)
+        locs = _locs(parts)
+        host = parts.host
+        quit_fn = _quit_fn(parts, locs)
+        with host.lock():
+            closed = [_close_json(i, host.close(i, quit_fn)) for i in host.instances(active_job_ids())]
+            left = host.instances()
+        remaining = max(len(left), sum(c["remaining"] for c in closed))
+        _emit({"status": "ok" if remaining == 0 else "error", "command": name, "closed": closed,
+               "remaining": remaining, **({} if remaining == 0 else {"code": "APP_CLOSE_INCOMPLETE"})})
+        return 0 if remaining == 0 else 3
+    except Exception as exc:  # noqa: BLE001
+        return _fail(name, exc)
 
 
 # --------------------------------------------------------------------------- agy-delegate invocation
@@ -2120,6 +2758,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser("setup", help="sync bundled scripts and SKILL.md into local-gemini-deep-research skill dir")
     st.add_argument("--target-dir", "--target", dest="target_dir", help="target local-gemini-deep-research skill dir")
+    st.add_argument("--with-venv", action="store_true",
+                    help="also create the driver venv and install the hash-pinned comtypes==1.4.11 (asks pip for "
+                         "--require-hashes; run only after the user agreed)")
+
+    dc = sub.add_parser("doctor", help="read-only check of our hidden Gemini instance (locators, instances, binding)")
+    dc.add_argument("--snapshot", action="store_true",
+                    help="also write a scrubbed allowed-region snapshot under %%LOCALAPPDATA%%\\agy-deep-research\\doctor")
+    dc.add_argument("--no-start", action="store_true", help="only inspect an instance that already runs; never start one")
+
+    si = sub.add_parser("signin", help="start the dedicated profile visibly so the user can sign in, then quit it")
+    si.add_argument("--timeout", type=int, default=SIGNIN_TIMEOUT_S, help="seconds to wait for the sign-in")
+
+    app = sub.add_parser("app", help="our Gemini instances: status | close (never the user's Gemini)")
+    app.add_argument("app_cmd", choices=("status", "close"))
 
     cp = sub.add_parser("compose-prompt", help="compose gate-safe 5-block XML prompt.md and goal.md rubric")
     cp.add_argument("--objective", "-p", required=True, help="core research objective / topic")
@@ -2207,12 +2859,21 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv=None) -> int:
+def main(argv=None, *, platform: str | None = None, parts_factory=None, runner=None) -> int:
+    """`platform`, `parts_factory` (a -> CliParts) and `runner` (argv -> exit code) are test injections."""
+    argv = list(sys.argv[1:] if argv is None else argv)
     a = build_parser().parse_args(argv)
+    a._argv, a._platform, a._parts_factory, a._runner = argv, platform, parts_factory, runner
     if a.cmd == "preflight":
         return cmd_preflight(a)
     if a.cmd == "setup":
         return cmd_setup(a)
+    if a.cmd == "doctor":
+        return cmd_doctor(a)
+    if a.cmd == "signin":
+        return cmd_signin(a)
+    if a.cmd == "app":
+        return cmd_app(a)
     if a.cmd == "compose-prompt":
         return cmd_compose_prompt(a)
     if a.cmd == "init":

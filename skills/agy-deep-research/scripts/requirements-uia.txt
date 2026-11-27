@@ -1,0 +1,6 @@
+# UI Automation driver venv (%LOCALAPPDATA%\agy-deep-research\venv), installed by
+#   python scripts/deep_research.py setup --with-venv
+# as `pip install --require-hashes --only-binary=:all: --no-deps -r <this file>`.
+# comtypes 1.4.11 is pure Python with no dependencies. The hash is the sha256 of
+# comtypes-1.4.11-py3-none-any.whl from the PyPI JSON metadata (pypi.org/pypi/comtypes/1.4.11/json, 2026-11-27).
+comtypes==1.4.11 --hash=sha256:1760d5059ca7ca1d61b574c998378d879c271a86c41f88926619ea97497592bb

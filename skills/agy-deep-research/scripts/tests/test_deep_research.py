@@ -54,6 +54,14 @@ class DeepResearchTestBase(unittest.TestCase):
         self.out_dir = self.tmp_root / "outputs"
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.target_skill_dir = self.tmp_root / "gemini_skill_target"
+        # preflight requires the UIA driver venv with the pinned comtypes: a file layout only (never executed)
+        self.venv_dir = self.tmp_root / "venv"
+        site = self.venv_dir / "Lib" / "site-packages"
+        (site / "comtypes").mkdir(parents=True)
+        (site / "comtypes" / "__init__.py").write_text("", encoding="utf-8")
+        (site / "comtypes-1.4.11.dist-info").mkdir()
+        (self.venv_dir / "Scripts").mkdir()
+        (self.venv_dir / "Scripts" / "python.exe").write_bytes(b"")
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp_root, ignore_errors=True)
@@ -73,6 +81,7 @@ class DeepResearchTestBase(unittest.TestCase):
             "AGY_TASK": str(FAKE_AGY_DR),
             "AGY_DR_JOBS": str(self.jobs_dir),
             "AGY_DR_SKILL_DIR": str(self.target_skill_dir),
+            "AGY_DR_VENV": str(self.venv_dir),
             "AGY_DR_POLL_INTERVAL": "0.03",
             "FAKE_AGY_SCENARIO": scenario,
         })
