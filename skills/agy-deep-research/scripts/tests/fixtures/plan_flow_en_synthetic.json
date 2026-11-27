@@ -1,0 +1,4507 @@
+{
+ "state": "start",
+ "states": {
+  "start": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/00aa11bb22cc33dd",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq0",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-0",
+             "children": [
+              {
+               "id": "uq0_t",
+               "ct": "Text",
+               "name": "Earlier question"
+              }
+             ]
+            },
+            {
+             "id": "turn_old",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-old",
+             "children": [
+              {
+               "id": "old_t0",
+               "ct": "Text",
+               "name": "Earlier answer body"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Neon mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "fresh_neon_std": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": []
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Neon mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "mm_neon_std": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": []
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Neon mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": {
+    "id": "desktop",
+    "ct": "Pane",
+    "name": "",
+    "children": [
+     {
+      "id": "menu",
+      "ct": "Menu",
+      "name": "",
+      "children": [
+       {
+        "id": "mi_auto",
+        "ct": "RadioButton",
+        "name": "Auto",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_hydrogen",
+        "ct": "RadioButton",
+        "name": "Everyday help 4 Hydrogen",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_neon",
+        "ct": "RadioButton",
+        "name": "Selected Deep analysis 4 Neon",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "true"
+        }
+       },
+       {
+        "id": "mi_carbon",
+        "ct": "RadioButton",
+        "name": "Code and complex tasks 4 Carbon",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_thinking",
+        "ct": "MenuItem",
+        "name": "Thinking level",
+        "role": "menuitem",
+        "patterns": [
+         "expand"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "th_neon_std": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": []
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Neon mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": {
+    "id": "desktop",
+    "ct": "Pane",
+    "name": "",
+    "children": [
+     {
+      "id": "menu",
+      "ct": "Menu",
+      "name": "",
+      "children": [
+       {
+        "id": "mi_auto",
+        "ct": "RadioButton",
+        "name": "Auto",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_hydrogen",
+        "ct": "RadioButton",
+        "name": "Everyday help 4 Hydrogen",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_neon",
+        "ct": "RadioButton",
+        "name": "Selected Deep analysis 4 Neon",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "true"
+        }
+       },
+       {
+        "id": "mi_carbon",
+        "ct": "RadioButton",
+        "name": "Code and complex tasks 4 Carbon",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_thinking",
+        "ct": "MenuItem",
+        "name": "Thinking level",
+        "role": "menuitem",
+        "patterns": [
+         "expand"
+        ]
+       }
+      ]
+     },
+     {
+      "id": "submenu",
+      "ct": "Menu",
+      "name": "",
+      "children": [
+       {
+        "id": "ti_std",
+        "ct": "RadioButton",
+        "name": "Selected Standard",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "true"
+        }
+       },
+       {
+        "id": "ti_high",
+        "ct": "RadioButton",
+        "name": "High",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "fresh_hydrogen_std": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": []
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "mm_hydrogen_std": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": []
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": {
+    "id": "desktop",
+    "ct": "Pane",
+    "name": "",
+    "children": [
+     {
+      "id": "menu",
+      "ct": "Menu",
+      "name": "",
+      "children": [
+       {
+        "id": "mi_auto",
+        "ct": "RadioButton",
+        "name": "Auto",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_hydrogen",
+        "ct": "RadioButton",
+        "name": "Selected Everyday help 4 Hydrogen",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "true"
+        }
+       },
+       {
+        "id": "mi_neon",
+        "ct": "RadioButton",
+        "name": "Deep analysis 4 Neon",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_carbon",
+        "ct": "RadioButton",
+        "name": "Code and complex tasks 4 Carbon",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_thinking",
+        "ct": "MenuItem",
+        "name": "Thinking level",
+        "role": "menuitem",
+        "patterns": [
+         "expand"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "th_hydrogen_std": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": []
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": {
+    "id": "desktop",
+    "ct": "Pane",
+    "name": "",
+    "children": [
+     {
+      "id": "menu",
+      "ct": "Menu",
+      "name": "",
+      "children": [
+       {
+        "id": "mi_auto",
+        "ct": "RadioButton",
+        "name": "Auto",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_hydrogen",
+        "ct": "RadioButton",
+        "name": "Selected Everyday help 4 Hydrogen",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "true"
+        }
+       },
+       {
+        "id": "mi_neon",
+        "ct": "RadioButton",
+        "name": "Deep analysis 4 Neon",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_carbon",
+        "ct": "RadioButton",
+        "name": "Code and complex tasks 4 Carbon",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_thinking",
+        "ct": "MenuItem",
+        "name": "Thinking level",
+        "role": "menuitem",
+        "patterns": [
+         "expand"
+        ]
+       }
+      ]
+     },
+     {
+      "id": "submenu",
+      "ct": "Menu",
+      "name": "",
+      "children": [
+       {
+        "id": "ti_std",
+        "ct": "RadioButton",
+        "name": "Selected Standard",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "true"
+        }
+       },
+       {
+        "id": "ti_high",
+        "ct": "RadioButton",
+        "name": "High",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "fresh_hydrogen_high": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": []
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "mm_hydrogen_high": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": []
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": {
+    "id": "desktop",
+    "ct": "Pane",
+    "name": "",
+    "children": [
+     {
+      "id": "menu",
+      "ct": "Menu",
+      "name": "",
+      "children": [
+       {
+        "id": "mi_auto",
+        "ct": "RadioButton",
+        "name": "Auto",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_hydrogen",
+        "ct": "RadioButton",
+        "name": "Selected Everyday help 4 Hydrogen",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "true"
+        }
+       },
+       {
+        "id": "mi_neon",
+        "ct": "RadioButton",
+        "name": "Deep analysis 4 Neon",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_carbon",
+        "ct": "RadioButton",
+        "name": "Code and complex tasks 4 Carbon",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_thinking",
+        "ct": "MenuItem",
+        "name": "Thinking level",
+        "role": "menuitem",
+        "patterns": [
+         "expand"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "th_hydrogen_high": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": []
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": {
+    "id": "desktop",
+    "ct": "Pane",
+    "name": "",
+    "children": [
+     {
+      "id": "menu",
+      "ct": "Menu",
+      "name": "",
+      "children": [
+       {
+        "id": "mi_auto",
+        "ct": "RadioButton",
+        "name": "Auto",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_hydrogen",
+        "ct": "RadioButton",
+        "name": "Selected Everyday help 4 Hydrogen",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "true"
+        }
+       },
+       {
+        "id": "mi_neon",
+        "ct": "RadioButton",
+        "name": "Deep analysis 4 Neon",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_carbon",
+        "ct": "RadioButton",
+        "name": "Code and complex tasks 4 Carbon",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "mi_thinking",
+        "ct": "MenuItem",
+        "name": "Thinking level",
+        "role": "menuitem",
+        "patterns": [
+         "expand"
+        ]
+       }
+      ]
+     },
+     {
+      "id": "submenu",
+      "ct": "Menu",
+      "name": "",
+      "children": [
+       {
+        "id": "ti_std",
+        "ct": "RadioButton",
+        "name": "Standard",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       },
+       {
+        "id": "ti_high",
+        "ct": "RadioButton",
+        "name": "Selected High",
+        "role": "menuitemradio",
+        "patterns": [
+         "invoke"
+        ],
+        "aria": {
+         "checked": "true"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "tools_menu": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": []
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": {
+    "id": "desktop",
+    "ct": "Pane",
+    "name": "",
+    "children": [
+     {
+      "id": "menu",
+      "ct": "Menu",
+      "name": "",
+      "children": [
+       {
+        "id": "pm_more",
+        "ct": "MenuItem",
+        "name": "More tools",
+        "role": "menuitem",
+        "patterns": [
+         "expand",
+         "invoke"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "more_menu": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": []
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": {
+    "id": "desktop",
+    "ct": "Pane",
+    "name": "",
+    "children": [
+     {
+      "id": "menu",
+      "ct": "Menu",
+      "name": "",
+      "children": [
+       {
+        "id": "pm_more",
+        "ct": "MenuItem",
+        "name": "More tools",
+        "role": "menuitem",
+        "patterns": [
+         "expand",
+         "invoke"
+        ]
+       }
+      ]
+     },
+     {
+      "id": "submenu",
+      "ct": "Menu",
+      "name": "",
+      "children": [
+       {
+        "id": "pm_dr",
+        "ct": "CheckBox",
+        "name": "Deep Research",
+        "role": "menuitemcheckbox",
+        "patterns": [
+         "toggle"
+        ],
+        "aria": {
+         "checked": "false"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "dr_on": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": []
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "typed": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": []
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": ""
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_send",
+               "ct": "Button",
+               "name": "Send message",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "sent": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Research the battery recycling market.\nUse a table."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "bound": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Research the battery recycling market.\nUse a table."
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_t0",
+               "ct": "Text",
+               "name": "Generating research plan"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "card": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Research the battery recycling market.\nUse a table."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here is my research plan. Tell me if you want changes."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Battery recycling market research plan",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_hdup",
+                 "ct": "Text",
+                 "name": "Battery recycling market research plan"
+                },
+                {
+                 "id": "c1_s0",
+                 "ct": "Text",
+                 "name": "(1) Survey recycling companies and capacity."
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(2) Summarise policy changes since 2020."
+                },
+                {
+                 "id": "c1_s2",
+                 "ct": "Text",
+                 "name": "(3) Compare major overseas markets."
+                },
+                {
+                 "id": "c1_p0",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Analyse results"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_edit_t",
+                     "ct": "Text",
+                     "name": "Edit the research plan"
+                    }
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_start_t",
+                     "ct": "Text",
+                     "name": "Start research"
+                    }
+                   ]
+                  },
+                  {
+                   "id": "plan1_cancel",
+                   "ct": "Button",
+                   "name": "Cancel",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_cancel_t",
+                     "ct": "Text",
+                     "name": "Cancel"
+                    }
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_retry_t",
+                     "ct": "Text",
+                     "name": "Retry without Deep Research"
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "cancelled": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Research the battery recycling market.\nUse a table."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here is my research plan. Tell me if you want changes."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Battery recycling market research plan",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_hdup",
+                 "ct": "Text",
+                 "name": "Battery recycling market research plan"
+                },
+                {
+                 "id": "c1_s0",
+                 "ct": "Text",
+                 "name": "(1) Survey recycling companies and capacity."
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(2) Summarise policy changes since 2020."
+                },
+                {
+                 "id": "c1_s2",
+                 "ct": "Text",
+                 "name": "(3) Compare major overseas markets."
+                },
+                {
+                 "id": "c1_p0",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Analyse results"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_edit_t",
+                     "ct": "Text",
+                     "name": "Edit the research plan"
+                    }
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_start_t",
+                     "ct": "Text",
+                     "name": "Start research"
+                    }
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_retry_t",
+                     "ct": "Text",
+                     "name": "Retry without Deep Research"
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "researching": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Research the battery recycling market.\nUse a table."
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_t0",
+               "ct": "Text",
+               "name": "Researching 12 websites..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "stopped": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Research the battery recycling market.\nUse a table."
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_t0",
+               "ct": "Text",
+               "name": "Researching 12 websites..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "error": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Research the battery recycling market.\nUse a table."
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_t0",
+               "ct": "Text",
+               "name": "Something went wrong while processing your request."
+              },
+              {
+               "id": "b_rerun",
+               "ct": "Button",
+               "name": "Retry",
+               "patterns": [
+                "invoke"
+               ],
+               "children": [
+                {
+                 "id": "b_rerun_t",
+                 "ct": "Text",
+                 "name": "Retry"
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "safety": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Research the battery recycling market.\nUse a table."
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_t0",
+               "ct": "Text",
+               "name": "I can't help with that."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  }
+ },
+ "transitions": [
+  {
+   "from": "start",
+   "on": [
+    "act",
+    "newchat",
+    "invoke"
+   ],
+   "to": "fresh_neon_std",
+   "after_snapshots": 1
+  },
+  {
+   "from": "fresh_neon_std",
+   "on": [
+    "act",
+    "b_mode",
+    "expand"
+   ],
+   "to": "mm_neon_std"
+  },
+  {
+   "from": "mm_neon_std",
+   "on": [
+    "act",
+    "b_mode",
+    "collapse"
+   ],
+   "to": "fresh_neon_std"
+  },
+  {
+   "from": "th_neon_std",
+   "on": [
+    "act",
+    "b_mode",
+    "collapse"
+   ],
+   "to": "fresh_neon_std"
+  },
+  {
+   "from": "mm_neon_std",
+   "on": [
+    "act",
+    "mi_thinking",
+    "expand"
+   ],
+   "to": "th_neon_std"
+  },
+  {
+   "from": "mm_neon_std",
+   "on": [
+    "act",
+    "mi_hydrogen",
+    "invoke"
+   ],
+   "to": "fresh_hydrogen_std"
+  },
+  {
+   "from": "th_neon_std",
+   "on": [
+    "act",
+    "mi_hydrogen",
+    "invoke"
+   ],
+   "to": "fresh_hydrogen_std"
+  },
+  {
+   "from": "fresh_hydrogen_std",
+   "on": [
+    "act",
+    "b_mode",
+    "expand"
+   ],
+   "to": "mm_hydrogen_std"
+  },
+  {
+   "from": "mm_hydrogen_std",
+   "on": [
+    "act",
+    "b_mode",
+    "collapse"
+   ],
+   "to": "fresh_hydrogen_std"
+  },
+  {
+   "from": "th_hydrogen_std",
+   "on": [
+    "act",
+    "b_mode",
+    "collapse"
+   ],
+   "to": "fresh_hydrogen_std"
+  },
+  {
+   "from": "mm_hydrogen_std",
+   "on": [
+    "act",
+    "mi_thinking",
+    "expand"
+   ],
+   "to": "th_hydrogen_std"
+  },
+  {
+   "from": "mm_hydrogen_std",
+   "on": [
+    "act",
+    "mi_hydrogen",
+    "invoke"
+   ],
+   "to": "fresh_hydrogen_std"
+  },
+  {
+   "from": "th_hydrogen_std",
+   "on": [
+    "act",
+    "mi_hydrogen",
+    "invoke"
+   ],
+   "to": "fresh_hydrogen_std"
+  },
+  {
+   "from": "th_hydrogen_std",
+   "on": [
+    "act",
+    "ti_high",
+    "invoke"
+   ],
+   "to": "fresh_hydrogen_high"
+  },
+  {
+   "from": "fresh_hydrogen_high",
+   "on": [
+    "act",
+    "b_mode",
+    "expand"
+   ],
+   "to": "mm_hydrogen_high"
+  },
+  {
+   "from": "mm_hydrogen_high",
+   "on": [
+    "act",
+    "b_mode",
+    "collapse"
+   ],
+   "to": "fresh_hydrogen_high"
+  },
+  {
+   "from": "th_hydrogen_high",
+   "on": [
+    "act",
+    "b_mode",
+    "collapse"
+   ],
+   "to": "fresh_hydrogen_high"
+  },
+  {
+   "from": "mm_hydrogen_high",
+   "on": [
+    "act",
+    "mi_thinking",
+    "expand"
+   ],
+   "to": "th_hydrogen_high"
+  },
+  {
+   "from": "mm_hydrogen_high",
+   "on": [
+    "act",
+    "mi_hydrogen",
+    "invoke"
+   ],
+   "to": "fresh_hydrogen_high"
+  },
+  {
+   "from": "th_hydrogen_high",
+   "on": [
+    "act",
+    "mi_hydrogen",
+    "invoke"
+   ],
+   "to": "fresh_hydrogen_high"
+  },
+  {
+   "from": "th_hydrogen_high",
+   "on": [
+    "act",
+    "ti_high",
+    "invoke"
+   ],
+   "to": "fresh_hydrogen_high"
+  },
+  {
+   "from": "fresh_hydrogen_high",
+   "on": [
+    "act",
+    "b_tools",
+    "expand"
+   ],
+   "to": "tools_menu"
+  },
+  {
+   "from": "tools_menu",
+   "on": [
+    "act",
+    "pm_more",
+    "expand"
+   ],
+   "to": "more_menu"
+  },
+  {
+   "from": "more_menu",
+   "on": [
+    "act",
+    "pm_dr",
+    "toggle"
+   ],
+   "to": "dr_on",
+   "after_snapshots": 1
+  },
+  {
+   "from": "dr_on",
+   "on": [
+    "set_value",
+    "prompt"
+   ],
+   "to": "typed"
+  },
+  {
+   "from": "typed",
+   "on": [
+    "set_value",
+    "prompt"
+   ],
+   "to": "dr_on"
+  },
+  {
+   "from": "typed",
+   "on": [
+    "act",
+    "b_send",
+    "invoke"
+   ],
+   "to": "sent"
+  },
+  {
+   "from": "card",
+   "on": [
+    "act",
+    "plan1_cancel",
+    "invoke"
+   ],
+   "to": "cancelled"
+  },
+  {
+   "from": "researching",
+   "on": [
+    "act",
+    "b_stop",
+    "invoke"
+   ],
+   "to": "stopped"
+  }
+ ],
+ "auto": [
+  {
+   "from": "sent",
+   "to": "bound",
+   "after_snapshots": 2
+  },
+  {
+   "from": "bound",
+   "to": "card",
+   "after_snapshots": 3
+  },
+  {
+   "from": "card",
+   "to": "researching",
+   "after_snapshots": 20
+  }
+ ]
+}

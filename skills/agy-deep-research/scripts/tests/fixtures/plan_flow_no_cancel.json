@@ -1,0 +1,1134 @@
+{
+ "state": "bound",
+ "states": {
+  "bound": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "새 채팅",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "사이드바 닫기",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "국내 배터리 재활용 시장 동향을 조사해 줘.\n표로 정리해 줘."
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_t0",
+               "ct": "Text",
+               "name": "조사 계획 생성 중"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Gemini 프롬프트 입력",
+               "value": "Gemini에게 물어보기\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "업로드 및 도구",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "모드 선택 도구 열기, 현재 Neon 모드 사용 중",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "마이크 사용",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deep Research 선택 해제",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "대답 생성 중지",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "메인 메뉴",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "card": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "새 채팅",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "사이드바 닫기",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "국내 배터리 재활용 시장 동향을 조사해 줘.\n표로 정리해 줘."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "조사 계획을 세웠습니다. 수정이 필요하면 알려 주세요."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "배터리 재활용 시장 조사 계획",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_hdup",
+                 "ct": "Text",
+                 "name": "배터리 재활용 시장 조사 계획"
+                },
+                {
+                 "id": "c1_s0",
+                 "ct": "Text",
+                 "name": "(1) 국내 배터리 재활용 업체와 처리 용량을 조사합니다."
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(2) 2020년 이후 정책과 규제 변화를 정리합니다."
+                },
+                {
+                 "id": "c1_s2",
+                 "ct": "Text",
+                 "name": "(3) 해외 주요 시장과 비교합니다."
+                },
+                {
+                 "id": "c1_p0",
+                 "ct": "Text",
+                 "name": "연구 웹사이트"
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "결과 분석"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "보고서 생성"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "연구 계획 수정",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_edit_t",
+                     "ct": "Text",
+                     "name": "연구 계획 수정"
+                    }
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "연구 시작",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_start_t",
+                     "ct": "Text",
+                     "name": "연구 시작"
+                    }
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": " Deep Research 사용하지 않고 다시 시도하기 ",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_retry_t",
+                     "ct": "Text",
+                     "name": "Deep Research 사용하지 않고 다시 시도하기"
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Gemini 프롬프트 입력",
+               "value": "Gemini에게 물어보기\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "업로드 및 도구",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "모드 선택 도구 열기, 현재 Neon 모드 사용 중",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "마이크 사용",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deep Research 선택 해제",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "메인 메뉴",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "canned": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "새 채팅",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "사이드바 닫기",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "국내 배터리 재활용 시장 동향을 조사해 줘.\n표로 정리해 줘."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "조사 계획을 세웠습니다. 수정이 필요하면 알려 주세요."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "배터리 재활용 시장 조사 계획",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_hdup",
+                 "ct": "Text",
+                 "name": "배터리 재활용 시장 조사 계획"
+                },
+                {
+                 "id": "c1_s0",
+                 "ct": "Text",
+                 "name": "(1) 국내 배터리 재활용 업체와 처리 용량을 조사합니다."
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(2) 2020년 이후 정책과 규제 변화를 정리합니다."
+                },
+                {
+                 "id": "c1_s2",
+                 "ct": "Text",
+                 "name": "(3) 해외 주요 시장과 비교합니다."
+                },
+                {
+                 "id": "c1_p0",
+                 "ct": "Text",
+                 "name": "연구 웹사이트"
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "결과 분석"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "보고서 생성"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "연구 계획 수정",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_edit_t",
+                     "ct": "Text",
+                     "name": "연구 계획 수정"
+                    }
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "연구 시작",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_start_t",
+                     "ct": "Text",
+                     "name": "연구 시작"
+                    }
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": " Deep Research 사용하지 않고 다시 시도하기 ",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_retry_t",
+                     "ct": "Text",
+                     "name": "Deep Research 사용하지 않고 다시 시도하기"
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "turn_r2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r2",
+             "children": [
+              {
+               "id": "r2_t0",
+               "ct": "Text",
+               "name": "현재 계획이에요. 변경하고 싶은 부분이 있나요?"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Gemini 프롬프트 입력",
+               "value": "Gemini에게 물어보기\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "업로드 및 도구",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "모드 선택 도구 열기, 현재 Neon 모드 사용 중",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "마이크 사용",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deep Research 선택 해제",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "메인 메뉴",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "researching": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "새 채팅",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "사이드바 닫기",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "국내 배터리 재활용 시장 동향을 조사해 줘.\n표로 정리해 줘."
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_t0",
+               "ct": "Text",
+               "name": "웹사이트 12개 조사 중..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Gemini 프롬프트 입력",
+               "value": "Gemini에게 물어보기\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "업로드 및 도구",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "모드 선택 도구 열기, 현재 Neon 모드 사용 중",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "마이크 사용",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deep Research 선택 해제",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "대답 생성 중지",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "메인 메뉴",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "stopped": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "새 채팅",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "사이드바 닫기",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "국내 배터리 재활용 시장 동향을 조사해 줘.\n표로 정리해 줘."
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_t0",
+               "ct": "Text",
+               "name": "웹사이트 12개 조사 중..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Gemini 프롬프트 입력",
+               "value": "Gemini에게 물어보기\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "업로드 및 도구",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "모드 선택 도구 열기, 현재 Neon 모드 사용 중",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "마이크 사용",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deep Research 선택 해제",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "메인 메뉴",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  }
+ },
+ "transitions": [
+  {
+   "from": "researching",
+   "on": [
+    "act",
+    "b_stop",
+    "invoke"
+   ],
+   "to": "stopped"
+  }
+ ],
+ "auto": [
+  {
+   "from": "bound",
+   "to": "card",
+   "after_snapshots": 3
+  },
+  {
+   "from": "card",
+   "to": "researching",
+   "after_snapshots": 4
+  }
+ ]
+}
