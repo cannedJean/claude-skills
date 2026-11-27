@@ -5,6 +5,7 @@ model-mode menu: the button reads 'Pro\\n보통' and the levels are menuitemradi
 header. There is no separate thinking button, so ensure_pro_mode used to skip the level
 silently and research ran at 보통 although 'high' was requested.
 """
+import sandbox  # noqa: F401  (must stay the first import: blocks real-app access)
 import os
 import sys
 import unittest

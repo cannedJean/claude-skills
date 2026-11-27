@@ -439,14 +439,56 @@ def check_no_app_dir_writes(skill_dir: Path) -> Dict[str, Any]:
     }
 
 
+def _first_import_is_sandbox(tree: ast.Module) -> bool:
+    for node in tree.body:
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            continue  # docstring
+        if isinstance(node, ast.ImportFrom) and node.module == "__future__":
+            continue
+        if isinstance(node, ast.Import):
+            return bool(node.names) and node.names[0].name in ("sandbox", "tests.sandbox")
+        if isinstance(node, ast.ImportFrom):
+            return node.module == "tests" and any(a.name == "sandbox" for a in node.names)
+    return False
+
+
+def check_tests_use_sandbox(skill_dir: Path) -> Dict[str, Any]:
+    """Fail unless every tests/test_*.py has `import sandbox` as its first import statement."""
+    start_time = time.time()
+    errors: List[str] = []
+    tests = skill_dir / "scripts" / "tests"
+    for fpath in sorted(tests.glob("test_*.py")):
+        rel = fpath.relative_to(skill_dir).as_posix()
+        try:
+            tree = ast.parse(fpath.read_text(encoding="utf-8", errors="replace"))
+        except Exception as e:
+            errors.append(f"{rel}: cannot parse: {e}")
+            continue
+        if not _first_import_is_sandbox(tree):
+            errors.append(f"{rel}: first import must be `import sandbox`")
+    return {
+        "name": "tests_use_sandbox",
+        "passed": not errors,
+        "duration_s": round(time.time() - start_time, 3),
+        "errors": errors,
+    }
+
+
 def check_unit_tests(tests_dir: Path) -> Dict[str, Any]:
     """Execute unit test discovery and verify all tests pass offline."""
     start_time = time.time()
     cmd = [sys.executable, "-m", "unittest", "discover", "-s", str(tests_dir), "-v"]
 
+    import tempfile
+    sandbox_dir = tempfile.mkdtemp(prefix="agy-dr-sandbox-")
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
+    env["AGY_DR_REAL_LOCALAPPDATA"] = os.environ.get("AGY_DR_REAL_LOCALAPPDATA") or os.environ.get("LOCALAPPDATA", "")
+    env["AGY_DR_REAL_APPDATA"] = os.environ.get("AGY_DR_REAL_APPDATA") or os.environ.get("APPDATA", "")
+    env["LOCALAPPDATA"] = sandbox_dir
+    env["APPDATA"] = sandbox_dir
+    env["AGY_DR_TEST_SANDBOX"] = "1"
 
     try:
         cp = subprocess.run(
@@ -503,9 +545,12 @@ def run_all_verification(skill_dir: Path) -> Dict[str, Any]:
     fm_res = check_frontmatter(skill_dir)
     forbidden_res = check_forbidden_automation(skill_dir)
     appdir_res = check_no_app_dir_writes(skill_dir)
+    sandbox_res = check_tests_use_sandbox(skill_dir)
     unit_res = check_unit_tests(tests_dir)
 
     all_passed = (
+        sandbox_res["passed"]
+        and
         syntax_res["passed"]
         and cli_res["passed"]
         and fm_res["passed"]
@@ -520,6 +565,7 @@ def run_all_verification(skill_dir: Path) -> Dict[str, Any]:
         "frontmatter": fm_res,
         "forbidden_automation": forbidden_res,
         "no_app_dir_writes": appdir_res,
+        "tests_use_sandbox": sandbox_res,
         "unit_tests": unit_res,
     }
 

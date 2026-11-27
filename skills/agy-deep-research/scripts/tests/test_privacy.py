@@ -1,3 +1,4 @@
+import sandbox  # noqa: F401  (must stay the first import: blocks real-app access)
 import json
 import os
 import sys

@@ -6,6 +6,7 @@ conversation the page showed, and job B saved job A's report (byte-identical) as
 the identity checks in the driver (run_deep_research.py) and the relay (relay_step.py); the orchestrator
 side (deep_research.py) is covered end to end in test_deep_research.py.
 """
+import sandbox  # noqa: F401  (must stay the first import: blocks real-app access)
 import json
 import os
 import sys

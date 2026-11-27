@@ -3,6 +3,7 @@ test_navigation_resilience.py - wait_for_report_completion reloads the page ever
 a poll that lands mid-navigation raises 'Execution context was destroyed'. That is a
 transient condition and must not kill the detached worker (observed DRIVER_CRASH twice).
 """
+import sandbox  # noqa: F401  (must stay the first import: blocks real-app access)
 import os
 import sys
 import unittest

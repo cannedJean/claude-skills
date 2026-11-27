@@ -5,6 +5,7 @@ conversation (approve / collect via --resume-url, edit) must never click the mod
 because the conversation's model is already bound and a page reload can show a
 different default (observed: 'Flash') that the driver would then "fix" mid-run.
 """
+import sandbox  # noqa: F401  (must stay the first import: blocks real-app access)
 import os
 import sys
 import unittest

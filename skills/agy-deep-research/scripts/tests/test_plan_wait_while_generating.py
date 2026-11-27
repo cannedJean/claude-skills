@@ -4,6 +4,7 @@ Plan while visibly generating (stop button + spinner). wait_for_new_plan gave up
 300s and the job failed with PLAN_TIMEOUT although nothing was wrong. While generation is in
 progress the wait must extend up to max_wait_sec; when idle it still stops at timeout_sec.
 """
+import sandbox  # noqa: F401  (must stay the first import: blocks real-app access)
 import os
 import sys
 import unittest

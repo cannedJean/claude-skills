@@ -2,6 +2,7 @@
 """test_gemini_host.py - pure host decisions: launch command guard, instance identity, launch classification, mode choice."""
 from __future__ import annotations
 
+import sandbox  # noqa: F401  (must stay the first import: blocks real-app access)
 import os
 import sys
 import unittest

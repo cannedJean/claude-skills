@@ -5,6 +5,7 @@ test_thinking_menu_checked.py - on 2026-11-16 the Argon mode button read only 'A
 never verified or set the requested level. When the button carries no level, the driver must
 read the checked level item from the menu and switch only if it differs.
 """
+import sandbox  # noqa: F401  (must stay the first import: blocks real-app access)
 import os
 import sys
 import unittest

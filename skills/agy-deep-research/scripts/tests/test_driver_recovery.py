@@ -3,6 +3,7 @@ test_driver_recovery.py - Empirical test harness for 60s freeze recovery and err
 Tests that page.reload() and prevent_background_throttling() are fully guarded
 against unhandled exceptions across wait_for_new_plan and wait_for_report_completion.
 """
+import sandbox  # noqa: F401  (must stay the first import: blocks real-app access)
 import unittest
 from unittest.mock import MagicMock, patch
 import time

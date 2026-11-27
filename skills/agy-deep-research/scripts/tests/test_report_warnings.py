@@ -11,6 +11,7 @@ The warnings appear as `report_warnings` in the command output, job.json and <ou
 """
 from __future__ import annotations
 
+import sandbox  # noqa: F401  (must stay the first import: blocks real-app access)
 import hashlib
 import json
 import sys
