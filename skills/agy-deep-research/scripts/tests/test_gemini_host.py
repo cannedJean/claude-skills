@@ -160,6 +160,89 @@ class DecideTests(unittest.TestCase):
             gh.decide_mode("D3", "ok", False)
 
 
+class ReviewFixTests(unittest.TestCase):
+    """B11, B12, T9, T13, M15 (cross-review fixes)."""
+
+    def test_constants_pinned(self):
+        self.assertEqual(gh.DESKTOP_NAME, "agy-deep-research")
+        self.assertEqual(gh.ALLOWED_FLAG_SWITCHES, (
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+            "--disable-features=CalculateNativeWinOcclusion",
+        ))
+
+    def test_profile_dir_trailing_dot_and_space_components(self):
+        for b in (r"C:\x\Google\Gemini.\prof", r"C:\x\Google\Gemini \prof", r"C:\x\Google.\Gemini\prof",
+                  r"C:\x\Google \Gemini. .\prof", r"C:\x\Google\Gemini.", r"C:\x\GOOGLE \gemini"):
+            with self.subTest(b=b), self.assertRaises(ValueError):
+                gh.build_launch_command(STUB, b, [])
+        gh.build_launch_command(STUB, r"C:\x\Google\Gemini2\prof", [])
+        gh.build_launch_command(STUB, r"C:\x\Google.Gemini\prof", [])
+
+    def test_stub_is_validated(self):
+        for stub in ("", "   ", "C:\\a\nb.exe", "C:\\a\x00b.exe", 'C:\\a"b.exe', "C:\\a\tb.exe"):
+            for profile in (None, PROFILE):
+                with self.subTest(stub=stub, profile=profile), self.assertRaises(ValueError):
+                    gh.build_launch_command(stub, profile, [])
+
+    def test_is_gemini_image_needs_an_absolute_path_and_no_trailing_text(self):
+        for img in (APP + "\n", APP + "\r", r"google\gemini\app-1.0\gemini.exe",
+                    r"\google\gemini\app-1.0\gemini.exe", r"C:google\gemini\app-1.0\gemini.exe"):
+            with self.subTest(img=img):
+                self.assertFalse(gh.is_gemini_image(img))
+        self.assertTrue(gh.is_gemini_image(r"\\srv\share\Google\Gemini\app-1\Gemini.exe"))
+        self.assertTrue(gh.is_gemini_image(APP))
+
+    def test_empty_profile_is_never_ours(self):
+        for udd in (".", "", '""'):
+            p = gh.ProcInfo(10, 1, APP, f'"{APP}" --user-data-dir={udd}', 100.0)
+            with self.subTest(udd=udd):
+                self.assertFalse(gh.is_our_instance(p, ""))
+        self.assertFalse(gh.is_our_instance(gh.ProcInfo(10, 1, APP, f'"{APP}" --user-data-dir={PROFILE}', 1.0), ""))
+
+    def test_decide_full_decisions(self):
+        D = gh.Decision
+        cases = [
+            ((None, "ok", False), D("D2", None, None)),
+            ((None, "ok", True), D("D2", None, None)),
+            ((None, "blocked", False), D("D1", None, "profile_switch_ignored")),
+            (("D2", "ok", False), D("D2", None, None)),
+            (("D1", "ok", False), D("D1", None, None)),
+            (("D1", "blocked", False), D("D1", None, None)),
+        ]
+        for args, want in cases:
+            with self.subTest(args=args):
+                self.assertEqual(gh.decide_mode(*args), want)
+        for args, code in (((None, "blocked", True), "GEMINI_IN_USE"), ((None, "timeout", False), "HOST_START_TIMEOUT"),
+                           ((None, "timeout", True), "HOST_START_TIMEOUT"), (("D2", "blocked", False), "HOST_MODE_UNAVAILABLE"),
+                           (("D2", "timeout", True), "HOST_START_TIMEOUT"), (("D1", "ok", True), "GEMINI_IN_USE")):
+            with self.subTest(args=args):
+                d = gh.decide_mode(*args)
+                self.assertEqual((d.mode, d.code), (None, code))
+                self.assertTrue(d.reason)
+        d = gh.decide_mode(job_mode="D2", d2="ok", user_gemini_running=False)
+        self.assertEqual(d, gh.Decision(mode="D2", code=None, reason=None))
+
+    def test_pinned_d1_ignores_d2(self):
+        self.assertEqual(gh.decide_mode("D1", None, False), gh.Decision("D1", None, None))
+        d = gh.decide_mode("D1", None, True)
+        self.assertEqual((d.mode, d.code), (None, "GEMINI_IN_USE"))
+        for job_mode in (None, "D2"):
+            with self.subTest(job_mode=job_mode), self.assertRaises(ValueError):
+                gh.decide_mode(job_mode, None, False)
+        with self.assertRaises(ValueError):
+            gh.decide_mode("D1", "pending", False)
+
+    def test_classify_after_the_start_timeout(self):
+        LC = gh.LaunchCheck
+        self.assertEqual(gh.classify_launch(LC(window_on_our_desktop=True, cmdline_has_profile=True,
+                                               local_state_updated=True, exited=False, elapsed_s=90.0)), "ok")
+        self.assertEqual(gh.classify_launch(LC(True, False, True, False, 90.0)), "blocked")
+        self.assertEqual(gh.classify_launch(LC(True, True, True, True, 90.0)), "blocked")
+        self.assertEqual(gh.classify_launch(LC(True, True, False, False, 60.0)), "timeout")
+        self.assertEqual(gh.classify_launch(LC(False, False, False, False, 59.9)), "pending")
+
+
 class EnvTests(unittest.TestCase):
     def test_clean_env_drops_node_electron(self):
         env = {"PATH": "p", "NODE_OPTIONS": "x", "ELECTRON_RUN_AS_NODE": "1", "NODEJS": "keep", "A": "b"}
