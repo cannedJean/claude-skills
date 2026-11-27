@@ -4222,6 +4222,891 @@
     }
    ],
    "desktop": null
+  },
+  "card_fired": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Research the battery recycling market.\nUse a table."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here is my research plan. Tell me if you want changes."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Battery recycling market research plan",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_hdup",
+                 "ct": "Text",
+                 "name": "Battery recycling market research plan"
+                },
+                {
+                 "id": "c1_s0",
+                 "ct": "Text",
+                 "name": "(1) Survey recycling companies and capacity."
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(2) Summarise policy changes since 2020."
+                },
+                {
+                 "id": "c1_s2",
+                 "ct": "Text",
+                 "name": "(3) Compare major overseas markets."
+                },
+                {
+                 "id": "c1_p0",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Analyse results"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_edit_t",
+                     "ct": "Text",
+                     "name": "Edit the research plan"
+                    }
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_start_t",
+                     "ct": "Text",
+                     "name": "Start research"
+                    }
+                   ],
+                   "enabled": false
+                  },
+                  {
+                   "id": "plan1_cancel",
+                   "ct": "Button",
+                   "name": "Cancel",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_cancel_t",
+                     "ct": "Text",
+                     "name": "Cancel"
+                    }
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_retry_t",
+                     "ct": "Text",
+                     "name": "Retry without Deep Research"
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "edit_canned_gen": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Research the battery recycling market.\nUse a table."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here is my research plan. Tell me if you want changes."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Battery recycling market research plan",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_hdup",
+                 "ct": "Text",
+                 "name": "Battery recycling market research plan"
+                },
+                {
+                 "id": "c1_s0",
+                 "ct": "Text",
+                 "name": "(1) Survey recycling companies and capacity."
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(2) Summarise policy changes since 2020."
+                },
+                {
+                 "id": "c1_s2",
+                 "ct": "Text",
+                 "name": "(3) Compare major overseas markets."
+                },
+                {
+                 "id": "c1_p0",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Analyse results"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_edit_t",
+                     "ct": "Text",
+                     "name": "Edit the research plan"
+                    }
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_start_t",
+                     "ct": "Text",
+                     "name": "Start research"
+                    }
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_retry_t",
+                     "ct": "Text",
+                     "name": "Retry without Deep Research"
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "turn_r2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r2",
+             "children": [
+              {
+               "id": "r2_t0",
+               "ct": "Text",
+               "name": "Here i"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
+  },
+  "edit_canned": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Research the battery recycling market.\nUse a table."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here is my research plan. Tell me if you want changes."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Battery recycling market research plan",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_hdup",
+                 "ct": "Text",
+                 "name": "Battery recycling market research plan"
+                },
+                {
+                 "id": "c1_s0",
+                 "ct": "Text",
+                 "name": "(1) Survey recycling companies and capacity."
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(2) Summarise policy changes since 2020."
+                },
+                {
+                 "id": "c1_s2",
+                 "ct": "Text",
+                 "name": "(3) Compare major overseas markets."
+                },
+                {
+                 "id": "c1_p0",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Analyse results"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_edit_t",
+                     "ct": "Text",
+                     "name": "Edit the research plan"
+                    }
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_start_t",
+                     "ct": "Text",
+                     "name": "Start research"
+                    }
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ],
+                   "children": [
+                    {
+                     "id": "plan1_retry_t",
+                     "ct": "Text",
+                     "name": "Retry without Deep Research"
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "turn_r2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r2",
+             "children": [
+              {
+               "id": "r2_t0",
+               "ct": "Text",
+               "name": "Here is the current plan. What would you like to change?"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "Ask Gemini\n"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, currently using Hydrogen mode",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ],
+               "children": []
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ],
+       "children": []
+      }
+     ]
+    }
+   ],
+   "desktop": null
   }
  },
  "transitions": [
@@ -4478,7 +5363,25 @@
    "to": "cancelled"
   },
   {
+   "from": "card",
+   "on": [
+    "act",
+    "plan1_edit",
+    "invoke"
+   ],
+   "to": "edit_canned_gen"
+  },
+  {
    "from": "researching",
+   "on": [
+    "act",
+    "b_stop",
+    "invoke"
+   ],
+   "to": "stopped"
+  },
+  {
+   "from": "card_fired",
    "on": [
     "act",
     "b_stop",
@@ -4502,6 +5405,11 @@
    "from": "card",
    "to": "researching",
    "after_snapshots": 20
+  },
+  {
+   "from": "edit_canned_gen",
+   "to": "edit_canned",
+   "after_snapshots": 2
   }
  ]
 }

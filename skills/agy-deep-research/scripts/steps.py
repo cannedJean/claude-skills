@@ -12,15 +12,48 @@ Rules (spec section 11, Task 8 rulings):
 - Plan cards are the outermost `plan_card`-prefixed turns holding a `plan_start`
   button. The newest card is the last one in document order; it is accepted
   only when its start button is enabled and the card count grew past
-  `prev_cards`. Its countdown is cancelled the moment it is seen (`취소`, else
-  `plan_edit` as the second stop), then verified for `cancel_verify_s`: start
-  still enabled and no `stop_response`. Research progress (no enabled start +
-  `stop_response`) is stopped and reported as UNREVIEWED_START; any other failed
-  check is COUNTDOWN_NOT_CANCELLED. Fail closed, never retried.
+  `prev_cards` by exactly one. Its countdown is cancelled the moment it is seen
+  (`취소`), then verified for `cancel_verify_s`: start still enabled, no
+  `stop_response`, and at the end no `취소` left in the card. If that fails (or
+  there is no usable `취소`), `plan_edit` is the second stop: Gemini's canned
+  turn (a NEW non-card turn, which shows `stop_response` while generating) is
+  waited out for `turn_timeout_s`, then the same verification runs again.
+  Research progress (no enabled start in the card + `stop_response`) is stopped
+  and reported as UNREVIEWED_START; a card first seen with its start disabled
+  counts as a fired countdown. Any other failed check is
+  COUNTDOWN_NOT_CANCELLED. A timeout or LocatorMiss while `stop_response` is
+  present invokes `stop_response` first (details get stop_invoked/stopped).
+  Fail closed, never retried.
 - Polling interval = max(cfg.poll_min_s, 2 x duration of the last snapshot).
 - Every StepError.details and every returned value has passed privacy.scrub.
 - Node ids must stay stable for the same UI element across snapshots (the UIA
   backend uses runtime ids); the cancel verification tracks the card by id.
+
+Error codes (StepError.code; "started?" = may research have started):
+    CONVERSATION_MISMATCH  no/several documents with the expected URL, URL changed or document gone mid-step,
+                           send on a non-fresh chat, unexpected URL after send. started? no (nothing sent or the
+                           step stops before acting on the other document)
+    INPUT_NOT_EMPTY        send button present before typing (input holds text). started? no
+    PROMPT_READBACK_MISMATCH  typed value hash differs or send never appeared; input cleared, not sent. started? no
+    SEND_NOT_AVAILABLE     no send button to invoke. started? no
+    MODEL_NOT_AVAILABLE    no menu item matches (details.available lists the menu). started? no
+    MODEL_AMBIGUOUS        several menu items match (details.matches). started? no
+    MODEL_NOT_SELECTED     the chosen item is not checked after selection. started? no
+    DEEP_RESEARCH_TOGGLE_NOT_FOUND  tools menu items or the Deep Research button did not appear. started? no
+    UI_ACTION_FAILED       the node supports none of the patterns tried. started? no for menus/prompt; during plan
+                           wait the countdown handling has already run (see the codes below)
+    UI_TIMEOUT             a local UI reaction did not happen (details.waiting_for); in edit_plan stop_response is
+                           invoked first if present. started? no (the plan card is not touched by these waits)
+    NO_PLAN_CARD           edit_plan found no plan card to edit. started? no
+    SAFETY_BLOCKED         the newest response holds a safety phrase. started? no
+    GEMINI_ERROR_RESPONSE  the newest response holds an error phrase (never retried). started? no
+    PLAN_TIMEOUT           no new card within card_timeout_s; stop_response invoked first if present. started?
+                           possible (a card may have been missed) - check details.stop_invoked
+    PLAN_CARD_COUNT_MISMATCH  more than one new card; every new card's cancel was invoked. started? possible
+    PLAN_CARD_UNRECOGNISED a turn-scoped plan_start lookup unexpectedly matched (internal guard). started? possible
+    UNREVIEWED_START       research progress seen; stop_response invoked (details.stopped). started? YES
+    COUNTDOWN_NOT_CANCELLED  cancel and edit fallback could not be verified. started? possible (not seen yet)
+LocatorMiss (UI_LOCATOR_MISS payload) is raised for label drift; during the plan wait it may carry stop_invoked.
 """
 import hashlib
 import re
@@ -58,6 +91,7 @@ class StepConfig:
     ui_timeout_s: float = 15        # menus, buttons, local UI reactions
     bind_timeout_s: float = 60      # URL bind after send (measured 13 s)
     turn_timeout_s: float = 120     # Gemini's canned turn after `plan_edit`
+    stop_timeout_s: float = 300     # stop_response gone after invoking it
 
 
 # -- small helpers -----------------------------------------------------------
@@ -107,10 +141,12 @@ def _act(tree, node: Node, prefs: Tuple[str, ...], key: str) -> str:
 
 
 def _try_act(tree, node: Node, prefs: Tuple[str, ...]) -> bool:
+    """Best-effort act for stops (cancel, edit, stop_response): any failure of the
+    backend (missing pattern, element gone, COM error) means "did not act"."""
     try:
         _act(tree, node, prefs, "")
         return True
-    except StepError:
+    except Exception:  # noqa: BLE001 - a failed stop must fall through to the next stop
         return False
 
 
@@ -230,14 +266,25 @@ def extract_plan_text(card: Node, allowed) -> str:
 
 # -- binding -----------------------------------------------------------------
 def bind_conversation(tree, url: str) -> Node:
-    docs = [d for d in tree.documents() if d.value == url]
+    """The single document whose URL equals `url` exactly.
+
+    WARNING: the returned Node is the whole document, sidebar (account, chat
+    titles) included. Callers must never serialize or log it; only names of
+    privacy.allowed_ids(doc) may be read out, and only through privacy.scrub.
+    """
+    docs =[d for d in tree.documents() if d.value == url]
     if len(docs) != 1:
         raise StepError("CONVERSATION_MISMATCH", {"expected": url, "found": len(docs)})
     return docs[0]
 
 
 def ensure_fresh_chat(tree, locs: dict, cfg: StepConfig) -> Node:
-    docs = [d for d in tree.documents()
+    """Make the conversation document a fresh chat (`/app`) and return it.
+
+    WARNING: the returned Node includes the sidebar (account, chat titles);
+    callers must never serialize or log it (use privacy.allowed_ids + scrub).
+    """
+    docs =[d for d in tree.documents()
             if d.value == FRESH_URL or CONVERSATION_RE.match(d.value or "")]
     if len(docs) != 1:
         raise StepError("CONVERSATION_MISMATCH", {"reason": "conversation_documents", "found": len(docs)})
@@ -436,20 +483,100 @@ def send_and_bind(tree, locs: dict, cfg: StepConfig, doc: Node) -> str:
 
 
 # -- plan wait and countdown cancel ------------------------------------------
-def _watch(tree, ctx: LocatorContext, prev_cards: int):
+def _after_card_turns(ctx: LocatorContext, card_id: str) -> Optional[List[Node]]:
+    """Non-card turns after the card (Gemini's canned turn after plan_edit); None if the card is gone."""
+    turns = _turns(ctx)
+    idx = next((i for i, t in enumerate(turns) if t.id == card_id), None)
+    if idx is None:
+        return None
+    return [t for t in turns[idx + 1:] if not _find_in(t, ctx, "plan_start")]
+
+
+def _card_state(ctx: LocatorContext, turn_id: str) -> str:
+    """progress | ok | canned (a new non-card turn is generating) | unverified."""
+    turn = _turn_by_id(ctx, turn_id)
+    starts = _find_in(turn, ctx, "plan_start") if turn is not None else []
+    start_ok = len(starts) == 1 and starts[0].enabled
+    stop_absent = _absent(ctx, "stop_response", "prompt_input")
+    if not start_ok and stop_absent is False:
+        return "progress"  # only stop_response with the card's start gone/disabled means research
+    if start_ok and stop_absent is True:
+        return "ok"
+    if start_ok and stop_absent is False and _after_card_turns(ctx, turn_id):
+        return "canned"
+    return "unverified"
+
+
+def _cancel_visible(ctx: LocatorContext, turn_id: str) -> bool:
+    turn = _turn_by_id(ctx, turn_id)
+    return turn is not None and bool(_find_in(turn, ctx, "plan_cancel_countdown"))
+
+
+def _stop(tree, poll: _Poll, cfg: StepConfig, ctx: LocatorContext) -> Optional[Tuple[bool, bool]]:
+    """Invoke stop_response if present; (invoked, stopped) or None when there is none."""
+    stop = _try(ctx, "stop_response")
+    if not stop:
+        return None
+    if not _try_act(tree, stop[0], ("invoke",)):
+        return False, False
+    try:
+        poll.until(cfg.stop_timeout_s, lambda c: _absent(c, "stop_response", "prompt_input") is True,
+                   "stop_response_gone")
+        return True, True
+    except StepError as exc:
+        if exc.code != "UI_TIMEOUT":
+            raise
+        return True, False
+
+
+def _unreviewed(tree, poll: _Poll, cfg: StepConfig, ctx: LocatorContext, method: Optional[str]) -> None:
+    invoked, stopped = _stop(tree, poll, cfg, ctx) or (False, False)
+    raise StepError("UNREVIEWED_START", {"cancel": method or "none", "stop_invoked": invoked, "stopped": stopped})
+
+
+def _stop_on_failure(tree, poll: _Poll, cfg: StepConfig, exc: Exception) -> None:
+    """Before a timeout or LocatorMiss leaves the step: stop a running response."""
+    if isinstance(exc, StepError) and exc.code not in ("PLAN_TIMEOUT", "UI_TIMEOUT"):
+        return
+    try:
+        res = _stop(tree, poll, cfg, poll.snap())
+    except StepError:
+        return
+    if res is None:
+        return
+    target = exc.payload if isinstance(exc, LocatorMiss) else exc.details
+    target["stop_invoked"], target["stopped"] = res
+
+
+def _cancel_all(tree, ctx: LocatorContext, turns: List[Node]) -> None:
+    for turn in turns:
+        for b in _find_in(turn, ctx, "plan_cancel_countdown"):
+            _try_act(tree, b, ("invoke",))
+
+
+def _watch(tree, poll: _Poll, cfg: StepConfig, ctx: LocatorContext, prev_cards: int):
     cards = _cards(ctx)
-    if len(cards) > prev_cards and cards[-1][1].enabled:
-        return cards[-1][0]
+    new = cards[prev_cards:]
+    if len(new) > 1:
+        _cancel_all(tree, ctx, [t for t, _s in reversed(new)])
+        raise StepError("PLAN_CARD_COUNT_MISMATCH", {"expected": prev_cards + 1, "found": len(cards)})
+    if new:
+        turn, start = new[0]
+        if start.enabled:
+            return turn
+        # first seen with its start disabled: the countdown fired (or the card was missed)
+        cancel = _find_in(turn, ctx, "plan_cancel_countdown")
+        method = "cancel_button" if cancel and _try_act(tree, cancel[0], ("invoke",)) else None
+        _unreviewed(tree, poll, cfg, ctx, method)
     turns = _turns(ctx)
     if not turns:
         return None
     last = turns[-1]
     if _find_in(last, ctx, "plan_start"):
         return None
-    cancel = _find_in(last, ctx, "plan_cancel_countdown")
-    if cancel:
+    if _find_in(last, ctx, "plan_cancel_countdown"):
         # a countdown card whose start button we cannot recognise: stop it, then report the drift
-        _try_act(tree, cancel[0], ("invoke",))
+        _cancel_all(tree, ctx, [last])
         _raise_turn_miss(ctx, last, "plan_start")
     text = _turn_text(last)
     if _phrase_hit(text, ctx.locs.get("safety_phrases")):
@@ -459,36 +586,38 @@ def _watch(tree, ctx: LocatorContext, prev_cards: int):
     return None
 
 
-def _card_state(ctx: LocatorContext, turn_id: str) -> str:
-    turn = _turn_by_id(ctx, turn_id)
-    starts = _find_in(turn, ctx, "plan_start") if turn is not None else []
-    start_ok = len(starts) == 1 and starts[0].enabled
-    stop_absent = _absent(ctx, "stop_response", "prompt_input")
-    if not start_ok and stop_absent is False:
-        return "progress"
-    return "ok" if start_ok and stop_absent is True else "unverified"
+def _verify(tree, poll: _Poll, cfg: StepConfig, turn_id: str, method: str) -> Tuple[bool, LocatorContext]:
+    """Every snapshot for cancel_verify_s: start enabled, no stop_response; at the end no 취소."""
+    ok = True
+    deadline = cfg.clock() + cfg.cancel_verify_s
+    while True:
+        c = poll.snap()
+        state = _card_state(c, turn_id)
+        if state == "progress":
+            _unreviewed(tree, poll, cfg, c, method)
+        if state != "ok":
+            ok = False
+        if cfg.clock() >= deadline:
+            return ok and not _cancel_visible(c, turn_id), c
+        cfg.sleep(poll.interval())
 
 
-def _stop_unreviewed(tree, poll: _Poll, cfg: StepConfig, ctx: LocatorContext, method: Optional[str]) -> None:
-    invoked = stopped = False
-    stop = _try(ctx, "stop_response")
-    if stop:
-        invoked = _try_act(tree, stop[0], ("invoke",))
-    if invoked:
-        try:
-            poll.until(cfg.cancel_verify_s, lambda c: _absent(c, "stop_response", "prompt_input") is True,
-                       "stop_response_gone")
-            stopped = True
-        except StepError as exc:
-            if exc.code != "UI_TIMEOUT":
-                raise
-    raise StepError("UNREVIEWED_START", {"cancel": method or "none", "stop_invoked": invoked, "stopped": stopped})
+def _wait_canned(tree, poll: _Poll, cfg: StepConfig, turn_id: str, method: str) -> None:
+    """After plan_edit: wait (turn_timeout_s) for the canned turn to finish; the
+    verification that follows decides, so a timeout here just returns."""
+    deadline = cfg.clock() + cfg.turn_timeout_s
+    while True:
+        c = poll.snap()
+        if _card_state(c, turn_id) == "progress":
+            _unreviewed(tree, poll, cfg, c, method)
+        if _after_card_turns(c, turn_id) and _absent(c, "stop_response", "prompt_input") is True:
+            return
+        if cfg.clock() >= deadline:
+            return
+        cfg.sleep(poll.interval())
 
 
-def wait_plan_and_cancel(tree, locs: dict, cfg: StepConfig, url: str, prev_cards: int) -> dict:
-    doc = bind_conversation(tree, url)
-    poll = _Poll(tree, locs, cfg, doc.id, url)
-
+def _plan(tree, poll: _Poll, cfg: StepConfig, prev_cards: int) -> dict:
     def timeout(c):
         turns = _turns(c)
         last = turns[-1] if turns else None
@@ -500,61 +629,69 @@ def wait_plan_and_cancel(tree, locs: dict, cfg: StepConfig, url: str, prev_cards
     holder = {}
 
     def watch(c):
-        turn = _watch(tree, c, prev_cards)
+        turn = _watch(tree, poll, cfg, c, prev_cards)
         if turn is not None:
             holder["ctx"] = c
         return turn
 
     turn = poll.until(cfg.card_timeout_s, watch, "plan_card", timeout)
-    ctx = holder["ctx"]
-    # stop the countdown first, everything else afterwards
+    last = holder["ctx"]
     method = None
-    cancel = _find_in(turn, ctx, "plan_cancel_countdown")
+    ok = False
+    # first stop: the countdown cancel, the moment the card is seen
+    cancel = _find_in(turn, last, "plan_cancel_countdown")
     if cancel and _try_act(tree, cancel[0], ("invoke",)):
         method = "cancel_button"
-    else:
-        edit = _find_in(turn, ctx, "plan_edit")
+        ok, last = _verify(tree, poll, cfg, turn.id, method)
+    if not ok:
+        # second stop: plan_edit (no/failed cancel, or the cancel had no effect)
+        card = _turn_by_id(last, turn.id)
+        edit = _find_in(card, last, "plan_edit") if card is not None else []
         if edit and _try_act(tree, edit[0], ("invoke",)):
             method = "edit_fallback"
-    count = len(_cards(ctx))
-    verified = method is not None
-    deadline = cfg.clock() + cfg.cancel_verify_s
-    while True:
-        last = poll.snap()
-        state = _card_state(last, turn.id)
-        if state == "progress":
-            _stop_unreviewed(tree, poll, cfg, last, method)
-        if state != "ok":
-            verified = False
-        if cfg.clock() >= deadline:
-            break
-        cfg.sleep(poll.interval())
-    if not verified:
+            _wait_canned(tree, poll, cfg, turn.id, method)
+            ok, last = _verify(tree, poll, cfg, turn.id, method)
+        elif method is None:
+            _verify(tree, poll, cfg, turn.id, "none")  # nothing could stop it: still watch for progress
+    if not ok:
         raise StepError("COUNTDOWN_NOT_CANCELLED", {"cancel": method or "none"})
-    if count != prev_cards + 1:
-        raise StepError("PLAN_CARD_COUNT_MISMATCH", {"expected": prev_cards + 1, "found": count})
     card = _turn_by_id(last, turn.id)
-    result = privacy.scrub({"cancel": method, "cards": count})
+    result = privacy.scrub({"cancel": method, "cards": prev_cards + 1})
     result["plan_text"] = extract_plan_text(card, last.allowed)  # scrubbed line by line
     return result
+
+
+def wait_plan_and_cancel(tree, locs: dict, cfg: StepConfig, url: str, prev_cards: int) -> dict:
+    doc = bind_conversation(tree, url)
+    poll = _Poll(tree, locs, cfg, doc.id, url)
+    try:
+        return _plan(tree, poll, cfg, prev_cards)
+    except (StepError, LocatorMiss) as exc:
+        _stop_on_failure(tree, poll, cfg, exc)
+        raise
 
 
 def edit_plan(tree, locs: dict, cfg: StepConfig, url: str, feedback: str) -> dict:
     doc = bind_conversation(tree, url)
     poll = _Poll(tree, locs, cfg, doc.id, url)
-    ctx = poll.snap()
-    cards = _cards(ctx)
-    if not cards:
-        raise StepError("NO_PLAN_CARD", {})
-    turn = cards[-1][0]
-    edit = _find_in(turn, ctx, "plan_edit")
-    if not edit:
-        _raise_turn_miss(ctx, turn, "plan_edit")
-    turns_before = len(_turns(ctx))
-    _act(tree, edit[0], ("invoke",), "plan_edit")
-    poll.until(cfg.turn_timeout_s,
-               lambda c: len(_turns(c)) > turns_before and _absent(c, "stop_response", "prompt_input") is True,
-               "canned_turn")
-    enter_prompt(tree, locs, cfg, doc, feedback)
-    _send(tree, poll.snap())
+    try:
+        ctx = poll.snap()
+        cards = _cards(ctx)
+        if not cards:
+            raise StepError("NO_PLAN_CARD", {})
+        turn = cards[-1][0]
+        if not _after_card_turns(ctx, turn.id):
+            edit = _find_in(turn, ctx, "plan_edit")
+            if not edit:
+                _raise_turn_miss(ctx, turn, "plan_edit")
+            _act(tree, edit[0], ("invoke",), "plan_edit")
+        # else: the canned turn is already there (an edit_fallback result): do not invoke plan_edit again
+        poll.until(cfg.turn_timeout_s,
+                   lambda c: _after_card_turns(c, turn.id) and _absent(c, "stop_response", "prompt_input") is True,
+                   "canned_turn")
+        enter_prompt(tree, locs, cfg, doc, feedback)
+        _send(tree, poll.snap())
+    except (StepError, LocatorMiss) as exc:
+        _stop_on_failure(tree, poll, cfg, exc)
+        raise
     return wait_plan_and_cancel(tree, locs, cfg, url, len(cards))

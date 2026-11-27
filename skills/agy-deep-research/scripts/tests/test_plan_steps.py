@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -13,7 +14,7 @@ from pathlib import Path
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 
-from uitree import FakeTree, Node  # noqa: E402
+from uitree import FakeTree, Node, PatternNotSupported  # noqa: E402
 import locators  # noqa: E402
 import privacy  # noqa: E402
 import steps  # noqa: E402
@@ -222,12 +223,149 @@ class PlanFlowTests(unittest.TestCase):
 
     def test_no_cancel_button_uses_edit_fallback(self):
         spec = load("plan_flow_no_cancel.json")
-        spec["transitions"].append({"from": "card", "on": ["act", "plan1_edit", "invoke"], "to": "canned"})
+        spec["transitions"].append({"from": "card", "on": ["act", "plan1_edit", "invoke"], "to": "canned_gen"})
         tree = AutoTree(spec)
         res = steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)
         self.assertEqual(res, {"cancel": "edit_fallback", "plan_text": KO_PLAN, "cards": 1})
         self.assertEqual(acts(tree), [("act", "plan1_edit", "invoke")])
+        # the canned turn showed stop_response while generating; it was waited out, not stopped
+        self.assertIn("canned_gen", tree.seen)
         self.assertEqual(tree.state, "canned")
+
+    def test_edit_after_edit_fallback_reuses_canned_turn(self):
+        spec = load("plan_flow_no_cancel.json")
+        spec["transitions"].append({"from": "card", "on": ["act", "plan1_edit", "invoke"], "to": "canned_gen"})
+        tree = AutoTree(spec)
+        lc = locs()
+        self.assertEqual(steps.wait_plan_and_cancel(tree, lc, cfg(), BOUND, 0)["cancel"], "edit_fallback")
+        res = steps.edit_plan(tree, lc, cfg(), BOUND, "2번 단계를 빼 주세요.")
+        self.assertEqual(res, {"cancel": "cancel_button", "plan_text": KO_PLAN2, "cards": 2})
+        self.assertEqual(acts(tree), [("act", "plan1_edit", "invoke"), ("act", "b_send", "invoke"),
+                                      ("act", "plan2_cancel", "invoke")])
+
+    def test_card_missed_research_running_is_stopped_on_timeout(self):
+        spec = load("plan_flow_ko.json")
+        spec["state"] = "bound"
+        set_auto(spec, "bound", "researching", 3)  # card + countdown came and went between two polls
+        tree = AutoTree(spec)
+        with self.assertRaises(steps.StepError) as cm:
+            steps.wait_plan_and_cancel(tree, locs(), cfg(card_timeout_s=3), BOUND, 0)
+        e = cm.exception
+        self.assertEqual(e.code, "PLAN_TIMEOUT")
+        self.assertTrue(e.details["stop_invoked"])
+        self.assertTrue(e.details["stopped"])
+        self.assertEqual(acts(tree), [("act", "b_stop", "invoke")])
+        self.assertEqual(tree.state, "stopped")
+
+    def test_card_first_seen_disabled_is_unreviewed(self):
+        spec = load("plan_flow_ko.json")
+        spec["state"] = "bound"
+        set_auto(spec, "bound", "card_fired", 3)
+        tree = AutoTree(spec)
+        with self.assertRaises(steps.StepError) as cm:
+            steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)
+        e = cm.exception
+        self.assertEqual(e.code, "UNREVIEWED_START")
+        self.assertTrue(e.details["stopped"])
+        self.assertEqual(acts(tree), [("act", "plan1_cancel", "invoke"), ("act", "b_stop", "invoke")])
+        self.assertEqual(tree.state, "stopped")
+
+    def test_locator_miss_with_research_running_stops_first(self):
+        spec = load("plan_flow_ko.json")
+        rename(spec, "연구 시작", "조사 시작")
+        spec["state"] = "bound"
+        set_auto(spec, "bound", "card_fired", 3)
+        tree = AutoTree(spec)
+        with self.assertRaises(locators.LocatorMiss) as cm:
+            steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)
+        self.assertEqual(cm.exception.payload["locator"], "plan_start")
+        self.assertTrue(cm.exception.payload["stop_invoked"])
+        self.assertEqual(acts(tree), [("act", "plan1_cancel", "invoke"), ("act", "b_stop", "invoke")])
+
+    def test_research_starting_after_cancel_is_stopped(self):
+        spec = load("plan_flow_ko.json")
+        spec["state"] = "bound"
+        spec["auto"].append({"from": "cancelled", "to": "researching", "after_snapshots": 5})
+        tree = AutoTree(spec)
+        with self.assertRaises(steps.StepError) as cm:
+            steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)
+        e = cm.exception
+        self.assertEqual(e.code, "UNREVIEWED_START")
+        self.assertEqual(e.details["cancel"], "cancel_button")
+        self.assertTrue(e.details["stopped"])
+        self.assertEqual(acts(tree), [("act", "plan1_cancel", "invoke"), ("act", "b_stop", "invoke")])
+
+    def test_ineffective_cancel_uses_edit_fallback(self):
+        spec = load("plan_flow_ko.json")
+        spec["state"] = "bound"
+        spec["transitions"] = [t for t in spec["transitions"] if t["on"] != ["act", "plan1_cancel", "invoke"]]
+        set_auto(spec, "card", "researching", 10000)
+        tree = AutoTree(spec)
+        res = steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)
+        self.assertEqual(res, {"cancel": "edit_fallback", "plan_text": KO_PLAN, "cards": 1})
+        self.assertEqual(acts(tree), [("act", "plan1_cancel", "invoke"), ("act", "plan1_edit", "invoke")])
+        self.assertEqual(tree.state, "edit_canned")
+
+    def test_ineffective_cancel_and_edit_is_countdown_not_cancelled(self):
+        spec = load("plan_flow_ko.json")
+        spec["state"] = "bound"
+        spec["transitions"] = [t for t in spec["transitions"] if t.get("from") != "card"]
+        set_auto(spec, "card", "researching", 10000)
+        tree = AutoTree(spec)
+        with self.assertRaises(steps.StepError) as cm:
+            steps.wait_plan_and_cancel(tree, locs(), cfg(turn_timeout_s=3), BOUND, 0)
+        self.assertEqual(cm.exception.code, "COUNTDOWN_NOT_CANCELLED")
+        self.assertEqual(cm.exception.details["cancel"], "edit_fallback")
+        self.assertEqual(acts(tree), [("act", "plan1_cancel", "invoke"), ("act", "plan1_edit", "invoke")])
+
+    def test_cancel_pattern_error_uses_edit_fallback(self):
+        class Refusing(AutoTree):
+            def act(self, node_id, pattern):
+                if node_id == "plan1_cancel":
+                    raise PatternNotSupported("refused")
+                return super().act(node_id, pattern)
+
+        spec = load("plan_flow_ko.json")
+        spec["state"] = "bound"
+        tree = Refusing(spec)
+        res = steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)
+        self.assertEqual(res["cancel"], "edit_fallback")
+        self.assertEqual(acts(tree), [("act", "plan1_edit", "invoke")])
+
+    def test_count_mismatch_cancels_every_new_card(self):
+        spec = load("plan_flow_edit_two_cards.json")
+        spec["state"] = "edit_card"
+        tree = AutoTree(spec)
+        with self.assertRaises(steps.StepError) as cm:
+            steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)
+        self.assertEqual(cm.exception.code, "PLAN_CARD_COUNT_MISMATCH")
+        self.assertEqual(sorted(acts(tree)), [("act", "plan1_cancel", "invoke"), ("act", "plan2_cancel", "invoke")])
+
+    def test_stop_wait_reports_unstopped(self):
+        self.assertEqual(steps.StepConfig().stop_timeout_s, 300)
+        spec = load("plan_flow_no_cancel.json")
+        spec["transitions"] = [t for t in spec["transitions"] if t["on"] != ["act", "b_stop", "invoke"]]
+        clock = Clock()
+        tree = AutoTree(spec)
+        with self.assertRaises(steps.StepError) as cm:
+            steps.wait_plan_and_cancel(tree, locs(), cfg(clock, stop_timeout_s=7), BOUND, 0)
+        self.assertEqual(cm.exception.code, "UNREVIEWED_START")
+        self.assertTrue(cm.exception.details["stop_invoked"])
+        self.assertFalse(cm.exception.details["stopped"])
+        self.assertGreaterEqual(clock.t, 7)
+
+    def test_edit_canned_turn_timeout_stops_generation(self):
+        spec = load("plan_flow_edit_two_cards.json")
+        spec["auto"] = [a for a in spec["auto"] if a["from"] != "canned_gen"]
+        spec["transitions"].append({"from": "canned_gen", "on": ["act", "b_stop", "invoke"], "to": "canned"})
+        tree = AutoTree(spec)
+        with self.assertRaises(steps.StepError) as cm:
+            steps.edit_plan(tree, locs(), cfg(turn_timeout_s=3), BOUND, "2번 단계를 빼 주세요.")
+        e = cm.exception
+        self.assertEqual(e.code, "UI_TIMEOUT")
+        self.assertTrue(e.details["stop_invoked"])
+        self.assertTrue(e.details["stopped"])
+        self.assertEqual(acts(tree), [("act", "plan1_edit", "invoke"), ("act", "b_stop", "invoke")])
 
     def test_unreviewed_start_is_stopped_and_reported(self):
         tree = AutoTree(load("plan_flow_no_cancel.json"))
@@ -249,9 +387,10 @@ class PlanFlowTests(unittest.TestCase):
         spec["state"] = "bound"
         tree = AutoTree(spec)
         with self.assertRaises(steps.StepError) as cm:
-            steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)
+            steps.wait_plan_and_cancel(tree, locs(), cfg(turn_timeout_s=3), BOUND, 0)
         self.assertEqual(cm.exception.code, "COUNTDOWN_NOT_CANCELLED")
-        self.assertEqual(acts(tree), [("act", "plan1_cancel", "invoke")])
+        # the failed verification after a successful cancel still tries the second stop
+        self.assertEqual(acts(tree), [("act", "plan1_cancel", "invoke"), ("act", "plan1_edit", "invoke")])
 
     def test_edit_targets_newest_card_only(self):
         tree = AutoTree(load("plan_flow_edit_two_cards.json"))
@@ -389,6 +528,17 @@ class PlanFlowTests(unittest.TestCase):
 
 
 class UnitTests(unittest.TestCase):
+    def test_every_error_code_is_documented(self):
+        src = Path(steps.__file__).read_text(encoding="utf-8")
+        codes = set(re.findall(r'StepError\(\s*"([A-Z_]+)"', src))
+        self.assertGreaterEqual(len(codes), 15)
+        doc = steps.__doc__
+        for code in sorted(codes):
+            with self.subTest(code=code):
+                self.assertRegex(doc, r"(?m)^\s*%s\s+\S" % code)
+        for fn in (steps.bind_conversation, steps.ensure_fresh_chat):
+            self.assertIn("never serialize", fn.__doc__)
+
     def test_bind_conversation_exact_match(self):
         spec = load("plan_flow_ko.json")
         spec["state"] = "cancelled"
