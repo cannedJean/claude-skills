@@ -217,7 +217,7 @@ def _install_exec_guards() -> None:
         executable = kw.get("executable", a[1] if len(a) > 1 else None)
         if executable is not None:
             parts.append(executable)
-        _check(parts, kw.get("cwd", a[7] if len(a) > 7 else None))
+        _check(parts, kw.get("cwd", a[8] if len(a) > 8 else None))
         return orig_init(self, args, *a, **kw)
 
     subprocess.Popen.__init__ = _mark(guarded_init)

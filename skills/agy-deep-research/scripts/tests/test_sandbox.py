@@ -72,6 +72,12 @@ class SandboxTests(unittest.TestCase):
         with self.assertRaises(sandbox.SandboxViolation):
             subprocess.run([sys.executable, "-c", "pass"], cwd=_probe("sub"))
 
+    def test_popen_refuses_positional_cwd_under_real_gemini(self):
+        # Popen(args, bufsize, executable, stdin, stdout, stderr, preexec_fn, close_fds, shell, cwd)
+        with self.assertRaises(sandbox.SandboxViolation):
+            subprocess.Popen([sys.executable, "-c", "pass"], -1, None, None, None, None, None,
+                             True, False, _probe("sub"))
+
     def test_reason_variants(self):
         home_dir = os.path.join(os.path.expanduser("~"), "AppData", "Local", "Google", "Gemini", "x")
         self.assertIsNotNone(sandbox._reason(home_dir))
