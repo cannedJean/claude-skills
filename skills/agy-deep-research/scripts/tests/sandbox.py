@@ -10,7 +10,7 @@ Import this FIRST in every test module (effective on import, idempotent):
     remote-debugging port, or a Start-Process/start command pointing at Google\\Gemini. The check
     runs BEFORE the original call, so no process ever starts.
   * Write-type file operations (open in w/a/x/+ mode, os.replace/rename/remove/unlink/makedirs/mkdir/...,
-    shutil.copy*/move/rmtree, pathlib write/touch/unlink/mkdir/rename/replace) refuse any target
+    shutil.copy*/copymode/copystat/move/rmtree, pathlib write/touch/unlink/mkdir/rename/replace) refuse any target
     under the real Gemini dir or the real %APPDATA%\\gemini. Reads stay allowed.
   * Child processes: a temp `sitecustomize.py` that imports this module (from this directory, baked
     into the shim) is put first on PYTHONPATH (together with this directory), so every Python child
@@ -222,7 +222,7 @@ def _install_write_guards() -> None:
                       ("symlink", (1,)), ("link", (1,)), ("truncate", (0,))):
         _wrap_write(os, name, pos)
     for name, pos in (("copy", (1,)), ("copy2", (1,)), ("copyfile", (1,)), ("copytree", (1,)),
-                      ("move", (0, 1)), ("rmtree", (0,))):
+                      ("move", (0, 1)), ("rmtree", (0,)), ("copymode", (1,)), ("copystat", (1,))):
         _wrap_write(shutil, name, pos)
     for name, pos in (("write_text", (0,)), ("write_bytes", (0,)), ("touch", (0,)), ("unlink", (0,)),
                       ("mkdir", (0,)), ("rmdir", (0,)), ("rename", (0, 1)), ("replace", (0, 1))):

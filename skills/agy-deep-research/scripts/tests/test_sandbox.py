@@ -277,6 +277,8 @@ class SandboxTests(unittest.TestCase):
                 "path replace": lambda: pathlib.Path(src).replace(_probe()),
                 "path open w": lambda: pathlib.Path(_probe()).open("w"),
                 "open r+": lambda: open(_probe(), "r+"),
+                "copymode": lambda: shutil.copymode(src, _probe()),
+                "copystat": lambda: shutil.copystat(src, _probe()),
             }
             for name, fn in attempts.items():
                 with self.subTest(name):
