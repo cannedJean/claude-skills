@@ -15,7 +15,8 @@ Two layers, both required:
 Roles are compared case-insensitively and whitespace-stripped.
 
 Deliberate fail-closed hardening (broader than the minimal spec):
-- scrub detects on NFKC-normalised text (long strings keep their original text,
+- scrub detects on NFKC-normalised text with combining marks and zero-width / format (Cf) characters
+  ignored (long strings keep their original text,
   only matched spans are replaced; unmappable matches redact the whole string), so decomposed Hangul and
   fullwidth look-alikes (e.g. a fullwidth at-sign) cannot evade it.
 - The long-string patterns are intentionally broad: any `x@y` (`*` repeats, so
@@ -65,9 +66,15 @@ def _merge(spans):
     return merged
 
 
+def _invisible(ch: str) -> bool:
+    """Combining marks and format characters (Cf: zero-width space/joiners, word joiner, BOM, soft hyphen)."""
+    cat = unicodedata.category(ch)
+    return cat.startswith("M") or cat == "Cf"
+
+
 def _strip_marks(text: str) -> str:
-    """Detection form only: combining marks must not split an address."""
-    return "".join(c for c in text if not unicodedata.category(c).startswith("M"))
+    """Detection form only: combining marks and zero-width (Cf) characters must not split an address."""
+    return "".join(c for c in text if not _invisible(c))
 
 
 def _scrub_long(text: str) -> str:
@@ -79,9 +86,9 @@ def _scrub_long(text: str) -> str:
     contains a match, the span cannot be mapped back exactly, so the whole
     string is redacted.
     """
-    runs = []  # [start, end) of each base character with its combining marks
+    runs = []  # [start, end) of each base character with its combining marks / following Cf characters
     for i, ch in enumerate(text):
-        if runs and unicodedata.combining(ch):
+        if runs and (unicodedata.combining(ch) or unicodedata.category(ch) == "Cf"):
             runs[-1][1] = i + 1
         else:
             runs.append([i, i + 1])
@@ -132,8 +139,8 @@ def scrub(value: Any) -> Any:
         return scrub(bytes(value).decode("utf-8", errors="replace"))
     if isinstance(value, str):
         norm = unicodedata.normalize("NFKC", value)
-        if len(value) <= 200:
-            if SENSITIVE_RE.search(value) or SENSITIVE_RE.search(norm):
+        if len(value) <= 200 or len(norm) <= 200:  # a decomposed (NFD) label is judged by its composed length
+            if SENSITIVE_RE.search(value) or SENSITIVE_RE.search(norm) or SENSITIVE_RE.search(_strip_marks(norm)):
                 return "<redacted:account len=%d>" % len(value)
             return value
         return _scrub_long(value)

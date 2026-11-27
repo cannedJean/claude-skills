@@ -353,6 +353,15 @@ class ScrubKeepsOriginalTests(unittest.TestCase):
         out = privacy.scrub("본문 " * 80 + nfd)
         self.assertNotIn("홍", out)
         self.assertNotIn(unicodedata.normalize("NFD", "홍"), out)
+        self.assertEqual(out, "<redacted:account>")
+
+    def test_long_nfd_label_still_hits_sensitive_re(self):
+        # B15: 220 code points in NFD, 76 in NFC: judged by the short-string rule on its NFC length
+        nfd = unicodedata.normalize("NFD", "프로필 설정: " + "한" * 68)
+        self.assertGreater(len(nfd), 200)
+        self.assertEqual(privacy.scrub(nfd), "<redacted:account len=%d>" % len(nfd))
+        nfc = unicodedata.normalize("NFC", nfd)
+        self.assertEqual(privacy.scrub(nfc), "<redacted:account len=%d>" % len(nfc))
 
 
 class ScrubCombiningMarkTests(unittest.TestCase):
@@ -368,6 +377,49 @@ class ScrubCombiningMarkTests(unittest.TestCase):
                     self.assertNotIn(frag, out.replace("<redacted:email>", "")
                                      .replace("<redacted:account>", ""), label)
                 self.assertTrue(out.startswith(self.PAD) or out == "<redacted:account>")
+
+    ZW = ("\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad")
+
+    def _no_part(self, out, parts, label, zw_inside=True):
+        rest = out.replace("<redacted:email>", "").replace("<redacted:account>", "")
+        self.assertNotIn("@", rest, label)
+        for frag in parts:
+            self.assertNotIn(frag, rest, label)
+        if zw_inside:  # a zero-width char inside the address goes with it (one before it may stay outside)
+            rest = rest.replace(self.PAD + "연락 ", "")
+            for zw in self.ZW:
+                self.assertNotIn(zw, rest.replace(" 끝", ""), label)
+
+    def test_zero_width_in_local_part_leaks_nothing(self):
+        for zw in self.ZW:
+            for local in ("al" + zw + "ice", zw + "alice", "alice" + zw, "a" + zw + zw + "lice"):
+                label = "%r in %r" % (zw, local)
+                with self.subTest(label):
+                    out = privacy.scrub(self.PAD + "연락 " + local + "@example.com 끝")
+                    self._no_part(out, ("alice", "al", "ice", "example"), label, zw_inside=not local.startswith(zw))
+                    self.assertTrue(out.startswith(self.PAD) or out == "<redacted:account>", label)
+
+    def test_zero_width_in_domain_leaks_nothing(self):
+        for zw in self.ZW:
+            for domain in ("exa" + zw + "mple.com", "example" + zw + ".com", "example." + zw + "com", "example.co" + zw + "m"):
+                label = "%r in %r" % (zw, domain)
+                with self.subTest(label):
+                    out = privacy.scrub(self.PAD + "연락 alice@" + domain + " 끝")
+                    self._no_part(out, ("alice", "exa", "mple", "example", ".com", "com"), label)
+                    self.assertTrue(out.endswith(" 끝") or out == "<redacted:account>", label)
+
+    def test_zero_width_around_at_sign_and_in_account_label(self):
+        out = privacy.scrub(self.PAD + "연락 alice\u200b@\u200bexample.com 끝")
+        self._no_part(out, ("alice", "example"), "around @")
+        out = privacy.scrub(self.PAD + "Google \u200b계\u200b정: 홍길동\n끝")
+        self.assertNotIn("홍길동", out)
+        self.assertEqual(privacy.scrub("계\u200b정 설정"), "<redacted:account len=6>")
+
+    def test_zero_width_elsewhere_is_unchanged(self):
+        for zw in self.ZW:
+            with self.subTest(zw=repr(zw)):
+                text = self.PAD + "본문" + zw + "끝 café" + zw + " ① １２３ a" + zw + "b"
+                self.assertEqual(privacy.scrub(text), text)
 
     def test_combining_mark_elsewhere_is_unchanged(self):
         text = self.PAD + "café ① １２３ 끝"
