@@ -12,6 +12,9 @@ Executes deterministic automated verification checks:
      and no writes under the Gemini app data folder.
   5. Offline unit test execution: runs `unittest discover` and verifies exit code 0.
 
+The static guards (4) are textual/AST scans: they catch accidental reintroduction, not
+deliberately obfuscated strings such as "play" + "wright".
+
 Outputs a structured JSON report and returns exit code 0 on pass, non-zero on failure.
 """
 from __future__ import annotations
@@ -298,12 +301,16 @@ ALLOWED_SWITCHES = {
 }
 _SWITCH_LITERAL = re.compile(r"^--[A-Za-z][\w-]*(=.*)?$", re.S)
 _APP_DIR_LITERAL = re.compile(r"Google[\\/]+Gemini")
-_WRITE_ATTRS = {"write_text", "write_bytes", "copy", "copy2", "copyfile", "copytree",
-                "replace", "remove"}
+# Receiver-qualified (os.x / shutil.x) so str.replace / dict.copy never count as writes.
+_OS_WRITES = {"replace", "remove", "makedirs", "mkdir", "rename", "unlink", "rmdir", "open"}
+_SHUTIL_WRITES = {"copy", "copy2", "copyfile", "copytree", "move", "rmtree"}
+# Path-style methods, any receiver.
+_PATH_WRITES = {"write_text", "write_bytes", "mkdir", "rename", "unlink", "touch", "rmdir"}
 
 
 def _script_files(skill_dir: Path) -> List[Path]:
-    return sorted((skill_dir / "scripts").glob("*.py"))
+    scripts = skill_dir / "scripts"
+    return sorted(p for p in scripts.rglob("*.py") if "tests" not in p.relative_to(scripts).parts)
 
 
 def _switch_allowed(text: str) -> bool:
@@ -325,8 +332,12 @@ def check_forbidden_automation(skill_dir: Path) -> Dict[str, Any]:
             errors.append(f"{rel}: failed to read: {e}")
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
+            low = line.lower()
             for tok in FORBIDDEN_TOKENS:
-                if tok in line:
+                pat = re.escape(tok)
+                if tok.isdigit():
+                    pat = rf"(?<!\d){pat}(?!\d)"
+                if re.search(pat, low):
                     errors.append(f"{rel}:{lineno} forbidden token {tok!r}")
         if fpath.name == "gemini_host.py":
             try:
@@ -349,15 +360,43 @@ def check_forbidden_automation(skill_dir: Path) -> Dict[str, Any]:
 
 def _is_write_call(call: ast.Call) -> bool:
     f = call.func
-    if isinstance(f, ast.Name) and f.id == "open" or isinstance(f, ast.Attribute) and f.attr == "open":
-        mode = None
-        if len(call.args) >= 2 and isinstance(call.args[1], ast.Constant):
-            mode = call.args[1].value
-        for kw in call.keywords:
-            if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
-                mode = kw.value.value
-        return isinstance(mode, str) and any(c in mode for c in "wax+")
-    return isinstance(f, ast.Attribute) and f.attr in _WRITE_ATTRS
+    if isinstance(f, ast.Name):
+        if f.id != "open":
+            return False
+        mode_idx = 1  # builtin open(file, mode)
+    elif isinstance(f, ast.Attribute):
+        recv = f.value.id if isinstance(f.value, ast.Name) else None
+        if recv == "os" and f.attr in _OS_WRITES:
+            return True
+        if recv == "shutil" and f.attr in _SHUTIL_WRITES:
+            return True
+        if f.attr in _PATH_WRITES:
+            return True
+        if f.attr != "open":
+            return False
+        mode_idx = 0  # Path.open(mode)
+    else:
+        return False
+    mode = None
+    if len(call.args) > mode_idx and isinstance(call.args[mode_idx], ast.Constant):
+        mode = call.args[mode_idx].value
+    for kw in call.keywords:
+        if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+            mode = kw.value.value
+    return isinstance(mode, str) and any(c in mode for c in "wax+")
+
+
+def _mentions_app_dir(nodes) -> bool:
+    """A Google/Gemini path literal, or consecutive "Google", "Gemini" string args of one call."""
+    for n in nodes:
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) and _APP_DIR_LITERAL.search(n.value):
+            return True
+        if isinstance(n, ast.Call):
+            vals = [a.value if isinstance(a, ast.Constant) and isinstance(a.value, str) else None
+                    for a in n.args]
+            if any(x == "Google" and y == "Gemini" for x, y in zip(vals, vals[1:])):
+                return True
+    return False
 
 
 def _walk_scope(node: ast.AST):
@@ -385,11 +424,10 @@ def check_no_app_dir_writes(skill_dir: Path) -> Dict[str, Any]:
             (n, n.name) for n in ast.walk(tree)
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
         ]
+        module_has_path = _mentions_app_dir(list(_walk_scope(tree)))
         for scope, label in scopes:
             nodes = list(_walk_scope(scope))
-            has_path = any(isinstance(n, ast.Constant) and isinstance(n.value, str)
-                           and _APP_DIR_LITERAL.search(n.value) for n in nodes)
-            if not has_path:
+            if not (module_has_path or _mentions_app_dir(nodes)):
                 continue
             for n in nodes:
                 if isinstance(n, ast.Call) and _is_write_call(n):
