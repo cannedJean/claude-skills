@@ -1,4 +1,4 @@
-"""Plan/edit step logic of the Gemini desktop UI Automation driver.
+"""Plan/edit/approve step logic and the long research wait of the Gemini desktop UI Automation driver.
 
 Written purely against uitree.UiTree, so every step runs on FakeTree in tests.
 Stdlib only; imports on any OS; never prints, never starts processes.
@@ -34,6 +34,25 @@ Rules (spec section 11, Task 8 rulings):
   Programming errors propagate.
 - Polling interval = max(cfg.poll_min_s, 2 x duration of the last snapshot).
 - Every StepError.details and every returned value has passed privacy.scrub.
+- approve (spec 11-9, 23): binds the job URL, refuses when research already started (stop_response, a
+  research status, the done phrase or a report control: ALREADY_STARTED, never a second Invoke) and when the
+  newest turn holding a plan control is not the newest card with an ENABLED plan_start, or the card count is
+  not the reviewed one (PLAN_CARD_STALE). Then one Invoke of that start (no retry, `before_invoke` runs right
+  before it) and a progress signal within approve_verify_s (else RESEARCH_NOT_STARTED).
+- wait_research (spec 11-10, 21.3, 23.2/23.3): reads the tree only (never acts, never refreshes by itself).
+  Every poll re-binds the single document whose URL equals the job URL (else CONVERSATION_MISMATCH), so
+  progress of another conversation never counts. Progress signature = (allowed node count, research status
+  texts, thought titles, allowed text length); status texts and thought titles are taken from allowed nodes
+  after the newest plan card, outside the report panel, chat markers excluded. Completion = stop_response
+  absent (positive anchor prompt_input) AND the done phrase in the last turn after the card AND >= 1 report
+  control inside the report panel, held for complete_hold_s. After stall_s without a signature change the
+  injected `recover(url) -> bool` (spec 11-12) is called at most once and only when a Hyperlink inside a
+  navigation landmark, not offscreen, whose URL equals the job URL exactly is in the tree now; otherwise
+  RECOVERY_UNAVAILABLE (nothing refreshed). A second stall, a failed recovery (False or BackendError) ->
+  RESEARCH_STALLED. max_wait_s is a separate hard cap (RESEARCH_TIMEOUT). A BackendError while reading the
+  tree is retried up to backend_retries consecutive times, then re-raised; other errors propagate. Progress
+  lines go to on_progress as "[Ns] Progress: <text>" (relay PROGRESS_RE), text scrubbed. Wait errors carry
+  longest_no_change_s, recoveries and last_status in their details.
 - Node ids must stay stable for the same UI element across snapshots (the UIA
   backend uses runtime ids); the cancel verification tracks the card by id.
 
@@ -64,6 +83,17 @@ Error codes (StepError.code; "started?" = may research have started):
     UNREVIEWED_START       research progress seen; stop_response invoked (details.stopped). started? YES
     COUNTDOWN_NOT_CANCELLED  cancel and edit fallback could not be verified; stop_response invoked first if
                            present (details.stop_invoked, act_errors). started? possible (not seen yet)
+    ALREADY_STARTED        approve: research already runs or ran in the bound conversation (details.signal); nothing
+                           invoked. started? YES (before this call)
+    PLAN_CARD_STALE        approve: the newest plan-control turn has no enabled plan_start, or the card count differs
+                           from expect_cards; nothing invoked. started? no
+    RESEARCH_NOT_STARTED   approve: plan_start invoked once, no progress signal within approve_verify_s. started?
+                           possible (the hidden window may lag) - collect later, never approve again
+    RESEARCH_STALLED       wait: no progress for stall_s after the one recovery, or the recovery failed. started? YES
+                           (research may still finish on the server - collect again later)
+    RECOVERY_UNAVAILABLE   wait: no progress for stall_s and no visible return link / no recover callable; nothing was
+                           refreshed. started? YES (collect again later)
+    RESEARCH_TIMEOUT       wait: the max_wait_s hard cap passed (independent of the stall timer). started? YES
 LocatorMiss (UI_LOCATOR_MISS payload) is raised for label drift; during the plan wait it may carry stop_invoked.
 """
 import hashlib
@@ -75,6 +105,7 @@ from typing import Callable, List, Optional, Tuple
 
 import locators
 import privacy
+import report_md
 from locators import LocatorContext, LocatorMiss, resolve
 from uitree import Node, PatternNotSupported
 
@@ -110,6 +141,12 @@ class StepConfig:
     bind_timeout_s: float = 60      # URL bind after send (measured 13 s)
     turn_timeout_s: float = 120     # Gemini's canned turn after `plan_edit`
     stop_timeout_s: float = 300     # stop_response gone after invoking it
+    approve_verify_s: float = 60    # progress signal after the plan_start Invoke (live: ~12 s)
+    research_poll_s: float = 5      # research wait poll interval (spec 11-10)
+    stall_s: float = 3600           # no progress signature change -> the one recovery (spec 23.2)
+    complete_hold_s: float = 20     # the completion combination must hold this long (spec 23.3)
+    max_wait_s: float = 4 * 3600    # hard cap of the research wait, separate from the stall timer
+    backend_retries: int = 3        # consecutive BackendErrors tolerated while reading the tree in the wait
 
 
 # -- small helpers -----------------------------------------------------------
@@ -783,3 +820,235 @@ def edit_plan(tree, locs: dict, cfg: StepConfig, url: str, feedback: str,
         _stop_on_failure(tree, poll, cfg, exc)
         raise
     return wait_plan_and_cancel(tree, locs, cfg, url, len(cards))
+
+
+# -- approve and the research wait (spec 11-9/10/12, 21.3, 23) ----------------
+@dataclass
+class ApproveResult:
+    started: bool
+    signal: str          # stop_response | research_status | report_done
+    cards: int           # plan cards in the conversation (the invoked one is the newest)
+    waited_s: float      # from the Invoke to the progress signal
+    last_status: str = ""
+
+
+@dataclass
+class WaitResult:
+    complete: bool
+    longest_no_change_s: float
+    recoveries: list     # [{"at", "why", "no_change_s", "ok"(, "error")}]
+    last_status: str
+    waited_s: float = 0.0
+
+
+@dataclass
+class _Signals:
+    sig: tuple
+    stop_absent: Optional[bool]   # True/False only with the prompt_input anchor (see _absent)
+    statuses: List[str]
+    titles: List[str]
+    done: bool
+    controls: bool
+    error: bool
+    text: str                     # progress text (status - thought title), scrubbed
+
+    @property
+    def started(self) -> Optional[str]:
+        if self.stop_absent is False:
+            return "stop_response"
+        if self.statuses or self.titles:
+            return "research_status"
+        if self.done or self.controls:
+            return "report_done"
+        return None
+
+    @property
+    def complete(self) -> bool:
+        return self.stop_absent is True and self.done and self.controls
+
+
+def _is_chat_marker(name: str) -> bool:
+    key = _fold(name)
+    return any(key.startswith(_fold(m)) for m in report_md.CHAT_TITLES + report_md.CHAT_TURN_MARKERS)
+
+
+def _signals(ctx: LocatorContext) -> _Signals:
+    """Progress and completion signals of one snapshot (reads only; names of allowed nodes only)."""
+    lc = ctx.locs["locators"]
+    # boundary: the newest turn holding any plan control (a card, also one without a start); plan-control turns
+    # themselves never contribute (their plan headings are not thought titles)
+    plan_turns = {t.id for t in _turns(ctx) if any(_find_in(t, ctx, k) for k in locators.PLAN_CONTROLS)}
+    card = next((t for t in reversed(_turns(ctx)) if t.id in plan_turns), None)
+    panel_nodes = [n for root in locators._scope_roots("report_panel", ctx, None) for n, _ in root.walk()]
+    panel = {n.id for n in panel_nodes}
+    statuses, titles = [], []
+    seen_card = card is None
+    for n, anc in ctx.doc.walk():
+        if n.id in plan_turns or any(a.id in plan_turns for a in anc):
+            seen_card = seen_card or n.id == card.id or any(a.id == card.id for a in anc)
+            continue
+        if not seen_card or n.id not in ctx.allowed or n.id in panel:
+            continue
+        name = _norm(n.name)
+        if not name:
+            continue
+        if locators._matches(n, lc["research_status"]):
+            statuses.append(name)
+        elif locators._matches(n, lc["research_thought_title"]) and not _is_chat_marker(name):
+            titles.append(name)
+    allowed = [n for n, _ in ctx.doc.walk() if n.id in ctx.allowed]
+    sig = (len(allowed), tuple(statuses), tuple(titles), sum(len(_norm(n.name)) for n in allowed))
+    turns = _turns(ctx)
+    last = turns[-1] if turns else None
+    after = last is not None and (card is None or last.id != card.id) and not _find_in(last, ctx, "plan_start")
+    done = after and any(n.id in ctx.allowed and locators._matches(n, lc["report_done_phrase"])
+                         for n, _ in last.walk())
+    error = after and _phrase_hit(_turn_text(last), ctx.locs.get("error_phrases"))
+    # = resolve() of the report_panel-scoped (optional) controls, with the panel found once
+    controls = any(locators._matches(n, lc[k]) for n in panel_nodes for k in locators.REPORT_CONTROLS)
+    text = " - ".join(x for x in (statuses[-1] if statuses else "", titles[-1] if titles else "") if x)
+    return _Signals(sig, _absent(ctx, "stop_response", "prompt_input"), statuses, titles, bool(done), controls,
+                    bool(error), privacy.scrub(text))
+
+
+class _BoundReader:
+    """Snapshots of the single document whose URL equals `url`, re-bound on every read (so another
+    conversation is never read); BackendErrors are retried up to cfg.backend_retries consecutive times."""
+
+    def __init__(self, tree, locs: dict, cfg: StepConfig, url: str):
+        self.tree, self.locs, self.cfg, self.url = tree, locs, cfg, url
+        self.last_s = 0.0
+
+    def _read(self) -> LocatorContext:
+        docs = [d for d in self.tree.documents() if d.value == self.url]
+        if len(docs) != 1:
+            raise StepError("CONVERSATION_MISMATCH", {"reason": "not_bound", "expected": self.url, "found": len(docs)})
+        doc = self.tree.snapshot(docs[0].id)
+        if doc.value != self.url:
+            raise StepError("CONVERSATION_MISMATCH", {"reason": "url_changed", "expected": self.url,
+                                                      "actual": doc.value})
+        return LocatorContext(self.tree, doc, self.locs, privacy.allowed_ids(doc))
+
+    def interval(self) -> float:
+        return max(self.cfg.research_poll_s, 2.0 * self.last_s)
+
+    def snap(self) -> LocatorContext:
+        fails = 0
+        while True:
+            t0 = self.cfg.clock()
+            try:
+                ctx = self._read()
+                self.last_s = max(0.0, self.cfg.clock() - t0)
+                return ctx
+            except BackendError:
+                fails += 1
+                if fails > self.cfg.backend_retries:
+                    raise
+                self.cfg.sleep(self.interval())
+
+
+def approve(tree, locs: dict, cfg: StepConfig, url: str, expect_cards: Optional[int] = None,
+            before_invoke: Optional[Callable[[], None]] = None) -> ApproveResult:
+    """Start the research of the reviewed plan: one Invoke of the newest enabled plan_start (rules in the module
+    doc). `expect_cards` = the plan result's card count (the card that was reviewed); `before_invoke` runs right
+    before the Invoke (the driver prints the relay confirm line there)."""
+    bind_conversation(tree, url)
+    reader = _BoundReader(tree, locs, cfg, url)
+    ctx = reader.snap()
+    resolve("prompt_input", ctx)   # positive anchor: without it a missing stop_response proves nothing
+    sigs = _signals(ctx)
+    if sigs.started:
+        raise StepError("ALREADY_STARTED", {"signal": sigs.started, "last_status": sigs.text})
+    cards = _cards(ctx)
+    if not cards:
+        raise StepError("NO_PLAN_CARD", {})
+    turn, start = cards[-1]
+    controls = [t for t in _turns(ctx) if any(_find_in(t, ctx, k) for k in locators.PLAN_CONTROLS)]
+    if controls[-1].id != turn.id or not start.enabled:
+        raise StepError("PLAN_CARD_STALE", {"reason": "newest_card_not_startable", "cards": len(cards)})
+    if expect_cards is not None and len(cards) != expect_cards:
+        raise StepError("PLAN_CARD_STALE", {"reason": "card_count", "expected": expect_cards, "found": len(cards)})
+    if before_invoke is not None:
+        before_invoke()
+    _act(tree, start, ("invoke",), "plan_start")   # the only Invoke: never repeated, whatever follows
+    t0 = cfg.clock()
+    deadline = t0 + cfg.approve_verify_s
+    while True:
+        cfg.sleep(max(cfg.poll_min_s, 2.0 * reader.last_s))
+        c = reader.snap()
+        sigs = _signals(c)
+        if sigs.started:
+            return ApproveResult(True, sigs.started, len(cards), round(cfg.clock() - t0, 1), sigs.text)
+        if sigs.error and sigs.stop_absent is True:
+            raise StepError("GEMINI_ERROR_RESPONSE", {})
+        if cfg.clock() >= deadline:
+            raise StepError("RESEARCH_NOT_STARTED", {"waited_s": round(cfg.approve_verify_s, 1)})
+
+
+def _return_link_visible(ctx: LocatorContext, url: str) -> bool:
+    """A Hyperlink inside a navigation landmark (the sidebar), not offscreen, whose URL equals the job URL exactly.
+    Matched by URL value only; its name is never read."""
+    for n, anc in ctx.doc.walk():
+        if n.ct != "Hyperlink" or n.offscreen:
+            continue
+        target = n.value or str((n.aria or {}).get("href") or "")
+        if target == url and any((a.role or "").strip().lower() == "navigation" for a in anc):
+            return True
+    return False
+
+
+def wait_research(tree, locs: dict, cfg: StepConfig, url: str,
+                  on_progress: Optional[Callable[[str], None]] = None,
+                  recover: Optional[Callable[[str], bool]] = None) -> WaitResult:
+    """Wait for the research of the bound conversation to complete (rules in the module doc). Never acts itself;
+    `recover(url)` (spec 11-12) is the only thing that may refresh, called at most once."""
+    reader = _BoundReader(tree, locs, cfg, url)
+    start = cfg.clock()
+    last_sig, last_change, longest = None, start, 0.0
+    last_text, done_since, recovered = "", None, False
+    recoveries: list = []
+
+    def info(**extra) -> dict:
+        return dict(extra, longest_no_change_s=round(longest, 1), recoveries=list(recoveries),
+                    last_status=last_text, waited_s=round(cfg.clock() - start, 1))
+
+    while True:
+        ctx = reader.snap()
+        now = cfg.clock()
+        sigs = _signals(ctx)
+        if sigs.sig != last_sig:
+            last_sig, last_change = sigs.sig, now
+        longest = max(longest, now - last_change)
+        if sigs.text and sigs.text != last_text:
+            last_text = sigs.text
+            if on_progress is not None:
+                on_progress("[%ds] Progress: %s" % (int(now - start), sigs.text))
+        if sigs.error and sigs.stop_absent is True:
+            raise StepError("GEMINI_ERROR_RESPONSE", info())
+        if sigs.complete:
+            done_since = now if done_since is None else done_since
+            if now - done_since >= cfg.complete_hold_s:
+                return WaitResult(True, round(longest, 1), recoveries, last_text, round(now - start, 1))
+        else:
+            done_since = None
+        if now - start >= cfg.max_wait_s:
+            raise StepError("RESEARCH_TIMEOUT", info(max_wait_s=round(cfg.max_wait_s, 1)))
+        if now - last_change >= cfg.stall_s:
+            if recovered:
+                raise StepError("RESEARCH_STALLED", info(reason="no_change_after_recovery"))
+            if recover is None:
+                raise StepError("RECOVERY_UNAVAILABLE", info(reason="no_recover"))
+            if not _return_link_visible(ctx, url):
+                raise StepError("RECOVERY_UNAVAILABLE", info(reason="return_link_not_visible"))
+            recovered = True
+            entry = {"at": round(now - start, 1), "why": "no_change", "no_change_s": round(now - last_change, 1),
+                     "ok": False}
+            recoveries.append(entry)
+            try:
+                entry["ok"] = bool(recover(url))
+            except BackendError as exc:
+                entry["error"] = type(exc).__name__
+            if not entry["ok"]:
+                raise StepError("RESEARCH_STALLED", info(reason="recovery_failed"))
+            last_sig, last_change = None, cfg.clock()
+        cfg.sleep(reader.interval())

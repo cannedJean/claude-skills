@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "scopes": {"document": {}, "main": {}, "composer": {"anchor": "prompt_input", "min_buttons": 3}, "plan_card": {"ancestor_automation_id_prefix": "model-response-message-content"}, "popup": {}, "desktop": {}, "top_bar": {"url_prefix": "app://bundle/src/top_bar/"}},
+  "scopes": {"document": {}, "main": {}, "composer": {"anchor": "prompt_input", "min_buttons": 3}, "plan_card": {"ancestor_automation_id_prefix": "model-response-message-content"}, "popup": {}, "desktop": {}, "top_bar": {"url_prefix": "app://bundle/src/top_bar/"}, "report_panel": {}},
   "locators": {
     "prompt_input": {"ct": "Edit", "names": ["Gemini 프롬프트 입력", "Enter a prompt for Gemini"], "scope": "main", "expect": "unique", "patterns": []},
     "send": {"ct": "Button", "names": ["메시지 보내기", "Send message"], "scope": "composer", "expect": "optional", "patterns": ["invoke"]},
@@ -25,7 +25,13 @@
     "app_menu_quit": {"ct": "MenuItem", "names": ["re:종료.*", "re:(Quit|Exit).*"], "scope": "popup", "expect": "at_least_one", "patterns": []},
     "app_menu_view": {"ct": "MenuItem", "names": ["보기", "View"], "scope": "popup", "expect": "at_least_one", "patterns": []},
     "app_menu_reload": {"ct": "MenuItem", "names": ["re:새로고침.*", "re:Reload.*"], "scope": "popup", "expect": "at_least_one", "patterns": []},
-    "sign_in": {"ct": "Hyperlink", "names": ["로그인", "Sign in"], "scope": "document", "expect": "optional", "patterns": []}
+    "sign_in": {"ct": "Hyperlink", "names": ["로그인", "Sign in"], "scope": "document", "expect": "optional", "patterns": []},
+    "research_status": {"ct": "Text", "names": ["re:조사 시작 중.*", "re:웹사이트 [\\d,]+개 조사 중.*", "re:Starting research.*", "re:Researching [\\d,]+ websites.*"], "scope": "main", "expect": "optional", "patterns": []},
+    "research_thought_title": {"ct": "Text", "role": "heading", "names": ["re:.+"], "scope": "main", "expect": "optional", "patterns": []},
+    "report_done_phrase": {"ct": "Text", "names": ["re:I[’']ve completed your research.*", "re:연구를 완료했습니다.*", "re:조사를 완료했습니다.*"], "scope": "main", "expect": "optional", "patterns": []},
+    "report_share_export": {"ct": "Button", "names": ["공유 및 내보내기", "Share & export", "Share and export"], "scope": "report_panel", "expect": "optional", "patterns": []},
+    "report_toc": {"ct": "Button", "names": ["목차 메뉴", "Table of contents"], "scope": "report_panel", "expect": "optional", "patterns": []},
+    "report_sources_used": {"ct": "Button", "names": ["보고서에서 사용된 소스", "Sources used in the report"], "scope": "report_panel", "expect": "optional", "patterns": []}
   },
   "surfaces_allowed": ["re:^https://gemini\\.google\\.com/app(/[0-9a-f]{8,})?$", "re:^app://bundle/src/top_bar/", "re:^blob:"],
   "status_phrases": ["조사 계획 생성 중"],

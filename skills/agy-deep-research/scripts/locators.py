@@ -21,6 +21,10 @@ Notes for callers:
   only the tool's Gemini instance, so the `popup`/`desktop` scopes cannot reach
   other applications. Their nodes are not in the page's allowed region, so
   misses there only get GENERIC_LABELS hints (accepted limitation).
+- The `report_panel` scope is the finished report's side panel as report_md.find_report_panel finds it
+  (anchored on the names of the REPORT_CONTROLS locators, allowed region only, fail closed: no valid
+  panel -> no roots). A report control outside that panel (a chip in the chat column, another
+  region) therefore never resolves.
 Stdlib only; imports on any OS.
 """
 import copy
@@ -35,6 +39,7 @@ from urllib.parse import urlparse
 
 from uitree import Node, PATTERNS, UiTree
 import privacy
+import report_md
 
 TOP_KEYS = ("version", "scopes", "locators", "surfaces_allowed", "status_phrases",
             "safety_phrases", "error_phrases", "model_aliases")
@@ -44,6 +49,7 @@ SCOPE_KINDS = {
     "composer": ("anchor", "min_buttons"),
     "plan_card": ("ancestor_automation_id_prefix",),
     "top_bar": ("url_prefix",),
+    "report_panel": (),
 }
 EXPECTS = ("unique", "at_least_one", "optional")
 HREF_HOST = "gemini.google.com"
@@ -58,7 +64,9 @@ PLAN_ENABLED_ANCHORED = ("plan_edit", "plan_cancel_countdown")
 PLAN_CONTROLS = ("plan_start", "plan_edit", "plan_cancel_countdown", "plan_retry_without_dr")
 NO_ENABLED_START_HINT = "the newest plan card has no enabled plan_start: not binding it or an older card"
 # scopes whose roots come from the bound conversation document (ctx.doc)
-DOC_SCOPES = ("document", "main", "composer", "plan_card")
+DOC_SCOPES = ("document", "main", "composer", "plan_card", "report_panel")
+# locators whose names anchor the report panel (report_md reads the same names from locators.json)
+REPORT_CONTROLS = report_md.REPORT_CONTROL_KEYS
 REQUIRED = ("ct", "names", "scope", "expect")
 
 
@@ -274,6 +282,11 @@ def _scope_roots(scope: str, ctx: LocatorContext, key: Optional[str] = None) -> 
                 if any(_matches(n, aent) for n, _ in turn.walk()):
                     return [turn]
         return turns[-1:]
+    if scope == "report_panel":
+        labels = [n for k in REPORT_CONTROLS for n in ctx.locs["locators"].get(k, {}).get("names", ())
+                  if not n.startswith("re:")]
+        panel = report_md.find_report_panel(doc, ctx.allowed, labels) if labels else None
+        return [panel] if panel is not None else []
     if scope == "composer":
         akey = conf.get("anchor", "prompt_input")
         anchor = ctx.anchor_cache.get(akey)

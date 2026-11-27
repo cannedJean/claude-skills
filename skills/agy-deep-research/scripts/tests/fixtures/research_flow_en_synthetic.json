@@ -1,0 +1,5695 @@
+{
+ "_note": "synthetic: Korean timeline with English labels",
+ "_source": "shape of the 2026-11-27 live research timeline (spec 23.1); synthetic ids, titles, URLs",
+ "state": "card",
+ "states": {
+  "card": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "conv_link",
+               "ct": "Hyperlink",
+               "name": "Test conversation title",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60"
+              },
+              {
+               "id": "other_link",
+               "ct": "Hyperlink",
+               "name": "Another test conversation",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/9e8d7c6b5a493827"
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "chat_h1",
+             "ct": "Text",
+             "name": "Conversation with Gemini",
+             "role": "heading",
+             "heading": 1
+            },
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Briefly research the major versions of the SQL standard."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here's a research plan for that topic."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard",
+                 "role": "heading",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(1) Use the ISO/IEC 9075 records to list the major versions."
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Analyze results"
+                },
+                {
+                 "id": "c1_p3",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "What do you want to research?"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, Neon mode in use",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "r00": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "conv_link",
+               "ct": "Hyperlink",
+               "name": "Test conversation title",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60"
+              },
+              {
+               "id": "other_link",
+               "ct": "Hyperlink",
+               "name": "Another test conversation",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/9e8d7c6b5a493827"
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "chat_h1",
+             "ct": "Text",
+             "name": "Conversation with Gemini",
+             "role": "heading",
+             "heading": 1
+            },
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Briefly research the major versions of the SQL standard."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here's a research plan for that topic."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard",
+                 "role": "heading",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(1) Use the ISO/IEC 9075 records to list the major versions."
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Analyze results"
+                },
+                {
+                 "id": "c1_p3",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "uq2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-2",
+             "children": [
+              {
+               "id": "uq2_h",
+               "ct": "Text",
+               "name": "You said Start research",
+               "role": "heading",
+               "heading": 5
+              },
+              {
+               "id": "uq2_t",
+               "ct": "Text",
+               "name": "Start research"
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_h",
+               "ct": "Text",
+               "name": "Gemini said",
+               "role": "heading",
+               "heading": 6
+              },
+              {
+               "id": "r1_notify",
+               "ct": "Text",
+               "name": "I'll let you know when it's done."
+              },
+              {
+               "id": "r1_status",
+               "ct": "Text",
+               "name": "Starting research..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "research_panel",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "rp_close",
+             "ct": "Button",
+             "name": "Close panel",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_show",
+             "ct": "Button",
+             "name": "Show thinking",
+             "patterns": [
+              "invoke"
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "What do you want to research?"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, Neon mode in use",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "r01": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "conv_link",
+               "ct": "Hyperlink",
+               "name": "Test conversation title",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60"
+              },
+              {
+               "id": "other_link",
+               "ct": "Hyperlink",
+               "name": "Another test conversation",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/9e8d7c6b5a493827"
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "chat_h1",
+             "ct": "Text",
+             "name": "Conversation with Gemini",
+             "role": "heading",
+             "heading": 1
+            },
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Briefly research the major versions of the SQL standard."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here's a research plan for that topic."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard",
+                 "role": "heading",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(1) Use the ISO/IEC 9075 records to list the major versions."
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Analyze results"
+                },
+                {
+                 "id": "c1_p3",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "uq2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-2",
+             "children": [
+              {
+               "id": "uq2_h",
+               "ct": "Text",
+               "name": "You said Start research",
+               "role": "heading",
+               "heading": 5
+              },
+              {
+               "id": "uq2_t",
+               "ct": "Text",
+               "name": "Start research"
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_h",
+               "ct": "Text",
+               "name": "Gemini said",
+               "role": "heading",
+               "heading": 6
+              },
+              {
+               "id": "r1_notify",
+               "ct": "Text",
+               "name": "I'll let you know when it's done."
+              },
+              {
+               "id": "r1_status",
+               "ct": "Text",
+               "name": "Researching 37 websites..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "research_panel",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "rp_close",
+             "ct": "Button",
+             "name": "Close panel",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_show",
+             "ct": "Button",
+             "name": "Show thinking",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_t0",
+             "ct": "Text",
+             "name": "Planning the SQL standard history research",
+             "role": "heading",
+             "heading": 3
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "What do you want to research?"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, Neon mode in use",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "r02": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "conv_link",
+               "ct": "Hyperlink",
+               "name": "Test conversation title",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60"
+              },
+              {
+               "id": "other_link",
+               "ct": "Hyperlink",
+               "name": "Another test conversation",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/9e8d7c6b5a493827"
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "chat_h1",
+             "ct": "Text",
+             "name": "Conversation with Gemini",
+             "role": "heading",
+             "heading": 1
+            },
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Briefly research the major versions of the SQL standard."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here's a research plan for that topic."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard",
+                 "role": "heading",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(1) Use the ISO/IEC 9075 records to list the major versions."
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Analyze results"
+                },
+                {
+                 "id": "c1_p3",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "uq2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-2",
+             "children": [
+              {
+               "id": "uq2_h",
+               "ct": "Text",
+               "name": "You said Start research",
+               "role": "heading",
+               "heading": 5
+              },
+              {
+               "id": "uq2_t",
+               "ct": "Text",
+               "name": "Start research"
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_h",
+               "ct": "Text",
+               "name": "Gemini said",
+               "role": "heading",
+               "heading": 6
+              },
+              {
+               "id": "r1_notify",
+               "ct": "Text",
+               "name": "I'll let you know when it's done."
+              },
+              {
+               "id": "r1_status",
+               "ct": "Text",
+               "name": "Researching 37 websites..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "research_panel",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "rp_close",
+             "ct": "Button",
+             "name": "Close panel",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_show",
+             "ct": "Button",
+             "name": "Show thinking",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_t0",
+             "ct": "Text",
+             "name": "Planning the SQL standard history research",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t1",
+             "ct": "Text",
+             "name": "Searching official sources and papers",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_desc",
+             "ct": "Text",
+             "name": "To check the facts I will cross-check the official catalogue, committee papers and public documents."
+            },
+            {
+             "id": "rp_x0",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "What do you want to research?"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, Neon mode in use",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "r03": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "conv_link",
+               "ct": "Hyperlink",
+               "name": "Test conversation title",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60"
+              },
+              {
+               "id": "other_link",
+               "ct": "Hyperlink",
+               "name": "Another test conversation",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/9e8d7c6b5a493827"
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "chat_h1",
+             "ct": "Text",
+             "name": "Conversation with Gemini",
+             "role": "heading",
+             "heading": 1
+            },
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Briefly research the major versions of the SQL standard."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here's a research plan for that topic."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard",
+                 "role": "heading",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(1) Use the ISO/IEC 9075 records to list the major versions."
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Analyze results"
+                },
+                {
+                 "id": "c1_p3",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "uq2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-2",
+             "children": [
+              {
+               "id": "uq2_h",
+               "ct": "Text",
+               "name": "You said Start research",
+               "role": "heading",
+               "heading": 5
+              },
+              {
+               "id": "uq2_t",
+               "ct": "Text",
+               "name": "Start research"
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_h",
+               "ct": "Text",
+               "name": "Gemini said",
+               "role": "heading",
+               "heading": 6
+              },
+              {
+               "id": "r1_notify",
+               "ct": "Text",
+               "name": "I'll let you know when it's done."
+              },
+              {
+               "id": "r1_status",
+               "ct": "Text",
+               "name": "Researching 37 websites..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "research_panel",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "rp_close",
+             "ct": "Button",
+             "name": "Close panel",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_show",
+             "ct": "Button",
+             "name": "Show thinking",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_t0",
+             "ct": "Text",
+             "name": "Planning the SQL standard history research",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t1",
+             "ct": "Text",
+             "name": "Searching official sources and papers",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_desc",
+             "ct": "Text",
+             "name": "To check the facts I will cross-check the official catalogue, committee papers and public documents."
+            },
+            {
+             "id": "rp_x0",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x1",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "What do you want to research?"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, Neon mode in use",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "r04": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "conv_link",
+               "ct": "Hyperlink",
+               "name": "Test conversation title",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60"
+              },
+              {
+               "id": "other_link",
+               "ct": "Hyperlink",
+               "name": "Another test conversation",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/9e8d7c6b5a493827"
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "chat_h1",
+             "ct": "Text",
+             "name": "Conversation with Gemini",
+             "role": "heading",
+             "heading": 1
+            },
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Briefly research the major versions of the SQL standard."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here's a research plan for that topic."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard",
+                 "role": "heading",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(1) Use the ISO/IEC 9075 records to list the major versions."
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Analyze results"
+                },
+                {
+                 "id": "c1_p3",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "uq2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-2",
+             "children": [
+              {
+               "id": "uq2_h",
+               "ct": "Text",
+               "name": "You said Start research",
+               "role": "heading",
+               "heading": 5
+              },
+              {
+               "id": "uq2_t",
+               "ct": "Text",
+               "name": "Start research"
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_h",
+               "ct": "Text",
+               "name": "Gemini said",
+               "role": "heading",
+               "heading": 6
+              },
+              {
+               "id": "r1_notify",
+               "ct": "Text",
+               "name": "I'll let you know when it's done."
+              },
+              {
+               "id": "r1_status",
+               "ct": "Text",
+               "name": "Researching 37 websites..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "research_panel",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "rp_close",
+             "ct": "Button",
+             "name": "Close panel",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_show",
+             "ct": "Button",
+             "name": "Show thinking",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_t0",
+             "ct": "Text",
+             "name": "Planning the SQL standard history research",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t1",
+             "ct": "Text",
+             "name": "Searching official sources and papers",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_desc",
+             "ct": "Text",
+             "name": "To check the facts I will cross-check the official catalogue, committee papers and public documents."
+            },
+            {
+             "id": "rp_x0",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x1",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x2",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "What do you want to research?"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, Neon mode in use",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "r05": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "conv_link",
+               "ct": "Hyperlink",
+               "name": "Test conversation title",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60"
+              },
+              {
+               "id": "other_link",
+               "ct": "Hyperlink",
+               "name": "Another test conversation",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/9e8d7c6b5a493827"
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "chat_h1",
+             "ct": "Text",
+             "name": "Conversation with Gemini",
+             "role": "heading",
+             "heading": 1
+            },
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Briefly research the major versions of the SQL standard."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here's a research plan for that topic."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard",
+                 "role": "heading",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(1) Use the ISO/IEC 9075 records to list the major versions."
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Analyze results"
+                },
+                {
+                 "id": "c1_p3",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "uq2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-2",
+             "children": [
+              {
+               "id": "uq2_h",
+               "ct": "Text",
+               "name": "You said Start research",
+               "role": "heading",
+               "heading": 5
+              },
+              {
+               "id": "uq2_t",
+               "ct": "Text",
+               "name": "Start research"
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_h",
+               "ct": "Text",
+               "name": "Gemini said",
+               "role": "heading",
+               "heading": 6
+              },
+              {
+               "id": "r1_notify",
+               "ct": "Text",
+               "name": "I'll let you know when it's done."
+              },
+              {
+               "id": "r1_status",
+               "ct": "Text",
+               "name": "Researching 37 websites..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "research_panel",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "rp_close",
+             "ct": "Button",
+             "name": "Close panel",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_show",
+             "ct": "Button",
+             "name": "Show thinking",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_t0",
+             "ct": "Text",
+             "name": "Planning the SQL standard history research",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t1",
+             "ct": "Text",
+             "name": "Searching official sources and papers",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_desc",
+             "ct": "Text",
+             "name": "To check the facts I will cross-check the official catalogue, committee papers and public documents."
+            },
+            {
+             "id": "rp_x0",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x1",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x2",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x3",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "What do you want to research?"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, Neon mode in use",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "r06": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "conv_link",
+               "ct": "Hyperlink",
+               "name": "Test conversation title",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60"
+              },
+              {
+               "id": "other_link",
+               "ct": "Hyperlink",
+               "name": "Another test conversation",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/9e8d7c6b5a493827"
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "chat_h1",
+             "ct": "Text",
+             "name": "Conversation with Gemini",
+             "role": "heading",
+             "heading": 1
+            },
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Briefly research the major versions of the SQL standard."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here's a research plan for that topic."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard",
+                 "role": "heading",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(1) Use the ISO/IEC 9075 records to list the major versions."
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Analyze results"
+                },
+                {
+                 "id": "c1_p3",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "uq2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-2",
+             "children": [
+              {
+               "id": "uq2_h",
+               "ct": "Text",
+               "name": "You said Start research",
+               "role": "heading",
+               "heading": 5
+              },
+              {
+               "id": "uq2_t",
+               "ct": "Text",
+               "name": "Start research"
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_h",
+               "ct": "Text",
+               "name": "Gemini said",
+               "role": "heading",
+               "heading": 6
+              },
+              {
+               "id": "r1_notify",
+               "ct": "Text",
+               "name": "I'll let you know when it's done."
+              },
+              {
+               "id": "r1_status",
+               "ct": "Text",
+               "name": "Researching 37 websites..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "research_panel",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "rp_close",
+             "ct": "Button",
+             "name": "Close panel",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_show",
+             "ct": "Button",
+             "name": "Show thinking",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_t0",
+             "ct": "Text",
+             "name": "Planning the SQL standard history research",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t1",
+             "ct": "Text",
+             "name": "Searching official sources and papers",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_desc",
+             "ct": "Text",
+             "name": "To check the facts I will cross-check the official catalogue, committee papers and public documents."
+            },
+            {
+             "id": "rp_x0",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x1",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x2",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x3",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x4",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "What do you want to research?"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, Neon mode in use",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "r07": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "conv_link",
+               "ct": "Hyperlink",
+               "name": "Test conversation title",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60"
+              },
+              {
+               "id": "other_link",
+               "ct": "Hyperlink",
+               "name": "Another test conversation",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/9e8d7c6b5a493827"
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "chat_h1",
+             "ct": "Text",
+             "name": "Conversation with Gemini",
+             "role": "heading",
+             "heading": 1
+            },
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Briefly research the major versions of the SQL standard."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here's a research plan for that topic."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard",
+                 "role": "heading",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(1) Use the ISO/IEC 9075 records to list the major versions."
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Analyze results"
+                },
+                {
+                 "id": "c1_p3",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "uq2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-2",
+             "children": [
+              {
+               "id": "uq2_h",
+               "ct": "Text",
+               "name": "You said Start research",
+               "role": "heading",
+               "heading": 5
+              },
+              {
+               "id": "uq2_t",
+               "ct": "Text",
+               "name": "Start research"
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_h",
+               "ct": "Text",
+               "name": "Gemini said",
+               "role": "heading",
+               "heading": 6
+              },
+              {
+               "id": "r1_notify",
+               "ct": "Text",
+               "name": "I'll let you know when it's done."
+              },
+              {
+               "id": "r1_status",
+               "ct": "Text",
+               "name": "Researching 37 websites..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "research_panel",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "rp_close",
+             "ct": "Button",
+             "name": "Close panel",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_show",
+             "ct": "Button",
+             "name": "Show thinking",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_t0",
+             "ct": "Text",
+             "name": "Planning the SQL standard history research",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t1",
+             "ct": "Text",
+             "name": "Searching official sources and papers",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_desc",
+             "ct": "Text",
+             "name": "To check the facts I will cross-check the official catalogue, committee papers and public documents."
+            },
+            {
+             "id": "rp_t2",
+             "ct": "Text",
+             "name": "Looking up ISO standard numbers",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_x0",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x1",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x2",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x3",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x4",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "What do you want to research?"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, Neon mode in use",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "r08": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "conv_link",
+               "ct": "Hyperlink",
+               "name": "Test conversation title",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60"
+              },
+              {
+               "id": "other_link",
+               "ct": "Hyperlink",
+               "name": "Another test conversation",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/9e8d7c6b5a493827"
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "chat_h1",
+             "ct": "Text",
+             "name": "Conversation with Gemini",
+             "role": "heading",
+             "heading": 1
+            },
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Briefly research the major versions of the SQL standard."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here's a research plan for that topic."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard",
+                 "role": "heading",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(1) Use the ISO/IEC 9075 records to list the major versions."
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Analyze results"
+                },
+                {
+                 "id": "c1_p3",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "uq2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-2",
+             "children": [
+              {
+               "id": "uq2_h",
+               "ct": "Text",
+               "name": "You said Start research",
+               "role": "heading",
+               "heading": 5
+              },
+              {
+               "id": "uq2_t",
+               "ct": "Text",
+               "name": "Start research"
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_h",
+               "ct": "Text",
+               "name": "Gemini said",
+               "role": "heading",
+               "heading": 6
+              },
+              {
+               "id": "r1_notify",
+               "ct": "Text",
+               "name": "I'll let you know when it's done."
+              },
+              {
+               "id": "r1_status",
+               "ct": "Text",
+               "name": "Researching 37 websites..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "research_panel",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "rp_close",
+             "ct": "Button",
+             "name": "Close panel",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_show",
+             "ct": "Button",
+             "name": "Show thinking",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_t0",
+             "ct": "Text",
+             "name": "Planning the SQL standard history research",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t1",
+             "ct": "Text",
+             "name": "Searching official sources and papers",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_desc",
+             "ct": "Text",
+             "name": "To check the facts I will cross-check the official catalogue, committee papers and public documents."
+            },
+            {
+             "id": "rp_t2",
+             "ct": "Text",
+             "name": "Looking up ISO standard numbers",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t3",
+             "ct": "Text",
+             "name": "Analysing primary sources in depth",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_x0",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x1",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x2",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x3",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x4",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "What do you want to research?"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, Neon mode in use",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "r09": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "conv_link",
+               "ct": "Hyperlink",
+               "name": "Test conversation title",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60"
+              },
+              {
+               "id": "other_link",
+               "ct": "Hyperlink",
+               "name": "Another test conversation",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/9e8d7c6b5a493827"
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "chat_h1",
+             "ct": "Text",
+             "name": "Conversation with Gemini",
+             "role": "heading",
+             "heading": 1
+            },
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Briefly research the major versions of the SQL standard."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here's a research plan for that topic."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard",
+                 "role": "heading",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(1) Use the ISO/IEC 9075 records to list the major versions."
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Analyze results"
+                },
+                {
+                 "id": "c1_p3",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "uq2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-2",
+             "children": [
+              {
+               "id": "uq2_h",
+               "ct": "Text",
+               "name": "You said Start research",
+               "role": "heading",
+               "heading": 5
+              },
+              {
+               "id": "uq2_t",
+               "ct": "Text",
+               "name": "Start research"
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_h",
+               "ct": "Text",
+               "name": "Gemini said",
+               "role": "heading",
+               "heading": 6
+              },
+              {
+               "id": "r1_notify",
+               "ct": "Text",
+               "name": "I'll let you know when it's done."
+              },
+              {
+               "id": "r1_status",
+               "ct": "Text",
+               "name": "Researching 37 websites..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "research_panel",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "rp_close",
+             "ct": "Button",
+             "name": "Close panel",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_show",
+             "ct": "Button",
+             "name": "Show thinking",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_t0",
+             "ct": "Text",
+             "name": "Planning the SQL standard history research",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t1",
+             "ct": "Text",
+             "name": "Searching official sources and papers",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_desc",
+             "ct": "Text",
+             "name": "To check the facts I will cross-check the official catalogue, committee papers and public documents."
+            },
+            {
+             "id": "rp_t2",
+             "ct": "Text",
+             "name": "Looking up ISO standard numbers",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t3",
+             "ct": "Text",
+             "name": "Analysing primary sources in depth",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t4",
+             "ct": "Text",
+             "name": "Final check of the SQL standard history",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_x0",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x1",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x2",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x3",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x4",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "What do you want to research?"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, Neon mode in use",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "r10": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "conv_link",
+               "ct": "Hyperlink",
+               "name": "Test conversation title",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60"
+              },
+              {
+               "id": "other_link",
+               "ct": "Hyperlink",
+               "name": "Another test conversation",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/9e8d7c6b5a493827"
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "chat_h1",
+             "ct": "Text",
+             "name": "Conversation with Gemini",
+             "role": "heading",
+             "heading": 1
+            },
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Briefly research the major versions of the SQL standard."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here's a research plan for that topic."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard",
+                 "role": "heading",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(1) Use the ISO/IEC 9075 records to list the major versions."
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Analyze results"
+                },
+                {
+                 "id": "c1_p3",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "uq2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-2",
+             "children": [
+              {
+               "id": "uq2_h",
+               "ct": "Text",
+               "name": "You said Start research",
+               "role": "heading",
+               "heading": 5
+              },
+              {
+               "id": "uq2_t",
+               "ct": "Text",
+               "name": "Start research"
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_h",
+               "ct": "Text",
+               "name": "Gemini said",
+               "role": "heading",
+               "heading": 6
+              },
+              {
+               "id": "r1_notify",
+               "ct": "Text",
+               "name": "I'll let you know when it's done."
+              },
+              {
+               "id": "r1_status",
+               "ct": "Text",
+               "name": "Researching 37 websites..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "research_panel",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "rp_close",
+             "ct": "Button",
+             "name": "Close panel",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_show",
+             "ct": "Button",
+             "name": "Show thinking",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_t0",
+             "ct": "Text",
+             "name": "Planning the SQL standard history research",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t1",
+             "ct": "Text",
+             "name": "Searching official sources and papers",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_desc",
+             "ct": "Text",
+             "name": "To check the facts I will cross-check the official catalogue, committee papers and public documents."
+            },
+            {
+             "id": "rp_t2",
+             "ct": "Text",
+             "name": "Looking up ISO standard numbers",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t3",
+             "ct": "Text",
+             "name": "Analysing primary sources in depth",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t4",
+             "ct": "Text",
+             "name": "Final check of the SQL standard history",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t5",
+             "ct": "Text",
+             "name": "Preparing citations and the final report",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_x0",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x1",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x2",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x3",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x4",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "What do you want to research?"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, Neon mode in use",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "r11": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "conv_link",
+               "ct": "Hyperlink",
+               "name": "Test conversation title",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60"
+              },
+              {
+               "id": "other_link",
+               "ct": "Hyperlink",
+               "name": "Another test conversation",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/9e8d7c6b5a493827"
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "chat_h1",
+             "ct": "Text",
+             "name": "Conversation with Gemini",
+             "role": "heading",
+             "heading": 1
+            },
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Briefly research the major versions of the SQL standard."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here's a research plan for that topic."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard",
+                 "role": "heading",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(1) Use the ISO/IEC 9075 records to list the major versions."
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Analyze results"
+                },
+                {
+                 "id": "c1_p3",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "uq2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-2",
+             "children": [
+              {
+               "id": "uq2_h",
+               "ct": "Text",
+               "name": "You said Start research",
+               "role": "heading",
+               "heading": 5
+              },
+              {
+               "id": "uq2_t",
+               "ct": "Text",
+               "name": "Start research"
+              }
+             ]
+            },
+            {
+             "id": "turn_r1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r1",
+             "children": [
+              {
+               "id": "r1_h",
+               "ct": "Text",
+               "name": "Gemini said",
+               "role": "heading",
+               "heading": 6
+              },
+              {
+               "id": "r1_notify",
+               "ct": "Text",
+               "name": "I'll let you know when it's done."
+              },
+              {
+               "id": "r1_status",
+               "ct": "Text",
+               "name": "Researching 45 websites..."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "research_panel",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "rp_close",
+             "ct": "Button",
+             "name": "Close panel",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_show",
+             "ct": "Button",
+             "name": "Show thinking",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rp_t0",
+             "ct": "Text",
+             "name": "Planning the SQL standard history research",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t1",
+             "ct": "Text",
+             "name": "Searching official sources and papers",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_desc",
+             "ct": "Text",
+             "name": "To check the facts I will cross-check the official catalogue, committee papers and public documents."
+            },
+            {
+             "id": "rp_t2",
+             "ct": "Text",
+             "name": "Looking up ISO standard numbers",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t3",
+             "ct": "Text",
+             "name": "Analysing primary sources in depth",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t4",
+             "ct": "Text",
+             "name": "Final check of the SQL standard history",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_t5",
+             "ct": "Text",
+             "name": "Preparing citations and the final report",
+             "role": "heading",
+             "heading": 3
+            },
+            {
+             "id": "rp_x0",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x1",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x2",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x3",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x4",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            },
+            {
+             "id": "rp_x5",
+             "ct": "Text",
+             "name": "Checking additional committee material."
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "What do you want to research?"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, Neon mode in use",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_stop",
+               "ct": "Button",
+               "name": "Stop response",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "complete": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "conv_link",
+               "ct": "Hyperlink",
+               "name": "Test conversation title",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60"
+              },
+              {
+               "id": "other_link",
+               "ct": "Hyperlink",
+               "name": "Another test conversation",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/9e8d7c6b5a493827"
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "chat_h1",
+             "ct": "Text",
+             "name": "Conversation with Gemini",
+             "role": "heading",
+             "heading": 1
+            },
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Briefly research the major versions of the SQL standard."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here's a research plan for that topic."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard",
+                 "role": "heading",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(1) Use the ISO/IEC 9075 records to list the major versions."
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Analyze results"
+                },
+                {
+                 "id": "c1_p3",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "uq2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-2",
+             "children": [
+              {
+               "id": "uq2_h",
+               "ct": "Text",
+               "name": "You said Start research",
+               "role": "heading",
+               "heading": 5
+              },
+              {
+               "id": "uq2_t",
+               "ct": "Text",
+               "name": "Start research"
+              }
+             ]
+            },
+            {
+             "id": "turn_r2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r2",
+             "children": [
+              {
+               "id": "r2_h",
+               "ct": "Text",
+               "name": "Gemini said",
+               "role": "heading",
+               "heading": 6
+              },
+              {
+               "id": "r2_done",
+               "ct": "Text",
+               "name": "I've completed your research."
+              },
+              {
+               "id": "r2_tail",
+               "ct": "Text",
+               "name": " Feel free to ask me follow-up questions or request changes."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "report_panel",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "rep_title",
+             "ct": "Text",
+             "name": "Major versions of the SQL standard",
+             "role": "heading",
+             "heading": 2
+            },
+            {
+             "id": "rep_toc",
+             "ct": "Button",
+             "name": "Table of contents",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rep_share",
+             "ct": "Button",
+             "name": "Share & export",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rep_make",
+             "ct": "Button",
+             "name": "Create",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rep_closeg",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "rep_close",
+               "ct": "Button",
+               "name": "Close panel",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            },
+            {
+             "id": "rep_body",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "rep_body2",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "rep_h1",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard (SQL-86 to SQL:2011)",
+                 "role": "heading",
+                 "heading": 1
+                },
+                {
+                 "id": "rep_p1",
+                 "ct": "Text",
+                 "name": "The SQL standard was first published in 1986 as ANSI X3.135-1986."
+                },
+                {
+                 "id": "rep_chip",
+                 "ct": "Button",
+                 "name": "Learn more",
+                 "patterns": [
+                  "invoke"
+                 ]
+                },
+                {
+                 "id": "rep_h2",
+                 "ct": "Text",
+                 "name": "Versions by year",
+                 "role": "heading",
+                 "heading": 2
+                },
+                {
+                 "id": "rep_l1",
+                 "ct": "Hyperlink",
+                 "name": "ISO/IEC 9075 catalogue",
+                 "value": "https://www.iso.org/standard/76583.html"
+                },
+                {
+                 "id": "rep_sources",
+                 "ct": "Button",
+                 "name": "Sources used in the report",
+                 "patterns": [
+                  "invoke"
+                 ]
+                },
+                {
+                 "id": "rep_unused",
+                 "ct": "Button",
+                 "name": "Sources found but not used",
+                 "patterns": [
+                  "invoke"
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "What do you want to research?"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, Neon mode in use",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "complete_chip": {
+   "documents": [
+    {
+     "id": "doc",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60",
+     "children": [
+      {
+       "id": "g0",
+       "ct": "Group",
+       "name": "",
+       "children": [
+        {
+         "id": "main",
+         "ct": "Group",
+         "name": "",
+         "role": "main",
+         "children": [
+          {
+           "id": "sidebar",
+           "ct": "Group",
+           "name": "",
+           "role": "region",
+           "children": [
+            {
+             "id": "nav1",
+             "ct": "Group",
+             "name": "",
+             "role": "navigation",
+             "children": [
+              {
+               "id": "newchat",
+               "ct": "Hyperlink",
+               "name": "New chat",
+               "patterns": [
+                "invoke"
+               ],
+               "aria": {
+                "href": "https://gemini.google.com/app"
+               }
+              },
+              {
+               "id": "conv_link",
+               "ct": "Hyperlink",
+               "name": "Test conversation title",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/3f9a0c1b2d4e5f60"
+              },
+              {
+               "id": "other_link",
+               "ct": "Hyperlink",
+               "name": "Another test conversation",
+               "patterns": [
+                "invoke"
+               ],
+               "value": "https://gemini.google.com/app/9e8d7c6b5a493827"
+              },
+              {
+               "id": "sb_close",
+               "ct": "Button",
+               "name": "Close sidebar",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "conv",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "chat_h1",
+             "ct": "Text",
+             "name": "Conversation with Gemini",
+             "role": "heading",
+             "heading": 1
+            },
+            {
+             "id": "uq1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-1",
+             "children": [
+              {
+               "id": "uq1_t",
+               "ct": "Text",
+               "name": "Briefly research the major versions of the SQL standard."
+              }
+             ]
+            },
+            {
+             "id": "turn_c1",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-c1",
+             "children": [
+              {
+               "id": "c1_body",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "c1_intro",
+                 "ct": "Text",
+                 "name": "Here's a research plan for that topic."
+                },
+                {
+                 "id": "c1_h",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard",
+                 "role": "heading",
+                 "heading": 3
+                },
+                {
+                 "id": "c1_s1",
+                 "ct": "Text",
+                 "name": "(1) Use the ISO/IEC 9075 records to list the major versions."
+                },
+                {
+                 "id": "c1_p1",
+                 "ct": "Text",
+                 "name": "Research websites"
+                },
+                {
+                 "id": "c1_p2",
+                 "ct": "Text",
+                 "name": "Analyze results"
+                },
+                {
+                 "id": "c1_p3",
+                 "ct": "Text",
+                 "name": "Create report"
+                },
+                {
+                 "id": "c1_bar",
+                 "ct": "Group",
+                 "name": "",
+                 "children": [
+                  {
+                   "id": "plan1_edit",
+                   "ct": "Button",
+                   "name": "Edit the research plan",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_start",
+                   "ct": "Button",
+                   "name": "Start research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  },
+                  {
+                   "id": "plan1_retry",
+                   "ct": "Button",
+                   "name": "Retry without Deep Research",
+                   "patterns": [
+                    "invoke"
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": "uq2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "user-query-content-2",
+             "children": [
+              {
+               "id": "uq2_h",
+               "ct": "Text",
+               "name": "You said Start research",
+               "role": "heading",
+               "heading": 5
+              },
+              {
+               "id": "uq2_t",
+               "ct": "Text",
+               "name": "Start research"
+              }
+             ]
+            },
+            {
+             "id": "turn_r2",
+             "ct": "Group",
+             "name": "",
+             "automation_id": "model-response-message-content-r2",
+             "children": [
+              {
+               "id": "r2_h",
+               "ct": "Text",
+               "name": "Gemini said",
+               "role": "heading",
+               "heading": 6
+              },
+              {
+               "id": "r2_done",
+               "ct": "Text",
+               "name": "I've completed your research."
+              },
+              {
+               "id": "r2_tail",
+               "ct": "Text",
+               "name": " Feel free to ask me follow-up questions or request changes."
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "report_panel",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "rep_title",
+             "ct": "Text",
+             "name": "Major versions of the SQL standard",
+             "role": "heading",
+             "heading": 2
+            },
+            {
+             "id": "rep_toc",
+             "ct": "Button",
+             "name": "Table of contents",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rep_share",
+             "ct": "Button",
+             "name": "Share & export",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rep_make",
+             "ct": "Button",
+             "name": "Create",
+             "patterns": [
+              "invoke"
+             ]
+            },
+            {
+             "id": "rep_closeg",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "rep_close",
+               "ct": "Button",
+               "name": "Close panel",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            },
+            {
+             "id": "rep_body",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "rep_body2",
+               "ct": "Group",
+               "name": "",
+               "children": [
+                {
+                 "id": "rep_h1",
+                 "ct": "Text",
+                 "name": "Major versions of the SQL standard (SQL-86 to SQL:2011)",
+                 "role": "heading",
+                 "heading": 1
+                },
+                {
+                 "id": "rep_p1",
+                 "ct": "Text",
+                 "name": "The SQL standard was first published in 1986 as ANSI X3.135-1986."
+                },
+                {
+                 "id": "rep_p2",
+                 "ct": "Text",
+                 "name": "The SQL standard was first published in 1986 as ANSI X3.135-1986."
+                },
+                {
+                 "id": "rep_chip",
+                 "ct": "Button",
+                 "name": "Learn more",
+                 "patterns": [
+                  "invoke"
+                 ]
+                },
+                {
+                 "id": "rep_h2",
+                 "ct": "Text",
+                 "name": "Versions by year",
+                 "role": "heading",
+                 "heading": 2
+                },
+                {
+                 "id": "rep_l1",
+                 "ct": "Hyperlink",
+                 "name": "ISO/IEC 9075 catalogue",
+                 "value": "https://www.iso.org/standard/76583.html"
+                },
+                {
+                 "id": "rep_sources",
+                 "ct": "Button",
+                 "name": "Sources used in the report",
+                 "patterns": [
+                  "invoke"
+                 ]
+                },
+                {
+                 "id": "rep_unused",
+                 "ct": "Button",
+                 "name": "Sources found but not used",
+                 "patterns": [
+                  "invoke"
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "composer_outer",
+           "ct": "Group",
+           "name": "",
+           "children": [
+            {
+             "id": "composer",
+             "ct": "Group",
+             "name": "",
+             "children": [
+              {
+               "id": "prompt",
+               "ct": "Edit",
+               "name": "Enter a prompt for Gemini",
+               "value": "What do you want to research?"
+              },
+              {
+               "id": "b_tools",
+               "ct": "Button",
+               "name": "Upload and tools",
+               "patterns": [
+                "expand",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mode",
+               "ct": "Button",
+               "name": "Open mode picker, Neon mode in use",
+               "patterns": [
+                "expand",
+                "collapse",
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_mic",
+               "ct": "Button",
+               "name": "Use microphone",
+               "patterns": [
+                "invoke"
+               ]
+              },
+              {
+               "id": "b_dr_on",
+               "ct": "Button",
+               "name": "Deselect Deep Research",
+               "patterns": [
+                "invoke"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "topbar",
+     "ct": "Document",
+     "name": "",
+     "role": "RootWebArea",
+     "value": "app://bundle/src/top_bar/top_bar.html",
+     "children": [
+      {
+       "id": "tb_menu",
+       "ct": "Button",
+       "name": "Main menu",
+       "patterns": [
+        "invoke"
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "transitions": [
+  {
+   "from": "card",
+   "on": [
+    "act",
+    "plan1_start",
+    "invoke"
+   ],
+   "to": "r00",
+   "after_snapshots": 1
+  }
+ ],
+ "timeline": [
+  {
+   "from": "r00",
+   "to": "r01",
+   "after_s": 60
+  },
+  {
+   "from": "r01",
+   "to": "r02",
+   "after_s": 5
+  },
+  {
+   "from": "r02",
+   "to": "r03",
+   "after_s": 30
+  },
+  {
+   "from": "r03",
+   "to": "r04",
+   "after_s": 142
+  },
+  {
+   "from": "r04",
+   "to": "r05",
+   "after_s": 5
+  },
+  {
+   "from": "r05",
+   "to": "r06",
+   "after_s": 111
+  },
+  {
+   "from": "r06",
+   "to": "r07",
+   "after_s": 212
+  },
+  {
+   "from": "r07",
+   "to": "r08",
+   "after_s": 46
+  },
+  {
+   "from": "r08",
+   "to": "r09",
+   "after_s": 168
+  },
+  {
+   "from": "r09",
+   "to": "r10",
+   "after_s": 36
+  },
+  {
+   "from": "r10",
+   "to": "r11",
+   "after_s": 193
+  },
+  {
+   "from": "r11",
+   "to": "complete",
+   "after_s": 112
+  },
+  {
+   "from": "complete",
+   "to": "complete_chip",
+   "after_s": 5
+  }
+ ]
+}

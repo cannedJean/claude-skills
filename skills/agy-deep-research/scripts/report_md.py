@@ -39,16 +39,25 @@ Rendering (to_markdown)
     - Only a Hyperlink whose URL (Value, else aria href) is http(s) becomes [text](url); others are
       plain text. The "새 창에서 열기" / "opens in a new window" suffix is dropped from link text.
 """
+import json
 import re
+from pathlib import Path
 from typing import Iterable, List, Optional
 
 from uitree import Node
 
-REPORT_CONTROL_LABELS = (
-    "공유 및 내보내기", "Share & export", "Share and export",
-    "목차 메뉴", "Table of contents",
-    "보고서에서 사용된 소스", "Sources used in the report",
-)
+# the report controls are locators (locators.json: report_share_export, report_toc, report_sources_used, ko + en);
+# their literal names are the panel anchors. One source of truth: read from the bundled file next to this module.
+REPORT_CONTROL_KEYS = ("report_share_export", "report_toc", "report_sources_used")
+
+
+def _bundled_control_labels() -> tuple:
+    with open(Path(__file__).with_name("locators.json"), "r", encoding="utf-8-sig") as fh:
+        locs = json.load(fh)["locators"]
+    return tuple(n for k in REPORT_CONTROL_KEYS for n in locs[k]["names"] if not n.startswith("re:"))
+
+
+REPORT_CONTROL_LABELS = _bundled_control_labels()
 
 SKIP_CT = frozenset({
     "Button", "SplitButton", "Edit", "Menu", "MenuBar", "MenuItem", "CheckBox", "RadioButton", "ComboBox",

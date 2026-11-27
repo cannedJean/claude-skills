@@ -786,6 +786,14 @@ class LocatorReviewFixTests(unittest.TestCase):
             "app_menu_view": ["보기", "View"],
             "app_menu_reload": ["re:새로고침.*", "re:Reload.*"],
             "sign_in": ["로그인", "Sign in"],
+            "research_status": ["re:조사 시작 중.*", "re:웹사이트 [\\d,]+개 조사 중.*", "re:Starting research.*",
+                                "re:Researching [\\d,]+ websites.*"],
+            "research_thought_title": ["re:.+"],
+            "report_done_phrase": ["re:I[’']ve completed your research.*", "re:연구를 완료했습니다.*",
+                                   "re:조사를 완료했습니다.*"],
+            "report_share_export": ["공유 및 내보내기", "Share & export", "Share and export"],
+            "report_toc": ["목차 메뉴", "Table of contents"],
+            "report_sources_used": ["보고서에서 사용된 소스", "Sources used in the report"],
         }
         self.assertEqual(set(locs), set(want))
         for key, names in want.items():
