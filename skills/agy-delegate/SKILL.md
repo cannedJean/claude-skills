@@ -138,10 +138,10 @@ Commands below are relative to this skill's directory (`scripts/agy_task.py`).
 - Under `--deep-research` confinement profile:
   - **Read tools**: permitted inside `<workdir>` and `AGY_CONFINE_DR_DIR`. Reading outside both is denied (`rule: "path"`).
   - **Write tools**: permitted only inside `<workdir>`. Writing to `AGY_CONFINE_DR_DIR` is strictly denied (`rule: "path"`).
-    Caller control files inside `<workdir>` (`relay/request.json`, `prompt.md`, `goal.md`, `feedback_*.md`,
-    `relay/result.json`, `relay/started.json`) are read-only to file tools (`rule: "protected"`).
-  - **Shell tools**: `run_command` is permitted only for clean Python execution of `relay_step.py --job <workdir>`
-    or `patch_gemini_app.py`. Shell chaining and redirection (`&&`, `;`, `|`, `>`, `<`, newlines, `` ` ``, `$()`)
+    Caller control files inside `<workdir>` (`relay/request.json`, `prompt.md`, `goal.md`, `feedback_*.md`, `job.json`,
+    `relay/result.json`, `relay/started.json`, `relay/foreground.jsonl`) are read-only to file tools (`rule: "protected"`).
+  - **Shell tools**: `run_command` is permitted only for clean Python execution of `relay_step.py --job <workdir>`.
+    Shell chaining and redirection (`&&`, `;`, `|`, `>`, `<`, newlines, `` ` ``, `$()`)
     and all other commands/scripts are blocked (`rule: "shell"`).
   - **Browser & MCP tools**: unconditionally denied (`rule: "tool"`).
 

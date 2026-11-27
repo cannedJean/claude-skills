@@ -17,8 +17,8 @@ In deep-research mode (AGY_CONFINE_MODE="deep-research"):
   - READ_TOOLS are permitted inside <workdir> and AGY_CONFINE_DR_DIR.
   - Write tools are permitted only inside <workdir>, and caller control files (relay/request.json,
     prompt.md, goal.md, feedback_*.md, relay/result.json, relay/started.json) are denied with rule "protected".
-  - run_command is permitted only for clean Python execution of relay_step.py --job <workdir> or
-    patch_gemini_app.py without shell chaining / redirections; all other shell commands are denied with rule "shell".
+  - run_command is permitted only for clean Python execution of relay_step.py --job <workdir>
+    without shell chaining / redirections; all other shell commands are denied with rule "shell".
 
 Environment (set by agy_task.py): AGY_CONFINE_ROOT (the root; default: the parent of the cwd),
 AGY_CONFINE_LOG (JSON-lines decision log), AGY_CONFINE_INLINED (JSON list of root-relative files whose full text
@@ -214,6 +214,8 @@ def is_protected_file(rel: str, mode: str = "default") -> bool:
             "goal.md",
             "relay/result.json",
             "relay/started.json",
+            "relay/foreground.jsonl",
+            "job.json",
         ):
             return True
         if re.match(r"^feedback_[^/]+\.md$", rel_lower):
@@ -294,9 +296,9 @@ def validate_deep_research_command(cmd: str, root: str, dr_dir: str, cwd: str = 
         return "deny", "no Python script specified in command line", "shell"
 
     script_base = os.path.basename(script_token).lower()
-    if script_base not in ("relay_step.py", "patch_gemini_app.py"):
+    if script_base != "relay_step.py":
         return ("deny",
-                f"script {script_token!r} is not permitted in deep-research mode: only relay_step.py and patch_gemini_app.py are allowed",
+                f"script {script_token!r} is not permitted in deep-research mode: only relay_step.py is allowed",
                 "shell")
 
     cmd_cwd = cwd if cwd else root
@@ -335,12 +337,6 @@ def validate_deep_research_command(cmd: str, root: str, dr_dir: str, cwd: str = 
         job_path = canon(job_target if os.path.isabs(job_target) else os.path.join(cmd_cwd, job_target))
         if job_path != canon(root):
             return "deny", f"--job target {job_target!r} does not match workdir {root}", "shell"
-
-    elif script_base == "patch_gemini_app.py":
-        allowed_patch_args = {"--restore", "--show"}
-        for arg in script_args:
-            if arg not in allowed_patch_args:
-                return "deny", f"argument {arg!r} is not permitted for patch_gemini_app.py", "shell"
 
     return "ask", "", ""
 

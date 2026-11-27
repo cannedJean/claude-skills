@@ -157,11 +157,10 @@ Rules:
 - You must run ONLY the relay operator script using run_command:
     python "{dr_dir}/scripts/relay_step.py" --job "{workdir}"
   (or python relay_step.py --job "{workdir}" if relay_step.py is inside the work directory).
-  If the Gemini app CDP port is not ready, you may run:
-    python "{dr_dir}/scripts/patch_gemini_app.py"
   Do NOT run any other shell commands. Shell chaining and redirection metacharacters are strictly blocked.
 - Do NOT edit or overwrite caller control files:
-  relay/request.json, prompt.md, goal.md, feedback_*.md, relay/result.json, relay/started.json.
+  relay/request.json, prompt.md, goal.md, feedback_*.md, job.json, relay/result.json, relay/started.json,
+  relay/foreground.jsonl.
 - Do NOT craft custom prompts or alter research plans yourself.
 - When the relay step finishes, read relay/result.json (or relay/started.json in detached mode).
 - Report the structured outcome matching the required schema (status, step, code, url, plan_count, report_chars, sources_count, summary, notes).

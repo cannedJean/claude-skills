@@ -34,7 +34,7 @@ class Hook(unittest.TestCase):
         cls.dr_dir.mkdir(parents=True, exist_ok=True)
         (cls.dr_dir / "scripts").mkdir(parents=True, exist_ok=True)
         (cls.dr_dir / "scripts" / "relay_step.py").write_text("# relay step stub", encoding="utf-8")
-        (cls.dr_dir / "scripts" / "patch_gemini_app.py").write_text("# patch stub", encoding="utf-8")
+        (cls.dr_dir / "scripts" / "patch_gemini_app.py").write_text("# patch stub", encoding="utf-8")  # must stay denied
         (cls.dr_dir / "SKILL.md").write_text("# DR Skill", encoding="utf-8")
 
         # Setup control files inside cls.root
@@ -324,7 +324,7 @@ class Hook(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertEqual(self.decide("run_command", {"CommandLine": cmd}, mode="deep-research", dr_dir=self.dr_dir), "ask")
 
-    def test_deep_research_clean_patch_gemini_app_commands_allowed(self):
+    def test_deep_research_patch_script_denied(self):
         DR_PATCH = str(self.dr_dir / "scripts" / "patch_gemini_app.py")
         commands = [
             "python patch_gemini_app.py",
@@ -336,7 +336,26 @@ class Hook(unittest.TestCase):
         ]
         for cmd in commands:
             with self.subTest(cmd=cmd):
-                self.assertEqual(self.decide("run_command", {"CommandLine": cmd}, mode="deep-research", dr_dir=self.dr_dir), "ask")
+                dec, rule, _ = self.decide_audit("run_command", {"CommandLine": cmd}, dr_dir=self.dr_dir)
+                self.assertEqual((dec, rule), ("deny", "shell"), cmd)
+
+    def test_deep_research_job_json_write_denied(self):
+        for pf in ("job.json", "JOB.JSON"):
+            with self.subTest(pf=pf):
+                for target in (pf, str(self.root / pf)):
+                    dec, rule, _ = self.decide_audit("write_to_file", {"TargetFile": target, "CodeContent": "{}"})
+                    self.assertEqual((dec, rule), ("deny", "protected"), target)
+
+    def test_deep_research_foreground_log_write_denied(self):
+        for target in ("relay/foreground.jsonl", str(self.root / "relay" / "foreground.jsonl")):
+            with self.subTest(target=target):
+                dec, rule, _ = self.decide_audit("write_to_file", {"TargetFile": target, "CodeContent": "{}"})
+                self.assertEqual((dec, rule), ("deny", "protected"), target)
+
+    def test_frame_has_no_patch_instruction(self):
+        self.assertNotIn("patch_gemini_app", agy_task.DEEP_RESEARCH_FRAME)
+        self.assertNotIn("CDP", agy_task.DEEP_RESEARCH_FRAME)
+        self.assertIn("relay_step.py", agy_task.DEEP_RESEARCH_FRAME)
 
     def test_deep_research_shell_chaining_denied(self):
         R = str(self.root)
