@@ -310,19 +310,140 @@ class Hook(unittest.TestCase):
         R = str(self.root)
         DR = str(self.dr_dir / "scripts" / "relay_step.py")
         commands = [
-            f'python relay_step.py --job "{R}"',
-            f'python relay_step.py --job="{R}"',
-            f'python.exe relay_step.py --job "{R}"',
-            f'python3 relay_step.py --job "{R}"',
-            f'py relay_step.py --job "{R}"',
             f'python "{DR}" --job "{R}"',
-            f'python relay_step.py --job "{R}" --worker',
-            f'python -u relay_step.py --job "{R}"',
-            f'"{sys.executable}" relay_step.py --job "{R}"',
+            f'python "{DR}" --job="{R}"',
+            f'python.exe "{DR}" --job "{R}"',
+            f'python3 "{DR}" --job "{R}"',
+            f'py "{DR}" --job "{R}"',
+            f'python "{DR}" --job "{R}" --worker',
+            f'python -u "{DR}" --job "{R}"',
+            f'"{sys.executable}" "{DR}" --job "{R}"',
         ]
         for cmd in commands:
             with self.subTest(cmd=cmd):
                 self.assertEqual(self.decide("run_command", {"CommandLine": cmd}, mode="deep-research", dr_dir=self.dr_dir), "ask")
+
+    def test_deep_research_dr_dir_relay_step_path_variants_allowed(self):
+        R = str(self.root)
+        DR = str(self.dr_dir / "scripts" / "relay_step.py")
+        variants = [DR.replace(BS, "/"), DR,
+                    str(self.dr_dir / "scripts" / "." / "relay_step.py"),
+                    str(self.dr_dir / "scripts" / ".." / "scripts" / "relay_step.py")]
+        if WIN:
+            variants += [DR.upper(), DR.lower(), DR.replace(BS, "/").upper()]
+        for v in variants:
+            with self.subTest(v=v):
+                dec, rule, reason = self.decide_audit("run_command", {"CommandLine": f'python "{v}" --job "{R}"'})
+                self.assertEqual(dec, "ask", (v, rule, reason))
+
+    def test_deep_research_workdir_py_writes_denied(self):
+        # writing/creating any .py file in the work dir is refused (B1)
+        for target in ("relay_step.py", "RELAY_STEP.PY", "sub/relay_step.py", "evil.py", "sub/x.Py", "y.py.",
+                       "z.py ", str(self.root / "relay_step.py"), str(self.root / "sub" / "helper.py")):
+            with self.subTest(write=target):
+                dec, rule, _ = self.decide_audit("write_to_file", {"TargetFile": target, "CodeContent": "print(1)"})
+                self.assertEqual((dec, rule), ("deny", "protected"), target)
+                dec, rule, _ = self.decide_audit("replace_file_content", {"TargetFile": target, "TargetContent": "a",
+                                                                          "ReplacementContent": "b"})
+                self.assertEqual((dec, rule), ("deny", "protected"), target)
+        # other files in the work dir stay writable, and reading .py files stays allowed
+        dec, _, _ = self.decide_audit("write_to_file", {"TargetFile": "notes.txt", "CodeContent": "x"})
+        self.assertEqual(dec, "ask")
+        dec, _, _ = self.decide_audit("view_file", {"AbsolutePath": str(self.dr_dir / "scripts" / "relay_step.py")})
+        self.assertEqual(dec, "ask")
+
+    def test_deep_research_workdir_relay_step_run_denied(self):
+        R = str(self.root)
+        # a relay_step.py that is not the canonical <dr_dir>/scripts/relay_step.py is never run
+        (self.root / "relay_step.py").write_text("# planted copy", encoding="utf-8")
+        self.addCleanup((self.root / "relay_step.py").unlink)
+        other = self.base / "other_dr" / "scripts"
+        other.mkdir(parents=True, exist_ok=True)
+        (other / "relay_step.py").write_text("# other copy", encoding="utf-8")
+        for cmd in (f'python relay_step.py --job "{R}"',
+                    f'python relay_step.py --job="{R}"',
+                    f'python -u relay_step.py --job "{R}"',
+                    f'python "{R}/relay_step.py" --job "{R}"',
+                    f'python "{R}{BS}relay_step.py" --job "{R}"',
+                    f'python sub/relay_step.py --job "{R}"',
+                    f'python ./relay_step.py --job "{R}"',
+                    f'python "{other / "relay_step.py"}" --job "{R}"',
+                    f'python "{self.dr_dir / "relay_step.py"}" --job "{R}"'):
+            with self.subTest(run=cmd):
+                dec, rule, _ = self.decide_audit("run_command", {"CommandLine": cmd})
+                self.assertEqual((dec, rule), ("deny", "shell"), cmd)
+                dec, rule, _ = self.decide_audit("run_command", {"CommandLine": cmd, "Cwd": R})
+                self.assertEqual((dec, rule), ("deny", "shell"), cmd)
+        # without a dr_dir nothing is runnable
+        dec, rule, _ = self.decide_audit("run_command", {"CommandLine": f'python relay_step.py --job "{R}"'}, dr_dir="")
+        self.assertEqual((dec, rule), ("deny", "shell"))
+
+    def test_deep_research_linked_relay_step_denied(self):
+        R = str(self.root)
+        evil = self.root / "evil_target.txt"
+        evil.write_text("print('planted')", encoding="utf-8")
+        self.addCleanup(evil.unlink)
+        made = 0
+        # a dr_dir whose relay_step.py is a hard link to a work-dir file
+        hl_dr = self.base / "hl_dr"
+        (hl_dr / "scripts").mkdir(parents=True, exist_ok=True)
+        hl = hl_dr / "scripts" / "relay_step.py"
+        try:
+            os.link(evil, hl)
+        except OSError:
+            pass
+        else:
+            self.addCleanup(hl.unlink)
+            made += 1
+            dec, rule, _ = self.decide_audit("run_command", {"CommandLine": f'python "{hl}" --job "{R}"'}, dr_dir=hl_dr)
+            self.assertEqual((dec, rule), ("deny", "hard_link"))
+        # a dr_dir whose relay_step.py is a symbolic link into the work dir
+        sl_dr = self.base / "sl_dr"
+        (sl_dr / "scripts").mkdir(parents=True, exist_ok=True)
+        sl = sl_dr / "scripts" / "relay_step.py"
+        try:
+            os.symlink(evil, sl)
+        except OSError:
+            pass
+        else:
+            self.addCleanup(sl.unlink)
+            made += 1
+            dec, rule, _ = self.decide_audit("run_command", {"CommandLine": f'python "{sl}" --job "{R}"'}, dr_dir=sl_dr)
+            self.assertEqual((dec, rule), ("deny", "shell"))
+        # a dr_dir whose scripts/ folder is a junction (Windows) / symlink into the work dir
+        jn_dr = self.base / "jn_dr"
+        jn_dr.mkdir(exist_ok=True)
+        (self.root / "relay_step.py").write_text("# planted copy", encoding="utf-8")
+        self.addCleanup((self.root / "relay_step.py").unlink)
+        if WIN:
+            cp = subprocess.run(["cmd", "/c", "mklink", "/J", str(jn_dr / "scripts"), str(self.root)], capture_output=True)
+            linked = cp.returncode == 0
+        else:
+            try:
+                os.symlink(self.root, jn_dr / "scripts")
+                linked = True
+            except OSError:
+                linked = False
+        if linked:
+            self.addCleanup(lambda: os.rmdir(jn_dr / "scripts") if WIN else os.unlink(jn_dr / "scripts"))
+            made += 1
+            dec, rule, _ = self.decide_audit("run_command",
+                                             {"CommandLine": f'python "{jn_dr / "scripts" / "relay_step.py"}" --job "{R}"'},
+                                             dr_dir=jn_dr)
+            self.assertEqual((dec, rule), ("deny", "shell"))
+        # a symbolic link in the work dir named relay_step.py pointing at a work-dir file
+        wl =self.root / "sub" / "relay_step.py"
+        try:
+            os.symlink(evil, wl)
+        except OSError:
+            pass
+        else:
+            self.addCleanup(wl.unlink)
+            made += 1
+            dec, rule, _ = self.decide_audit("run_command", {"CommandLine": f'python sub/relay_step.py --job "{R}"'})
+            self.assertEqual((dec, rule), ("deny", "shell"))
+        if not made:
+            self.skipTest("no hard or symbolic links here")
 
     def test_deep_research_patch_script_denied(self):
         DR_PATCH = str(self.dr_dir / "scripts" / "patch_gemini_app.py")
@@ -356,6 +477,11 @@ class Hook(unittest.TestCase):
         self.assertNotIn("patch_gemini_app", agy_task.DEEP_RESEARCH_FRAME)
         self.assertNotIn("CDP", agy_task.DEEP_RESEARCH_FRAME)
         self.assertIn("relay_step.py", agy_task.DEEP_RESEARCH_FRAME)
+
+    def test_frame_names_only_the_dr_dir_relay_step(self):
+        self.assertNotIn("inside the work directory", agy_task.DEEP_RESEARCH_FRAME)
+        self.assertNotIn("python relay_step.py", agy_task.DEEP_RESEARCH_FRAME)
+        self.assertIn("{dr_dir}/scripts/relay_step.py", agy_task.DEEP_RESEARCH_FRAME)
 
     def test_deep_research_shell_chaining_denied(self):
         R = str(self.root)
@@ -439,10 +565,11 @@ class Hook(unittest.TestCase):
 
     def test_deep_research_permitted_python_flags_allowed(self):
         R = str(self.root)
+        DR = str(self.dr_dir / "scripts" / "relay_step.py")
         allowed_cmds = [
-            f'python -u relay_step.py --job "{R}"',
-            f'python -B relay_step.py --job "{R}"',
-            f'python -u -B relay_step.py --job "{R}"',
+            f'python -u "{DR}" --job "{R}"',
+            f'python -B "{DR}" --job "{R}"',
+            f'python -u -B "{DR}" --job "{R}"',
         ]
         for cmd in allowed_cmds:
             with self.subTest(cmd=cmd):

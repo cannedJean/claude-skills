@@ -156,7 +156,6 @@ Rules:
 - Work ONLY inside this directory: {workdir}
 - You must run ONLY the relay operator script using run_command:
     python "{dr_dir}/scripts/relay_step.py" --job "{workdir}"
-  (or python relay_step.py --job "{workdir}" if relay_step.py is inside the work directory).
   Do NOT run any other shell commands. Shell chaining and redirection metacharacters are strictly blocked.
 - Do NOT edit or overwrite caller control files:
   relay/request.json, prompt.md, goal.md, feedback_*.md, job.json, relay/result.json, relay/started.json,

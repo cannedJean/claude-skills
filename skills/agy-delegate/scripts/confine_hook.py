@@ -16,9 +16,11 @@ the hook answers with {"decision": ...} on stdout:
 In deep-research mode (AGY_CONFINE_MODE="deep-research"):
   - READ_TOOLS are permitted inside <workdir> and AGY_CONFINE_DR_DIR.
   - Write tools are permitted only inside <workdir>, and caller control files (relay/request.json,
-    prompt.md, goal.md, feedback_*.md, relay/result.json, relay/started.json) are denied with rule "protected".
-  - run_command is permitted only for clean Python execution of relay_step.py --job <workdir>
-    without shell chaining / redirections; all other shell commands are denied with rule "shell".
+    prompt.md, goal.md, feedback_*.md, job.json, relay/result.json, relay/started.json, relay/foreground.jsonl)
+    and every *.py file are denied with rule "protected".
+  - run_command is permitted only for clean Python execution of the canonical
+    <AGY_CONFINE_DR_DIR>/scripts/relay_step.py --job <workdir> without shell chaining / redirections; any other
+    script (a relay_step.py in the work dir included) and all other shell commands are denied with rule "shell".
 
 Environment (set by agy_task.py): AGY_CONFINE_ROOT (the root; default: the parent of the cwd),
 AGY_CONFINE_LOG (JSON-lines decision log), AGY_CONFINE_INLINED (JSON list of root-relative files whose full text
@@ -220,6 +222,9 @@ def is_protected_file(rel: str, mode: str = "default") -> bool:
             return True
         if re.match(r"^feedback_[^/]+\.md$", rel_lower):
             return True
+        # no Python file may be created or changed in the work dir: nothing agy writes there is ever run
+        if parts[-1].lower().rstrip(". ").endswith(".py"):
+            return True
     return False
 
 
@@ -301,11 +306,18 @@ def validate_deep_research_command(cmd: str, root: str, dr_dir: str, cwd: str = 
                 f"script {script_token!r} is not permitted in deep-research mode: only relay_step.py is allowed",
                 "shell")
 
+    # Only the canonical <AGY_CONFINE_DR_DIR>/scripts/relay_step.py may run: a relay_step.py anywhere else (the work
+    # dir included, where agy could have written its own) is refused.
     cmd_cwd = cwd if cwd else root
-    if os.path.dirname(script_token):
-        script_path = canon(script_token if os.path.isabs(script_token) else os.path.join(cmd_cwd, script_token))
-        if not (inside(script_path, root) or (bool(dr_dir) and inside(script_path, dr_dir))):
-            return "deny", f"script path {script_token!r} must be located inside workdir or dr_dir", "shell"
+    if not dr_dir:
+        return "deny", "no deep-research skill dir (AGY_CONFINE_DR_DIR) is set: relay_step.py cannot run", "shell"
+    expected = canon(os.path.join(dr_dir, "scripts", "relay_step.py"))
+    script_path = canon(script_token if os.path.isabs(script_token) else os.path.join(cmd_cwd, script_token))
+    if script_path != expected or inside(expected, canon(root)):
+        return ("deny", f"script {script_token!r} is not {expected}: only the deep-research skill's relay_step.py "
+                        f"may run", "shell")
+    if hard_linked(expected):
+        return "deny", f"{expected} is a hard link (it shares its data with another path); not allowed", "hard_link"
 
     script_args = tokens[script_idx + 1:]
 
