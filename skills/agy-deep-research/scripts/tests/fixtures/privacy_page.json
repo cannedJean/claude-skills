@@ -1,0 +1,22 @@
+{"id": "doc", "ct": "Document", "role": "RootWebArea", "value": "https://gemini.example.invalid/app", "children": [
+  {"id": "g0", "ct": "Group", "children": [
+    {"id": "main", "ct": "Group", "role": "main", "children": [
+      {"id": "sidebar", "ct": "Group", "role": "region", "name": "sidebar", "children": [
+        {"id": "nav1", "ct": "Group", "role": "navigation", "children": [
+          {"id": "newchat", "ct": "Hyperlink", "name": "새 채팅"}
+        ]},
+        {"id": "acct", "ct": "Hyperlink", "name": "Google 계정: 테스트(test@example.invalid)"},
+        {"id": "nav2", "ct": "Group", "role": "navigation", "children": [
+          {"id": "chat1", "ct": "Hyperlink", "name": "비밀 대화 제목 1"},
+          {"id": "chat2", "ct": "Hyperlink", "name": "비밀 대화 제목 2"}
+        ]}
+      ]},
+      {"id": "conv", "ct": "Group", "children": [
+        {"id": "turn1", "ct": "Group", "automation_id": "model-response-message-content-x", "children": [
+          {"id": "turn1t", "ct": "Text", "name": "답변 본문"}
+        ]}
+      ]},
+      {"id": "composer", "ct": "Edit", "name": "프롬프트 입력", "value": ""}
+    ]}
+  ]}
+]}
