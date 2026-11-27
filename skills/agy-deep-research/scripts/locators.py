@@ -4,7 +4,9 @@ Locators live in locators.json (bundled) and may be overridden field by field
 from %LOCALAPPDATA%\\agy-deep-research\\locators.local.json. A miss raises
 LocatorMiss whose payload lists similar candidate names (only from the
 privacy-allowed region or GENERIC_LABELS) and an exact override snippet.
-The override may contain only `version` and `locators`.
+The override may contain only `version` and `locators`; it may add new locator
+keys and a missing override file is ignored (both deliberate).
+The bundled file must define `version` and `locators`.
 
 Notes for callers:
 - An `optional` locator's absence may be used as a state only when a positive
@@ -20,12 +22,13 @@ import copy
 import difflib
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 from urllib.parse import urlparse
 
-from uitree import Node, PATTERNS
+from uitree import Node, PATTERNS, UiTree
 import privacy
 
 TOP_KEYS = ("version", "scopes", "locators", "surfaces_allowed", "status_phrases",
@@ -41,6 +44,11 @@ EXPECTS = ("unique", "at_least_one", "optional")
 HREF_HOST = "gemini.google.com"
 MAX_CANDIDATES = 5
 MIN_SIMILARITY = 0.4
+FALLBACK_CANDIDATES = 3  # listed (never added to the snippet) when nothing is similar enough
+# plan_card locators that are resolved inside the newest turn holding a plan_start
+PLAN_ANCHORED = ("plan_start", "plan_edit", "plan_cancel_countdown")
+# scopes whose roots come from the bound conversation document (ctx.doc)
+DOC_SCOPES = ("document", "main", "composer", "plan_card")
 REQUIRED = ("ct", "names", "scope", "expect")
 
 
@@ -56,15 +64,19 @@ class LocatorMiss(Exception):
 
 @dataclass
 class LocatorContext:
-    tree: object
+    tree: UiTree
     doc: Node
     locs: dict
-    allowed: set
+    allowed: Set[str]
     anchor_cache: dict = field(default_factory=dict)
 
 
 def _norm(s: str) -> str:
-    return " ".join((s or "").split())
+    return " ".join(unicodedata.normalize("NFC", s or "").split())
+
+
+def _role(n: Node) -> str:
+    return (n.role or "").strip().lower()
 
 
 def _compile(pat: str, where: str):
@@ -136,6 +148,10 @@ def _validate(cfg: dict, where: str) -> None:
                 raise LocatorConfigError("%s: field %r must be a list of strings" % (w, f))
         if "names" in ent and not ent["names"]:
             raise LocatorConfigError("%s: field 'names' must not be empty" % w)
+        if any(not _norm(p) for p in ent.get("names", [])):
+            raise LocatorConfigError("%s: field 'names' must not contain blank names" % w)
+        if "ct" in ent and not ent["ct"].strip():
+            raise LocatorConfigError("%s: field 'ct' must not be blank" % w)
         if "expect" in ent and ent["expect"] not in EXPECTS:
             raise LocatorConfigError("%s: field 'expect' must be one of %s" % (w, ", ".join(EXPECTS)))
         if "scope" in ent and ent["scope"] not in SCOPE_KINDS:
@@ -152,7 +168,7 @@ def _validate(cfg: dict, where: str) -> None:
 
 def _read(path: Path, where: str) -> dict:
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, "r", encoding="utf-8-sig") as fh:
             cfg = json.load(fh)
     except (OSError, ValueError) as exc:
         raise LocatorConfigError("%s: cannot read %s (%s)" % (where, path, exc))
@@ -167,6 +183,12 @@ def _require(cfg: dict) -> None:
         anchor = sval.get("anchor")
         if anchor is not None and anchor not in cfg.get("locators", {}):
             raise LocatorConfigError("scope %r field 'anchor': unknown locator %r" % (sname, anchor))
+        if anchor is not None:
+            aent = cfg["locators"][anchor]
+            if aent.get("scope") == sname or aent.get("expect") != "unique":
+                raise LocatorConfigError(
+                    "scope %r field 'anchor': locator %r must be 'unique' and not scoped to %r"
+                    % (sname, anchor, sname))
     for key, ent in cfg.get("locators", {}).items():
         for f in REQUIRED:
             if f not in ent:
@@ -175,6 +197,9 @@ def _require(cfg: dict) -> None:
 
 def load_locators(bundled: Path, override: Optional[Path] = None) -> dict:
     cfg = _read(Path(bundled), "bundled")
+    for req in ("version", "locators"):
+        if req not in cfg:
+            raise LocatorConfigError("bundled: missing required top-level field %r" % req)
     _require(cfg)
     if override is not None and Path(override).exists():
         ov = _read(Path(override), "override")
@@ -186,8 +211,6 @@ def load_locators(bundled: Path, override: Optional[Path] = None) -> dict:
             if k == "locators":
                 for key, ent in v.items():
                     cfg["locators"].setdefault(key, {}).update(copy.deepcopy(ent))
-            elif k == "scopes":
-                cfg["scopes"].update(copy.deepcopy(v))
             else:
                 cfg[k] = copy.deepcopy(v)
         _require(cfg)
@@ -196,28 +219,47 @@ def load_locators(bundled: Path, override: Optional[Path] = None) -> dict:
 
 
 # -- scope resolution -----------------------------------------------------
-def _scope_roots(scope: str, ctx: LocatorContext) -> List[Node]:
+def _plan_turns(doc: Node, prefix: str) -> List[Node]:
+    """Outermost turn groups (a nested prefixed descendant belongs to its turn)."""
+    return [n for n, anc in doc.walk()
+            if (n.automation_id or "").startswith(prefix)
+            and not any((a.automation_id or "").startswith(prefix) for a in anc)]
+
+
+def _scope_roots(scope: str, ctx: LocatorContext, key: Optional[str] = None) -> List[Node]:
     conf = ctx.locs.get("scopes", {}).get(scope, {})
     doc = ctx.doc
     if scope == "document":
         return [doc]
     if scope == "main":
-        return doc.find_all(lambda n, a: (n.role or "").lower() == "main")[:1]
+        return doc.find_all(lambda n, a: _role(n) == "main")[:1]
     if scope in ("popup", "desktop"):
         return [ctx.tree.desktop_root()]
     if scope == "top_bar":
         prefix = conf.get("url_prefix", "app://bundle/src/top_bar/")
-        return [ctx.tree.snapshot(d.id) for d in ctx.tree.documents()
-                if (d.value or "").startswith(prefix)][:1]
+        for d in ctx.tree.documents():
+            if (d.value or "").startswith(prefix):
+                return [ctx.tree.snapshot(d.id)]
+        return []
     if scope == "plan_card":
         prefix = conf.get("ancestor_automation_id_prefix", "model-response-message-content")
-        turns = doc.find_all(lambda n, a: n.automation_id.startswith(prefix))
-        return turns[-1:]  # newest conversation turn
+        turns = _plan_turns(doc, prefix)
+        # the plan card is the newest turn that holds a plan_start button
+        akey = "plan_start" if key in PLAN_ANCHORED else key
+        aent = ctx.locs["locators"].get(akey) if akey else None
+        if aent is not None:
+            for turn in reversed(turns):
+                if any(_matches(n, aent) for n, _ in turn.walk()):
+                    return [turn]
+        return turns[-1:]
     if scope == "composer":
         akey = conf.get("anchor", "prompt_input")
         anchor = ctx.anchor_cache.get(akey)
         if anchor is None:
-            anchor = resolve(akey, ctx)[0]
+            found = resolve(akey, ctx)
+            if not found:
+                return []
+            anchor = found[0]
             ctx.anchor_cache[akey] = anchor
         need = conf.get("min_buttons", 3)
         for n, anc in doc.walk():
@@ -232,13 +274,19 @@ def _scope_roots(scope: str, ctx: LocatorContext) -> List[Node]:
 
 def _host_ok(node: Node, host: str) -> bool:
     href = (node.aria or {}).get("href") or node.value or ""
-    return urlparse(href).hostname == host
+    if not isinstance(href, str):
+        return False
+    try:
+        parts = urlparse(href)
+        return parts.scheme == "https" and parts.hostname == host
+    except ValueError:
+        return False
 
 
 def _base_match(n: Node, ent: dict) -> bool:
     if n.ct != ent["ct"]:
         return False
-    if ent.get("role") and (n.role or "").lower() != ent["role"].lower():
+    if ent.get("role") and _role(n) != ent["role"].strip().lower():
         return False
     return True
 
@@ -262,6 +310,10 @@ def _sim(name: str, pats: list) -> float:
 
 
 def _candidates(ent: dict, roots: List[Node], ctx: LocatorContext) -> list:
+    """Eligible similar names. Allowed ids belong to the bound conversation
+    document only, so nodes from the popup/desktop/top_bar documents are
+    eligible solely through GENERIC_LABELS (ids may collide across trees)."""
+    by_allowed = ent["scope"] in DOC_SCOPES
     seen, out = set(), []
     for root in roots:
         for n, _ in root.walk():
@@ -270,27 +322,28 @@ def _candidates(ent: dict, roots: List[Node], ctx: LocatorContext) -> list:
             name = _norm(n.name)
             if not name or name in seen:
                 continue
-            if not (n.id in ctx.allowed or name in privacy.GENERIC_LABELS):
+            if not ((by_allowed and n.id in ctx.allowed) or name in privacy.GENERIC_LABELS):
                 continue
             sim = round(_sim(name, ent["names"]), 2)
-            if sim < MIN_SIMILARITY:
-                continue
             seen.add(name)
             out.append({"name": name, "ct": n.ct, "role": n.role, "similarity": sim})
     out.sort(key=lambda c: -c["similarity"])
-    return out[:MAX_CANDIDATES]
+    similar = [c for c in out if c["similarity"] >= MIN_SIMILARITY]
+    if similar:
+        return similar[:MAX_CANDIDATES]
+    return out[:FALLBACK_CANDIDATES]
 
 
 def resolve(key: str, ctx: LocatorContext) -> List[Node]:
     ent = ctx.locs["locators"].get(key)
     if ent is None:
         raise LocatorConfigError("unknown locator %r" % key)
-    roots = _scope_roots(ent["scope"], ctx)
+    roots = _scope_roots(ent["scope"], ctx, key)
     found, seen = [], set()
     for root in roots:
         for n, _ in root.walk():
-            if n.id not in seen and _matches(n, ent):
-                seen.add(n.id)
+            if id(n) not in seen and _matches(n, ent):
+                seen.add(id(n))
                 found.append(n)
     expect = ent["expect"]
     ok = (expect == "optional" or (expect == "unique" and len(found) == 1)
@@ -299,8 +352,10 @@ def resolve(key: str, ctx: LocatorContext) -> List[Node]:
         return found
     cands = _candidates(ent, roots, ctx)
     names = list(ent["names"])
-    if not found and cands and cands[0]["name"] not in names:
-        names.append(cands[0]["name"])
+    if (not found and cands and cands[0]["similarity"] >= MIN_SIMILARITY
+            and cands[0]["name"] not in names):
+        top = cands[0]["name"]
+        names.append("re:" + re.escape(top) if top.startswith("re:") else top)
     payload = {
         "code": "UI_LOCATOR_MISS", "locator": key, "scope": ent["scope"],
         "expect": expect, "found": len(found), "candidates": cands,
