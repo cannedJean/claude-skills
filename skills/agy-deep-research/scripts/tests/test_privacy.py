@@ -1,18 +1,18 @@
 import json
 import os
 import sys
+import unicodedata
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 
-from uitree import Node  # noqa: E402
+from uitree import FakeTree, Node  # noqa: E402
 import privacy  # noqa: E402
 
 
 def _page():
-    with open(os.path.join(HERE, "fixtures", "privacy_page.json"), encoding="utf-8") as fh:
-        return Node.from_dict(json.load(fh))
+    return FakeTree.from_file(os.path.join(HERE, "fixtures", "privacy_page.json")).documents()[0]
 
 
 class ScrubTests(unittest.TestCase):
@@ -172,8 +172,7 @@ class AllowListTests(unittest.TestCase):
         doc = _page()
         doc.children.append(Node(id="r2", ct="Group", role="region", children=[
             Node(id="n3", ct="Group", role="navigation")]))
-        ok, _reason = privacy.region_check(doc)
-        self.assertFalse(ok)
+        self.assertEqual(privacy.region_check(doc), (False, "nav_region_outside_main"))
         self.assertEqual(privacy.allowed_ids(doc), set())
 
     def test_outside_summary_counts_only(self):
@@ -189,6 +188,146 @@ class AllowListTests(unittest.TestCase):
     def test_generic_labels(self):
         self.assertIn("새 채팅", privacy.GENERIC_LABELS)
         self.assertIsInstance(privacy.GENERIC_LABELS, frozenset)
+
+
+class PrivacyReviewFixTests(unittest.TestCase):
+    # B2
+    def test_scrub_unicode_normalisation(self):
+        nfd = unicodedata.normalize("NFD", "Google 계정: 홍길동")
+        self.assertNotEqual(nfd, "Google 계정: 홍길동")
+        for label, s in (("nfd hangul", nfd),
+                         ("fullwidth at", "test＠example.invalid"),
+                         ("fullwidth Account", "Ａｃｃｏｕｎｔ")):
+            with self.subTest(label):
+                self.assertTrue(privacy.scrub(s).startswith("<redacted:account"), label)
+        pad = "본문 " * 80
+        out = privacy.scrub(pad + " user＠host.example.invalid 끝")
+        self.assertNotIn("host.example", out)
+        self.assertIn("<redacted:email>", out)
+        self.assertIn("끝", out)
+
+    def test_scrub_plain_short_text_unchanged(self):
+        self.assertEqual(privacy.scrub("답변 본문 ｱ"), "답변 본문 ｱ")
+
+    # B3
+    def test_role_whitespace_does_not_bypass_excluded_landmark(self):
+        doc = _page()
+        main = [n for n, _ in doc.walk() if n.role == "main"][0]
+        main.children.append(Node(id="ws_banner", ct="Group", role=" banner ", children=[
+            Node(id="ws_secret", ct="Text", name="secret")]))
+        ok, reason = privacy.region_check(doc)
+        self.assertTrue(ok, reason)
+        allowed = privacy.allowed_ids(doc)
+        self.assertNotIn("ws_banner", allowed)
+        self.assertNotIn("ws_secret", allowed)
+        self.assertIn("composer", allowed)
+
+    def test_role_whitespace_main_and_navigation_still_recognised(self):
+        doc = _page()
+        for n, _ in doc.walk():
+            if n.role in ("main", "navigation", "region"):
+                n.role = "  %s\t" % n.role.upper()
+        ok, reason = privacy.region_check(doc)
+        self.assertTrue(ok, reason)
+        allowed = privacy.allowed_ids(doc)
+        self.assertNotIn("chat1", allowed)
+        self.assertIn("composer", allowed)
+
+    # B17 / M2
+    def test_scrub_dict_key_collisions_keep_every_value(self):
+        out = privacy.scrub({"a@b.com": 1, "c@d.com": 2, "e@f.com": 3})
+        self.assertEqual(len(out), 3)
+        self.assertEqual(sorted(out.values()), [1, 2, 3])
+        self.assertNotIn("@", json.dumps(out))
+
+    # T1
+    def test_allowed_excludes_every_chrome_landmark_under_main_and_outside_main(self):
+        doc = _page()
+        main = [n for n, _ in doc.walk() if n.role == "main"][0]
+        for role in ("banner", "contentinfo", "complementary", "search", "navigation"):
+            main.children.append(Node(id="x_" + role, ct="Group", role=role, children=[
+                Node(id="x_%s_c" % role, ct="Group", children=[
+                    Node(id="x_%s_t" % role, ct="Text", name="t")])]))
+        doc.children.append(Node(id="outside", ct="Group", children=[
+            Node(id="outside_t", ct="Text", name="o")]))
+        ok, reason = privacy.region_check(doc)
+        self.assertTrue(ok, reason)
+        allowed = privacy.allowed_ids(doc)
+        for role in ("banner", "contentinfo", "complementary", "search", "navigation"):
+            for suffix in ("", "_c", "_t"):
+                self.assertNotIn("x_%s%s" % (role, suffix), allowed, role)
+        for bad in ("doc", "g0", "main", "outside", "outside_t"):
+            self.assertNotIn(bad, allowed)
+        self.assertEqual(allowed, {"conv", "turn1", "turn1t", "composer"})
+
+    # T12
+    def test_non_nav_region_under_main_is_allowed_and_not_counted(self):
+        doc = _page()
+        main = [n for n, _ in doc.walk() if n.role == "main"][0]
+        main.children.append(Node(id="plain_region", ct="Group", role="region", children=[
+            Node(id="plain_t", ct="Text", name="x")]))
+        self.assertEqual(privacy.region_check(doc), (True, "ok"))
+        allowed = privacy.allowed_ids(doc)
+        self.assertIn("plain_region", allowed)
+        self.assertIn("plain_t", allowed)
+        self.assertNotIn("sidebar", allowed)
+
+    def test_region_check_reasons_are_exact(self):
+        doc = _page()
+        doc.children.append(Node(id="r2", ct="Group", role="region", children=[
+            Node(id="n3", ct="Group", role="navigation")]))
+        self.assertEqual(privacy.region_check(doc), (False, "nav_region_outside_main"))
+        self.assertEqual(privacy.region_check(_page()), (True, "ok"))
+
+    # T3
+    def test_long_string_email_redaction_is_exact(self):
+        pad = "본문 " * 80
+        out = privacy.scrub(pad + "연락: a.b+c@host.example.invalid 끝")
+        self.assertEqual(out, pad + "연락: <redacted:email> 끝")
+        for leak in ("a.b", "host", "example", "invalid"):
+            self.assertNotIn(leak, out)
+        s201 = "u@" + "x" * 199
+        self.assertEqual(privacy.scrub(s201), "<redacted:email>")
+
+    # T4
+    def test_outside_summary_exact(self):
+        doc = _page()
+        summary = privacy.outside_summary(doc, privacy.allowed_ids(doc))
+        self.assertEqual(summary, {
+            "Document/RootWebArea": 1, "Group/-": 1, "Group/main": 1, "Group/region": 1,
+            "Group/navigation": 2, "Hyperlink/-": 4})
+        self.assertNotIn("Text/-", summary)
+        self.assertNotIn("Edit/-", summary)
+
+    # T10
+    def test_sensitive_tokens_each_redacted_case_insensitively(self):
+        for tok in ("@", "계정", "Account", "프로필", "Profile",
+                    "account", "ACCOUNT", "profile", "PROFILE"):
+            with self.subTest(tok):
+                s = "x %s y" % tok
+                self.assertEqual(privacy.scrub(s), "<redacted:account len=%d>" % len(s))
+        self.assertEqual(privacy.scrub("plain text"), "plain text")
+
+    def test_scrub_container_types_and_content(self):
+        t = privacy.scrub(("a@b.invalid", "fine", 3))
+        self.assertIsInstance(t, tuple)
+        self.assertEqual(t, ("<redacted:account len=11>", "fine", 3))
+        self.assertIsInstance(privacy.scrub(["x"]), list)
+        s = privacy.scrub({"a@b.invalid", "fine"})
+        self.assertEqual(s, {"<redacted:account len=11>", "fine"})
+        fs = privacy.scrub(frozenset({"a@b.invalid", "fine"}))
+        self.assertEqual(fs, frozenset({"<redacted:account len=11>", "fine"}))
+        self.assertEqual(privacy.scrub(b"fine bytes"), "fine bytes")
+        self.assertEqual(privacy.scrub(b"x@y"), "<redacted:account len=3>")
+        self.assertEqual(privacy.scrub(bytearray(b"Profile")), "<redacted:account len=7>")
+        self.assertIsNone(privacy.scrub(None))
+        self.assertEqual(privacy.scrub(7), 7)
+
+    # T11
+    def test_generic_labels_exact(self):
+        self.assertEqual(privacy.GENERIC_LABELS, frozenset({
+            "새 채팅", "New chat", "사이드바 열기", "사이드바 닫기", "Open sidebar",
+            "Close sidebar", "더보기", "Show more", "메인 메뉴", "Main menu"}))
 
 
 if __name__ == "__main__":

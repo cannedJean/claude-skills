@@ -12,9 +12,23 @@ Two layers, both required:
    it looks account-like, because the allow-list cannot protect a sensitive
    node that sits directly under `main` outside any region.
 
-Roles are compared case-insensitively. Stdlib only; imports on any OS.
+Roles are compared case-insensitively and whitespace-stripped.
+
+Deliberate fail-closed hardening (broader than the minimal spec):
+- scrub tests/redacts on the NFKC-normalised text, so decomposed Hangul and
+  fullwidth look-alikes (e.g. a fullwidth at-sign) cannot evade it.
+- The long-string patterns are intentionally broad: any `x@y` (`*` repeats, so
+  `react@18` also matches) is replaced, and `Google<ws>Account:` is matched
+  case-insensitively with optional whitespace. Over-redacting a long report is
+  accepted; leaking an account is not.
+- scrub also redacts dict keys, and converts bytes/bytearray to str and
+  recurses into sets/frozensets; colliding redacted keys are disambiguated
+  with a `#N` suffix so no entry is silently dropped.
+
+Stdlib only; imports on any OS.
 """
 import re
+import unicodedata
 from typing import Any, Dict, Set, Tuple
 
 from uitree import Node
@@ -33,9 +47,22 @@ GENERIC_LABELS = frozenset({
 })
 
 
+def _scrub_dict(value: dict) -> dict:
+    out: dict = {}
+    for k, v in value.items():
+        nk = scrub(k)
+        if nk in out:
+            i = 2
+            while "%s#%d" % (nk, i) in out:
+                i += 1
+            nk = "%s#%d" % (nk, i)
+        out[nk] = scrub(v)
+    return out
+
+
 def scrub(value: Any) -> Any:
     if isinstance(value, dict):
-        return {scrub(k): scrub(v) for k, v in value.items()}
+        return _scrub_dict(value)
     if isinstance(value, list):
         return [scrub(v) for v in value]
     if isinstance(value, tuple):
@@ -45,17 +72,18 @@ def scrub(value: Any) -> Any:
     if isinstance(value, (bytes, bytearray)):
         return scrub(bytes(value).decode("utf-8", errors="replace"))
     if isinstance(value, str):
+        norm = unicodedata.normalize("NFKC", value)
         if len(value) <= 200:
-            if SENSITIVE_RE.search(value):
+            if SENSITIVE_RE.search(value) or SENSITIVE_RE.search(norm):
                 return "<redacted:account len=%d>" % len(value)
             return value
-        value = _EMAIL_RE.sub("<redacted:email>", value)
+        value = _EMAIL_RE.sub("<redacted:email>", norm)
         return _ACCOUNT_RE.sub("<redacted:account>", value)
     return value
 
 
 def _role(n: Node) -> str:
-    return (n.role or "").lower()
+    return (n.role or "").strip().lower()
 
 
 def _has_nav_descendant(node: Node) -> bool:
