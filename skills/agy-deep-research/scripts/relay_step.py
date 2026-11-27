@@ -45,7 +45,8 @@ conversation_id, report_title, plan, plan_count, edit_button_clicked, confirm_cl
 report_file, report_chars, sources_count, elapsed_s, stdout_log, stderr_log, pid. For a completed report `url` /
 `conversation_id` are the driver's provenance (where the report came from), never a later look at the page.
 
-Privacy: every driver stdout/stderr tail and error message written to result.json (and printed) goes through
+Privacy: the driver's stdout/stderr logs and progress.jsonl in relay/ are written line by line scrubbed (the relay parses
+its in-memory copy), and every tail, hint and error message written to result.json (and printed) goes through
 privacy.scrub (privacy.py next to this file); if that module cannot be imported a minimal local redaction of
 e-mail addresses and `Google 계정:` / `Google Account:` lines is used instead, never the raw text.
 
@@ -97,7 +98,13 @@ def scrub_text(value):
     return _fallback_scrub(value)
 
 
-_SCRUBBED_KEYS = ("message", "stderr_tail", "stdout_tail", "error", "detail")
+_SCRUBBED_KEYS = ("message", "hint", "plan_preview", "stderr_tail", "stdout_tail", "error", "detail")
+
+
+def _scrub_line(line):
+    """One captured driver line for a log file agy can read: scrubbed, line ending kept."""
+    body = line.rstrip("\r\n")
+    return scrub_text(body) + line[len(body):]
 
 
 def scrub_result(res):
@@ -399,7 +406,7 @@ def run_driver(argv, cwd, out_path, err_path, deadline, allow_missing_confirm, p
     def reader(stream, lines, path, is_out):
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             for line in stream:
-                f.write(line)
+                f.write(_scrub_line(line))   # the log is scrubbed; the in-memory copy below stays raw for parsing
                 f.flush()
                 with lock:
                     lines.append(line)
@@ -439,7 +446,7 @@ def run_driver(argv, cwd, out_path, err_path, deadline, allow_missing_confirm, p
                         if progress_path:
                             try:
                                 with open(progress_path, "a", encoding="utf-8", newline="\n") as pf:
-                                    pf.write(json.dumps({"ts": now_iso(), "elapsed_s": run.progress[0], "text": run.progress[1]}, ensure_ascii=False) + "\n")
+                                    pf.write(json.dumps({"ts": now_iso(), "elapsed_s": run.progress[0], "text": scrub_text(run.progress[1])}, ensure_ascii=False) + "\n")
                             except OSError:
                                 pass
 
@@ -883,7 +890,7 @@ def main(argv=None):
         slim = {k: v for k, v in res.items() if k != "plan"}
         if "plan" in res:
             slim["plan_preview"] = (res["plan"] or "")[:300]
-        print(json.dumps(slim, ensure_ascii=False, indent=2))
+        print(json.dumps(scrub_result(slim), ensure_ascii=False, indent=2))
     return code
 
 

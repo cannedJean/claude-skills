@@ -503,6 +503,71 @@ class RelayProbeContractTestCase(unittest.TestCase):
         self.assertIsNotNone(relay_step._privacy_scrub)
 
 
+class RelayLogScrubTestCase(unittest.TestCase):
+    """R7 / round 2: relay/*.stdout.txt, *.stderr.txt and progress.jsonl are written scrubbed (agy can read them)."""
+    SECRET = "Google 계정: 홍길동(tester.person@gmail.com)"
+
+    def setUp(self) -> None:
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.job = self._tmp.name
+        self.relay_dir = os.path.join(self.job, "relay")
+        os.makedirs(self.relay_dir)
+
+    def run_fake(self):
+        script = os.path.join(self.job, "fake_driver_account.py")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write("import sys\n"
+                    f"print({self.SECRET!r}, flush=True)\n"
+                    "print('[5s] Progress: signed in as tester.person@gmail.com', flush=True)\n"
+                    "print('plain line', flush=True)\n"
+                    f"sys.stderr.write({('RuntimeError: ' + self.SECRET + chr(10))!r}); sys.stderr.flush()\n")
+        out, err = os.path.join(self.relay_dir, "plan_1.stdout.txt"), os.path.join(self.relay_dir, "plan_1.stderr.txt")
+        prog = os.path.join(self.relay_dir, "progress.jsonl")
+        run = relay_step.run_driver([sys.executable, script], self.job, out, err, 60, True, progress_path=prog)
+        return run, out, err, prog
+
+    def test_driver_logs_are_written_scrubbed(self) -> None:
+        run, out, err, prog = self.run_fake()
+        for path in (out, err, prog):
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            with self.subTest(path=os.path.basename(path)):
+                self.assertNotIn("gmail", text)
+                self.assertNotIn("홍길동", text)
+        with open(out, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        self.assertEqual(len(lines), 3)
+        self.assertEqual(lines[2], "plain line")
+
+    def test_driver_logs_scrubbed_with_fallback(self) -> None:
+        with mock.patch.object(relay_step, "_privacy_scrub", None):
+            _, out, err, _ = self.run_fake()
+        for path in (out, err):
+            with open(path, encoding="utf-8") as f:
+                self.assertNotIn("gmail", f.read())
+
+    def test_hint_and_plan_preview_are_scrubbed(self) -> None:
+        res = relay_step.scrub_result({"hint": "ask tester.person@gmail.com", "plan_preview": self.SECRET,
+                                       "status": "plan_ready"})
+        self.assertNotIn("gmail", json.dumps(res, ensure_ascii=False))
+        self.assertNotIn("홍길동", json.dumps(res, ensure_ascii=False))
+        self.assertEqual(res["status"], "plan_ready")
+
+    def test_printed_plan_preview_is_scrubbed(self) -> None:
+        import contextlib
+        import io
+        with open(os.path.join(self.relay_dir, "request.json"), "w", encoding="utf-8") as f:
+            json.dump({"relay_version": 2, "step": "plan", "seq": 1}, f)
+        res = {"relay_version": 2, "step": "plan", "status": "plan_ready", "plan": "1. " + self.SECRET}
+        buf = io.StringIO()
+        with mock.patch.object(relay_step, "do_step", return_value=(res, 0)), contextlib.redirect_stdout(buf):
+            relay_step.main(["--job", self.job])
+        self.assertNotIn("gmail", buf.getvalue())
+        self.assertNotIn("홍길동", buf.getvalue())
+
+
 class DriverStubTestCase(unittest.TestCase):
     def run_driver(self, *argv: str) -> subprocess.CompletedProcess:
         env = dict(os.environ, PYTHONIOENCODING="utf-8")
