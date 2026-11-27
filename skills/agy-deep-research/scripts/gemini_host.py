@@ -6,7 +6,8 @@ launch classification, mode choice). Windows path rules are applied through ntpa
 
 Validation is deliberately stricter than the minimal spec (fail closed):
 - the launcher stub must be non-empty, with no quote or control character;
-- profile_dir must be absolute with a drive or UNC root, with no quote or control character, and must not lie under
+- profile_dir must be absolute with a drive or UNC root, with no quote, control character or ':' after the drive
+  (no alternate data streams), and must not lie under
   any `Google\Gemini` directory anywhere in the path (path components are compared the way Windows resolves them:
   case-insensitively, `..` collapsed, trailing dots and spaces ignored, so `Gemini.` / `Gemini ` count as `Gemini`);
 - is_gemini_image needs an absolute image path ending exactly in `\Google\Gemini\app-<ver>\Gemini.exe`;
@@ -48,6 +49,8 @@ def _validate_profile_dir(profile_dir: str) -> None:
     drive, rest = ntpath.splitdrive(profile_dir)
     if not drive or not rest.startswith(("\\", "/")):
         raise ValueError("profile_dir must be absolute (drive or UNC)")
+    if ":" in rest:
+        raise ValueError("profile_dir must not contain ':' after the drive (alternate data stream)")
     # Windows drops trailing dots and spaces of a path component: "Gemini." and "Gemini " name "Gemini"
     parts = [c.rstrip(". ") for c in _canon(profile_dir).split("\\")]
     if any(a == "google" and b == "gemini" for a, b in zip(parts, parts[1:])):

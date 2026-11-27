@@ -179,6 +179,13 @@ class ReviewFixTests(unittest.TestCase):
         gh.build_launch_command(STUB, r"C:\x\Google\Gemini2\prof", [])
         gh.build_launch_command(STUB, r"C:\x\Google.Gemini\prof", [])
 
+    def test_profile_dir_rejects_colon_after_drive(self):
+        for b in (r"C:\prof:x", r"C:\prof::$DATA", r"C:\a\b:stream:$DATA", r"\\srv\share\p:q", "C:\\p\\:"):
+            with self.subTest(b=b), self.assertRaises(ValueError):
+                gh.build_launch_command(STUB, b, [])
+        gh.build_launch_command(STUB, r"C:\prof", [])
+        gh.build_launch_command(STUB, r"\\srv\share\prof", [])
+
     def test_stub_is_validated(self):
         for stub in ("", "   ", "C:\\a\nb.exe", "C:\\a\x00b.exe", 'C:\\a"b.exe', "C:\\a\tb.exe"):
             for profile in (None, PROFILE):
