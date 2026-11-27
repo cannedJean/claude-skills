@@ -23,7 +23,9 @@ Rules (spec section 11, Task 8 rulings):
   counts as a fired countdown. Any other failed check is
   COUNTDOWN_NOT_CANCELLED. A timeout, COUNTDOWN_NOT_CANCELLED or LocatorMiss
   while `stop_response` is present invokes `stop_response` first (details get
-  stop_invoked/stopped). While a response runs, a card count below
+  stop_invoked/stopped). A BackendError escaping the plan wait or the edit first
+  cancels the newest visible countdown and stops a running response (best effort,
+  recorded in exc.stop_attempt), then propagates. While a response runs, a card count below
   `prev_cards` or a newest card without its start also means UNREVIEWED_START.
   Fail closed, never retried.
 - Acts: only BackendError (pattern missing, element gone, COM/OS error) counts
@@ -563,6 +565,9 @@ def _stop_on_failure(tree, poll: _Poll, cfg: StepConfig, exc: Exception) -> None
     running response (harmless if it was only Gemini's canned turn)."""
     if isinstance(exc, StepError) and exc.code not in STOP_FIRST_CODES:
         return
+    if isinstance(exc, BackendError):
+        _stop_on_backend_error(tree, poll, cfg, exc)
+        return
     try:
         res = _stop(tree, poll, cfg, poll.snap())
     except StepError:
@@ -571,6 +576,28 @@ def _stop_on_failure(tree, poll: _Poll, cfg: StepConfig, exc: Exception) -> None
         return
     target = exc.payload if isinstance(exc, LocatorMiss) else exc.details
     target["stop_invoked"], target["stopped"] = res
+
+
+def _stop_on_backend_error(tree, poll: _Poll, cfg: StepConfig, exc: Exception) -> None:
+    """A backend failure (pattern missing, element gone, COM/OS error) in the middle of the plan wait: best effort,
+    cancel the newest visible countdown, then stop a running response, so the step never leaves a countdown running.
+    What was tried is recorded on the exception (`exc.stop_attempt`); the caller re-raises the original error."""
+    attempt = {"cancel_invoked": False, "stop_invoked": False, "stopped": False, "error": None}
+    try:
+        ctx = poll.snap()
+        turns = [t for t in _turns(ctx) if _find_in(t, ctx, "plan_cancel_countdown")]
+        if turns:   # the newest countdown only: an older card's button is never the one running
+            _cancel_all(tree, ctx, turns[-1:])
+            attempt["cancel_invoked"] = True
+        res = _stop(tree, poll, cfg, poll.snap())
+        if res is not None:
+            attempt["stop_invoked"], attempt["stopped"] = res
+    except (StepError, LocatorMiss) + BackendError as again:  # the backend is still failing: report, keep the original
+        attempt["error"] = type(again).__name__
+    try:
+        exc.stop_attempt = attempt
+    except AttributeError:
+        pass
 
 
 def _cancel_all(tree, ctx: LocatorContext, turns: List[Node]) -> None:
@@ -708,7 +735,7 @@ def wait_plan_and_cancel(tree, locs: dict, cfg: StepConfig, url: str, prev_cards
     poll = _Poll(tree, locs, cfg, doc.id, url)
     try:
         return _plan(tree, poll, cfg, prev_cards)
-    except (StepError, LocatorMiss) as exc:
+    except (StepError, LocatorMiss) + BackendError as exc:
         _stop_on_failure(tree, poll, cfg, exc)
         raise
 
@@ -752,7 +779,7 @@ def edit_plan(tree, locs: dict, cfg: StepConfig, url: str, feedback: str,
                    "canned_turn")
         enter_prompt(tree, locs, cfg, doc, feedback)
         _send(tree, poll.snap())
-    except (StepError, LocatorMiss) as exc:
+    except (StepError, LocatorMiss) + BackendError as exc:
         _stop_on_failure(tree, poll, cfg, exc)
         raise
     return wait_plan_and_cancel(tree, locs, cfg, url, len(cards))

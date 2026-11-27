@@ -127,13 +127,14 @@ flowchart TD
    - Switches to Pro mode, enables Deep Research, submits prompt, clicks `[data-test-id="cancel-fuse-button"]` to disarm the countdown fuse, and emits `[PLAN_REVIEW_HOOK_START] ... [PLAN_REVIEW_HOOK_END]` JSON (`plan_text`, `iteration`, `url`).
 
 2. **Step 2 — Verify & Iteratively Modify Plan (`--step edit`, repeat as needed)**:
+   - `<CONVERSATION_URL>` is the exact `https://gemini.google.com/app/<id>` from the plan step's `[CONVERSATION]` line; `current` is refused (`CONVERSATION_MISMATCH`), the driver binds only that exact URL.
    - Inspect `plan_text`. If any required subtopics, methodology, or constraints are missing, call `--step edit` with modification instructions:
    ```powershell
    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
    $env:PYTHONIOENCODING = "utf-8"
    python "$HOME\.gemini\config\skills\local-gemini-deep-research\scripts\run_deep_research.py" `
      --step edit `
-     --resume-url "current" `
+     --resume-url "<CONVERSATION_URL>" `
      --edit-prompt "<MODIFICATION_INSTRUCTIONS>"
    ```
    - This clicks **`계획 수정` (`[data-test-id="edit-button"]`)**, submits `<MODIFICATION_INSTRUCTIONS>`, waits for the newly generated plan card, and returns the revised plan JSON (`hook_event: "on_plan_revised"`).
@@ -146,7 +147,7 @@ flowchart TD
    $env:PYTHONIOENCODING = "utf-8"
    python "$HOME\.gemini\config\skills\local-gemini-deep-research\scripts\run_deep_research.py" `
      --step approve `
-     --resume-url "current" `
+     --resume-url "<CONVERSATION_URL>" `
      --output "<OUTPUT_MARKDOWN_FILE_PATH>"
    ```
    - Clicks **`연구 시작` (`[data-test-id="confirm-button"]`)**, tracks live thought progress streaming across dozens of websites, detects completion (`gem-processing-card.completed`), and writes the final Markdown report to disk.

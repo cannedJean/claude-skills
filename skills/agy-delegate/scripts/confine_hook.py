@@ -16,8 +16,8 @@ the hook answers with {"decision": ...} on stdout:
 In deep-research mode (AGY_CONFINE_MODE="deep-research"):
   - READ_TOOLS are permitted inside <workdir> and AGY_CONFINE_DR_DIR.
   - Write tools are permitted only inside <workdir>, and caller control files (relay/request.json,
-    prompt.md, goal.md, feedback_*.md, job.json, relay/result.json, relay/started.json, relay/foreground.jsonl)
-    and every *.py file are denied with rule "protected".
+    prompt.md, goal.md, feedback_*.md, job.json, relay/result.json, relay/started.json, relay/foreground.jsonl,
+    relay/driver_state.json) and every *.py file are denied with rule "protected".
   - Also denied there with rule "protected": files with an executable/script extension (.bat .cmd .com .exe .ps1
     .psm1 .vbs .vbe .js .jse .wsf .wsh .lnk .pif .scr .msc .hta .cpl), Python artefacts (.py .pyw .pyc .pyo .pyz
     .pth), anything under __pycache__, and files named python/python3/py with any extension.
@@ -231,6 +231,7 @@ def is_protected_file(rel: str, mode: str = "default") -> bool:
             "relay/result.json",
             "relay/started.json",
             "relay/foreground.jsonl",
+            "relay/driver_state.json",
             "job.json",
         ):
             return True

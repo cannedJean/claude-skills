@@ -625,6 +625,41 @@ class Hook(unittest.TestCase):
                 dec, rule, _ = self.decide_audit("write_to_file", {"TargetFile": target, "CodeContent": "{}"})
                 self.assertEqual((dec, rule), ("deny", "protected"), target)
 
+    def test_deep_research_driver_state_write_create_rename_link_denied(self):
+        # relay/driver_state.json carries the previous cancel result and the pinned host mode to the next step
+        for pf in ("relay/driver_state.json", "RELAY/Driver_State.JSON", "relay\\driver_state.json",
+                   "relay/driver_state.json:x", "relay/./driver_state.json"):
+            for target in (pf, str(self.root / pf)):
+                with self.subTest(target=target):
+                    for tool, args in (
+                            ("write_to_file", {"TargetFile": target, "CodeContent": "{}"}),
+                            ("write_to_file", {"TargetFile": target, "CodeContent": "{}", "Overwrite": True}),
+                            ("replace_file_content", {"TargetFile": target, "TargetContent": "a", "ReplacementContent": "b"}),
+                            ("multi_replace_file_content", {"TargetFile": target, "ReplacementChunks": []})):
+                        dec, rule, _ = self.decide_audit(tool, args)
+                        self.assertEqual(dec, "deny", (tool, target))
+                        # an alternate data stream may already be refused as a path; plain names are "protected"
+                        self.assertIn(rule, ("protected", "path") if ":x" in target else ("protected",), (tool, target))
+        R = str(self.root)
+        for cmd in (f'move "{R}\\x.json" "{R}\\relay\\driver_state.json"', "ren x.json driver_state.json",
+                    f'mklink /H "{R}\\relay\\driver_state.json" "{R}\\x.json"'):
+            with self.subTest(cmd=cmd):
+                dec, rule, _ = self.decide_audit("run_command", {"CommandLine": cmd, "Cwd": R})
+                self.assertEqual((dec, rule), ("deny", "shell"), cmd)
+        state = self.root / "relay" / "driver_state.json"
+        state.write_text("{}", encoding="utf-8")
+        self.addCleanup(state.unlink)
+        dec, _, _ = self.decide_audit("view_file", {"AbsolutePath": "relay/driver_state.json"})
+        self.assertEqual(dec, "ask")   # agy may read it
+        alias = self.root / "ds_alias.json"
+        try:
+            os.link(state, alias)
+        except OSError as e:
+            self.skipTest(f"no hard links here: {e}")
+        self.addCleanup(alias.unlink)
+        dec, rule, _ = self.decide_audit("write_to_file", {"TargetFile": "ds_alias.json", "CodeContent": "{}"})
+        self.assertEqual((dec, rule), ("deny", "hard_link"))
+
     def test_deep_research_job_and_foreground_edits_denied_reads_allowed(self):
         (self.root / "job.json").write_text("{}", encoding="utf-8")
         (self.root / "relay" / "foreground.jsonl").write_text("", encoding="utf-8")

@@ -43,11 +43,11 @@ if SCRIPT_DIR not in sys.path:
 import gemini_host  # noqa: E402
 import locators  # noqa: E402
 import privacy  # noqa: E402
+import relay_step  # noqa: E402  (shared constants only: deadline, error-record prefix)
 import steps  # noqa: E402
 import uia_backend  # noqa: E402  (imports no comtypes: load_com() does, after the desktop switch)
 
 DRIVER_NOT_IMPLEMENTED = {"status": "error", "code": "UIA_DRIVER_NOT_IMPLEMENTED"}
-DRIVER_ERROR_PREFIX = "[DRIVER_ERROR] "   # stderr: the error record the relay classifies (relay_step.classify)
 PROVENANCE_PREFIX = "[REPORT_PROVENANCE] "
 CONVERSATION_PREFIX = "[CONVERSATION] "
 HOOK_START = "=== [PLAN_REVIEW_HOOK_START] ==="
@@ -57,6 +57,11 @@ PLAN_BLOCK_END = "-----------------------"
 LINE_PROMPT_SENT = "Prompt submitted."               # relay: prompt_sent (the request acted on the app)
 LINE_EDIT_CLICKED = "Clicking '계획 수정' (edit-button)..."  # relay: edit_button_clicked
 STATE_FILE = os.path.join("relay", "driver_state.json")
+DRIVER_ERROR_PREFIX = relay_step.DRIVER_ERROR_PREFIX   # stderr: the record relay_step.classify reads
+DEADLINE_ENV = relay_step.STEP_DEADLINE_ENV       # the relay's deadline for this run (seconds)
+RELAY_PLAN_DEADLINE = relay_step.PLAN_DEADLINE    # single source: the relay's default plan/edit deadline
+SETUP_MARGIN_S = 60    # host ensure, menus and typing before the timed waits of a plan/edit step
+MIN_CARD_WAIT_S = 60   # measured: a plan card appears about 21 s after the send
 DEFAULT_MODEL = "Pro"
 
 # exit codes (relay_step.FAILURES uses the same split): 2 = the job / caller decides, the app state is known;
@@ -134,7 +139,6 @@ REQUIRED_XML_TAGS = (
 
 
 def has_full_xml_prompt_structure(text: str) -> bool:
-    import re
     clean = (text or "").strip()
     return all(
         re.search(rf"<{tag}\b[^>]*>.*?</{tag}>", clean, re.S | re.I)
@@ -151,7 +155,6 @@ def build_structured_xml_prompt(
     workspace_sources: str | None = None,
 ) -> str:
     """Wrap a topic/objective into the 5-block XML Deep Research architecture."""
-    import re
     obj_clean = (objective or "").strip()
     if not re.match(
         r"^(?:compare|analyze|synthesize|evaluate|investigate|conduct|design|benchmark|분석|비교|종합|평가|조사|검증)",
@@ -242,7 +245,6 @@ def build_structured_xml_prompt(
 
 
 def validate_edit_instructions(edit_prompt: str, allow_questions: bool = False) -> str:
-    import re
     clean = (edit_prompt or "").strip()
     if not clean:
         raise ValueError("--edit-prompt cannot be empty.")
@@ -361,6 +363,26 @@ def parse_args(argv=None):
 
 
 # --------------------------------------------------------------------------- job files
+STATE_KEYS = frozenset({"step", "url", "cancel", "cards", "host_mode", "browser_pid", "at"})
+
+
+def _is_int(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def valid_state(rec) -> bool:
+    """relay/driver_state.json schema: exactly STATE_KEYS with these types (agy cannot write the file, confine_hook
+    protects it; anything else is treated as absent)."""
+    return (isinstance(rec, dict) and set(rec) == STATE_KEYS
+            and rec["step"] in ("plan", "edit")
+            and isinstance(rec["url"], str) and bool(steps.CONVERSATION_RE.match(rec["url"]))
+            and rec["cancel"] in ("cancel_button", "edit_fallback")
+            and _is_int(rec["cards"]) and rec["cards"] >= 1
+            and rec["host_mode"] in ("D1", "D2")
+            and _is_int(rec["browser_pid"]) and rec["browser_pid"] > 0
+            and isinstance(rec["at"], (int, float)) and not isinstance(rec["at"], bool))
+
+
 class JobFiles:
     """The job directory: job.json (read only) and the driver's own relay/driver_state.json, which carries the
     previous plan/edit result (`cancel`, `cards`, `url`) and the job's pinned host mode to the next step. Nothing is
@@ -384,19 +406,42 @@ class JobFiles:
         jid = self._read("job.json").get("job_id")
         return jid if isinstance(jid, str) and jid.strip() else os.path.basename(self.dir)
 
-    def state(self) -> dict:
-        return self._read(STATE_FILE)
+    def state_present(self) -> bool:
+        return os.path.exists(os.path.join(self.dir, STATE_FILE))
 
-    def host_mode(self) -> Optional[str]:
-        """The job's pinned mode (job.json host_mode, else the mode an earlier step of this job ran on)."""
-        for mode in (self._read("job.json").get("host_mode"), self.state().get("host_mode")):
-            if mode in ("D1", "D2"):
-                return mode
-        return None
+    def state(self) -> dict:
+        """The driver state, or {} when it is absent or does not match the schema exactly (valid_state)."""
+        rec = self._read(STATE_FILE)
+        return rec if valid_state(rec) else {}
+
+    def pinned_mode(self, host_record: Optional[dict]) -> Optional[str]:
+        """The mode this job must run on, failing closed (HostError DRIVER_STATE_MISMATCH) when the files disagree.
+
+        - job.json host_mode (written by deep_research.py) wins and must equal the driver state's mode;
+        - the driver state's mode must equal host.json's mode when host.json describes the instance the state
+          recorded (same browser_pid); a D1 pin that host.json cannot confirm is never trusted;
+        - a state file that is present but malformed pins D2 (never a downgrade to D1)."""
+        job_mode = self._read("job.json").get("host_mode")
+        job_mode = job_mode if job_mode in ("D1", "D2") else None
+        st = self.state()
+        if st:
+            mode = st["host_mode"]
+            if job_mode is not None and job_mode != mode:
+                raise gemini_host.HostError("DRIVER_STATE_MISMATCH", f"job.json pins {job_mode}, driver state says {mode}")
+            same = isinstance(host_record, dict) and host_record.get("browser_pid") == st["browser_pid"]
+            if same and host_record.get("mode") != mode:
+                raise gemini_host.HostError("DRIVER_STATE_MISMATCH",
+                                            f"driver state says {mode}, the instance it recorded runs {host_record.get('mode')}")
+            if not same and mode == "D1" and job_mode is None:
+                raise gemini_host.HostError("DRIVER_STATE_MISMATCH",
+                                            "the driver state pins D1 but no running instance confirms it; start a new job")
+            return mode
+        if self.state_present():
+            return job_mode or "D2"
+        return job_mode
 
     def prev_cancel(self) -> Optional[str]:
-        cancel = self.state().get("cancel")
-        return cancel if isinstance(cancel, str) else None
+        return self.state().get("cancel")
 
     def save_state(self, **fields) -> None:
         if not self.is_job():
@@ -404,6 +449,8 @@ class JobFiles:
         rec = dict(self.state())
         rec.update(privacy.scrub(fields))
         rec["at"] = time.time()
+        if not valid_state(rec):
+            raise ValueError("driver state does not match its schema")
         path = os.path.join(self.dir, STATE_FILE)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = "%s.%d.tmp" % (path, os.getpid())
@@ -424,8 +471,39 @@ class DriverParts:
     step_config: Optional[steps.StepConfig] = None
 
 
-def default_step_config() -> steps.StepConfig:
-    return steps.StepConfig(card_timeout_s=plan_max_wait_default())
+def step_deadline_s() -> int:
+    """The relay's deadline for this driver run (relay_step passes it in DEADLINE_ENV; default its PLAN_DEADLINE)."""
+    try:
+        value = int(os.environ.get(DEADLINE_ENV, ""))
+    except ValueError:
+        return RELAY_PLAN_DEADLINE
+    return value if value > 0 else RELAY_PLAN_DEADLINE
+
+
+def step_budget_s(cfg: steps.StepConfig, step: str) -> float:
+    """Worst-case wall time of a plan/edit step that ends in a stop: setup, the wait before the card wait (URL
+    bind for plan, Gemini's canned turn for edit), the card wait, cancel verify, the edit fallback's canned turn,
+    the second verify, and a stop_response wait."""
+    before = cfg.bind_timeout_s if step == "plan" else cfg.turn_timeout_s
+    return (SETUP_MARGIN_S + before + cfg.card_timeout_s + cfg.cancel_verify_s + cfg.turn_timeout_s
+            + cfg.cancel_verify_s + cfg.stop_timeout_s)
+
+
+def default_step_config(step: str = "plan", deadline_s: Optional[int] = None) -> steps.StepConfig:
+    """Step timeouts that fit inside the relay's deadline (which kills the driver): the plan-card wait gets what is
+    left after every other wait of the step, capped by GEMINI_DR_PLAN_MAX_WAIT. DEADLINE_TOO_SHORT when less than
+    MIN_CARD_WAIT_S would remain."""
+    cfg = steps.StepConfig(cancel_verify_s=5, ui_timeout_s=15, bind_timeout_s=60, turn_timeout_s=60,
+                           stop_timeout_s=60)
+    if step not in ("plan", "edit"):
+        return cfg
+    deadline = step_deadline_s() if deadline_s is None else deadline_s
+    cfg.card_timeout_s = 0
+    left = deadline - step_budget_s(cfg, step)
+    if left < MIN_CARD_WAIT_S:
+        raise gemini_host.HostError("DEADLINE_TOO_SHORT", f"a {deadline}s relay deadline leaves {left:.0f}s for the plan card")
+    cfg.card_timeout_s = min(left, plan_max_wait_default())
+    return cfg
 
 
 def load_bundled_locators() -> dict:
@@ -578,7 +656,8 @@ def step_plan(run: StepRun) -> None:
     url = steps.send_and_bind(tree, locs, cfg, doc)
     _say(format_conversation_line(conversation_id_from_url(url), url))   # only now: the URL is bound
     res = steps.wait_plan_and_cancel(tree, locs, cfg, url, 0)
-    run.job.save_state(step="plan", url=url, cancel=res["cancel"], cards=res["cards"], host_mode=run.session.mode)
+    run.job.save_state(step="plan", url=url, cancel=res["cancel"], cards=res["cards"], host_mode=run.session.mode,
+                       browser_pid=run.session.browser_pid)
     _say("\n" + PLAN_BLOCK_START + "\n" + res["plan_text"] + "\n" + PLAN_BLOCK_END + "\n")
     _hook_block(_plan_payload("on_plan_generated", url, res))
     if run.args.output:
@@ -594,7 +673,8 @@ def step_edit(run: StepRun) -> None:
     _say(format_conversation_line(conversation_id_from_url(url), url))
     prev = run.job.prev_cancel()
     res = steps.edit_plan(run.tree, run.locs, run.cfg, url, run.args.edit_prompt, prev_cancel=prev)
-    run.job.save_state(step="edit", url=url, cancel=res["cancel"], cards=res["cards"], host_mode=run.session.mode)
+    run.job.save_state(step="edit", url=url, cancel=res["cancel"], cards=res["cards"], host_mode=run.session.mode,
+                       browser_pid=run.session.browser_pid)
     _hook_block(_plan_payload("on_plan_revised", url, res))
 
 
@@ -643,7 +723,7 @@ def _describe(exc: BaseException):
     if isinstance(exc, locators.LocatorConfigError):
         return "LOCATOR_CONFIG_ERROR", str(exc)[:300], None
     if isinstance(exc, steps.BackendError):
-        return "UIA_BACKEND_ERROR", type(exc).__name__, None
+        return "UIA_BACKEND_ERROR", type(exc).__name__, getattr(exc, "stop_attempt", None)
     return "DRIVER_ERROR", type(exc).__name__, None
 
 
@@ -664,13 +744,17 @@ def main(argv=None, driver_factory=None):
         parts = (driver_factory or default_driver_factory)(args)
         job = JobFiles(args.job_dir)
         with parts.host.lock():
-            session = parts.host.ensure(job.host_mode())
+            session = parts.host.ensure(job.pinned_mode(parts.host.load_state()))
             log(f"Gemini host ready: mode={session.mode} reason={session.reason or '-'}")
             tree = _WatchedTree(parts.open_tree(session), args.step)
             run = StepRun(args, tree, parts.locs if parts.locs is not None else load_bundled_locators(),
-                          parts.step_config if parts.step_config is not None else default_step_config(), job, session)
+                          parts.step_config if parts.step_config is not None else default_step_config(args.step),
+                          job, session)
             handler(run)
-            parts.host.touch(job.job_id())
+            try:   # bookkeeping only: the step already acted and printed its result
+                parts.host.touch(job.job_id())
+            except Exception as exc:  # noqa: BLE001
+                log(f"Warning: host.json was not updated after the step ({type(exc).__name__})")
         return 0
     except Exception as exc:  # noqa: BLE001 - every failure becomes one scrubbed error record
         code, message, details = _describe(exc)

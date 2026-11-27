@@ -106,6 +106,8 @@ class DriverHarness(unittest.TestCase):
             return json.load(f)
 
     def write_state(self, **state):
+        state.setdefault("browser_pid", 7000)
+        state.setdefault("at", 1.0)
         with open(os.path.join(self.job_dir, "relay", "driver_state.json"), "w", encoding="utf-8") as f:
             json.dump(state, f)
 
@@ -427,7 +429,8 @@ class ErrorMappingTests(DriverHarness):
         fake = FakeOS()
         add_user_instance(fake)
         self.host = make_host(fake, lock_path=self.lock_path, state_path=self.state_path)
-        self.write_state(step="plan", cancel="cancel_button", cards=1, url=BOUND, host_mode="D1")
+        with open(os.path.join(self.job_dir, "job.json"), "w", encoding="utf-8") as f:
+            json.dump({"job_id": JOB_ID, "host": "uia", "host_mode": "D1"}, f)
         tree = AutoTree(load("plan_flow_ko.json"))
         rc, out, err, _ = self.plan()
         rec = self.stderr_record(err)
@@ -583,6 +586,237 @@ class RealFactoryTests(unittest.TestCase):
 
     def test_default_stub_is_the_launcher_under_localappdata(self):
         self.assertEqual(rdr.default_stub({"LOCALAPPDATA": r"C:\L"}), r"C:\L\Google\Gemini\Gemini.exe")
+
+
+class DriverStateTests(DriverHarness):
+    """relay/driver_state.json: strict schema; its host mode must agree with job.json and host.json (fail closed)."""
+
+    def edit_tree(self):
+        return AutoTree(load("plan_flow_edit_two_cards.json"))
+
+    def record_instance(self):
+        rc, out, err = self.probe(self.edit_tree())   # ensure() writes host.json for our D2 instance (pid 7000)
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual((self.host_record()["mode"], self.host_record()["browser_pid"]), ("D2", 7000))
+
+    def assert_refused(self, rc, err, tree):
+        rec = self.stderr_record(err)
+        self.assertEqual((rc, rec["code"]), (3, "DRIVER_STATE_MISMATCH"))
+        self.assertEqual(tree.actions, [])
+        self.assertEqual(self.fake.launches(), [])
+
+    def test_saved_state_matches_the_schema(self):
+        rc, out, _, _ = self.plan()
+        self.assertEqual(rc, 0, out)
+        st = self.driver_state()
+        self.assertTrue(rdr.valid_state(st), st)
+        self.assertEqual(st["browser_pid"], 7000)
+
+    def test_state_mode_differing_from_the_recorded_instance_is_refused(self):
+        self.record_instance()
+        self.write_state(step="plan", cancel="cancel_button", cards=1, url=BOUND, host_mode="D1")
+        tree = self.edit_tree()
+        rc, out, err = self.edit(tree)
+        self.assert_refused(rc, err, tree)
+
+    def test_unconfirmed_d1_pin_is_refused(self):
+        self.write_state(step="plan", cancel="cancel_button", cards=1, url=BOUND, host_mode="D1", browser_pid=4321)
+        tree = self.edit_tree()
+        rc, out, err = self.edit(tree)
+        self.assert_refused(rc, err, tree)
+
+    def test_job_json_and_state_disagreeing_is_refused(self):
+        with open(os.path.join(self.job_dir, "job.json"), "w", encoding="utf-8") as f:
+            json.dump({"job_id": JOB_ID, "host_mode": "D2"}, f)
+        self.write_state(step="plan", cancel="cancel_button", cards=1, url=BOUND, host_mode="D1")
+        tree = self.edit_tree()
+        rc, out, err = self.edit(tree)
+        self.assert_refused(rc, err, tree)
+
+    def test_malformed_state_drops_cancel_and_never_downgrades(self):
+        bad = [dict(step="plan", cancel="edit_fallback", cards=1, url=BOUND, host_mode="D1", extra=1),
+               dict(step="plan", cancel="edit_fallback", cards=True, url=BOUND, host_mode="D1"),
+               dict(step="plan", cancel="edit_fallback", cards=1, url="https://evil.example/app/1234abcd", host_mode="D1"),
+               dict(step="plan", cancel="skip_edit", cards=1, url=BOUND, host_mode="D1")]
+        for state in bad:
+            with self.subTest(state=state):
+                self.write_state(**state)
+                self.assertFalse(rdr.valid_state(rdr.JobFiles(self.job_dir)._read(rdr.STATE_FILE)))
+                tree = self.edit_tree()
+                with mock.patch.object(self.host, "ensure", side_effect=self.host.ensure) as ens, \
+                        mock.patch.object(rdr.steps, "edit_plan", side_effect=steps.edit_plan) as ep:
+                    rc, out, err = self.edit(tree)
+                self.assertEqual(rc, 0, (out, err))
+                self.assertEqual(ens.call_args.args, ("D2",))             # pinned to D2, not the file's D1
+                self.assertIsNone(ep.call_args.kwargs.get("prev_cancel"))  # cancel treated as absent
+                self.assertIn(("act", "plan1_edit", "invoke"), tree.actions)
+        with open(os.path.join(self.job_dir, "relay", "driver_state.json"), "w", encoding="utf-8") as f:
+            f.write("not json")
+        self.assertEqual(rdr.JobFiles(self.job_dir).pinned_mode(None), "D2")
+
+    def test_no_state_leaves_the_mode_to_the_host(self):
+        self.assertIsNone(rdr.JobFiles(self.job_dir).pinned_mode(None))
+
+
+class BackendErrorStopTests(DriverHarness):
+    """A backend failure during the plan wait cancels the countdown / stops the response before it propagates."""
+
+    def flaky(self, fail_in_state, times=1):
+        state = {"left": times}
+
+        class Flaky(AutoTree):
+            def snapshot(inner, doc_id):  # noqa: N805
+                node = AutoTree.snapshot(inner, doc_id)
+                if inner.state == fail_in_state and state["left"] > 0:   # the snapshot that would show this state
+                    state["left"] -= 1
+                    raise OSError("COM failure")
+                return node
+        return Flaky
+
+    def test_backend_error_after_send_cancels_the_countdown_and_raises(self):
+        spec = load("plan_flow_ko.json")
+        set_auto(spec, "bound", "card", 1)
+        tree = self.flaky("card")(spec)
+        rc, out, err = self.run_main(["--step", "plan", "--raw-prompt", "--prompt", KO_PROMPT], tree)
+        rec = self.stderr_record(err)
+        self.assertEqual((rc, rec["code"]), (3, "UIA_BACKEND_ERROR"))
+        self.assertIn(("act", "plan1_cancel", "invoke"), tree.actions)
+        self.assertTrue(rec["details"]["cancel_invoked"])
+        self.assertEqual(tree.state, "cancelled")
+        self.assertNotIn(relay_step.MARK_START, out)
+
+    def test_backend_error_with_research_running_stops_it(self):
+        spec = load("plan_flow_ko.json")
+        spec["state"] = "researching"
+        tree = self.flaky("researching")(spec)
+        with self.assertRaises(OSError) as cm:
+            steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)
+        self.assertIn(("act", "b_stop", "invoke"), tree.actions)
+        self.assertEqual((cm.exception.stop_attempt["stop_invoked"], cm.exception.stop_attempt["stopped"]), (True, True))
+
+    def test_backend_that_keeps_failing_still_raises_the_original(self):
+        spec = load("plan_flow_ko.json")
+        spec["state"] = "card"
+        tree = self.flaky("card", times=99)(spec)
+        with self.assertRaises(OSError) as cm:
+            steps.wait_plan_and_cancel(tree, locs(), cfg(), BOUND, 0)
+        self.assertEqual(cm.exception.stop_attempt["error"], "OSError")
+        self.assertEqual(tree.actions, [])
+
+    def test_edit_backend_error_goes_through_the_stop_path(self):
+        spec = load("plan_flow_edit_two_cards.json")
+        tree = self.flaky("edit_card")(spec)
+        with self.assertRaises(OSError) as cm:
+            steps.edit_plan(tree, locs(), cfg(), BOUND, FEEDBACK)
+        self.assertTrue(cm.exception.stop_attempt["cancel_invoked"])
+        self.assertIn(("act", "plan2_cancel", "invoke"), tree.actions)
+
+
+class DeadlineTests(unittest.TestCase):
+    def deadlines(self):
+        import deep_research as dr   # read-only: the orchestrator's plan/edit deadlines
+        return sorted({relay_step.PLAN_DEADLINE, dr.DEFAULT_PLAN_DEADLINE, dr.ARGON_PLAN_DEADLINE})
+
+    def test_every_wait_of_plan_and_edit_fits_inside_the_relay_deadline(self):
+        self.assertIs(rdr.RELAY_PLAN_DEADLINE, relay_step.PLAN_DEADLINE)
+        for deadline in self.deadlines():
+            for step in ("plan", "edit"):
+                with self.subTest(deadline=deadline, step=step), mock.patch.dict(os.environ, {}):
+                    os.environ.pop("GEMINI_DR_PLAN_MAX_WAIT", None)
+                    c = rdr.default_step_config(step, deadline)
+                    self.assertGreaterEqual(c.card_timeout_s, rdr.MIN_CARD_WAIT_S)
+                    self.assertLessEqual(rdr.step_budget_s(c, step), deadline)
+                    before = c.bind_timeout_s if step == "plan" else c.turn_timeout_s
+                    # setup, the wait before the card, the card wait, both cancel verifications, the fallback
+                    # turn and a stop_response wait
+                    self.assertLessEqual(rdr.SETUP_MARGIN_S + before + c.card_timeout_s + 2 * c.cancel_verify_s
+                                         + c.turn_timeout_s + c.stop_timeout_s, deadline)
+
+    def test_deadline_comes_from_the_relay_env(self):
+        with mock.patch.dict(os.environ, {relay_step.STEP_DEADLINE_ENV: "900"}):
+            os.environ.pop("GEMINI_DR_PLAN_MAX_WAIT", None)
+            self.assertEqual(rdr.step_deadline_s(), 900)
+            self.assertGreater(rdr.default_step_config("plan").card_timeout_s,
+                               rdr.default_step_config("plan", relay_step.PLAN_DEADLINE).card_timeout_s)
+        with mock.patch.dict(os.environ, {relay_step.STEP_DEADLINE_ENV: "junk"}):
+            self.assertEqual(rdr.step_deadline_s(), relay_step.PLAN_DEADLINE)
+
+    def test_too_short_deadline_is_refused(self):
+        with self.assertRaises(gh.HostError) as cm:
+            rdr.default_step_config("edit", 200)
+        self.assertEqual(cm.exception.code, "DEADLINE_TOO_SHORT")
+
+    def test_relay_hands_its_deadline_to_the_driver(self):
+        with tempfile.TemporaryDirectory() as job:
+            relay = os.path.join(job, "relay")
+            os.makedirs(relay)
+            prompt = os.path.join(job, "prompt.md")
+            with open(prompt, "w", encoding="utf-8") as f:
+                f.write("topic")
+            req = {"relay_version": 2, "step": "plan", "seq": 1, "driver": rdr.__file__, "prompt_file": prompt,
+                   "deadline": 500, "env": {"GEMINI_DR_MODE": "Pro"}}
+            run = relay_step.Run()
+            run.rc = 0
+            with mock.patch.object(relay_step, "run_driver", return_value=run) as rd:
+                relay_step.do_step(job, req, relay, os.path.join(relay, "result.json"))
+            env = rd.call_args.kwargs["extra_env"]
+            self.assertEqual((env[relay_step.STEP_DEADLINE_ENV], env["GEMINI_DR_MODE"]), ("500", "Pro"))
+            self.assertEqual(rd.call_args.args[1], job)   # cwd = the job: the driver's JobFiles default
+
+
+class RelayContractTests(unittest.TestCase):
+    def test_probe_runs_in_the_job(self):
+        with tempfile.TemporaryDirectory() as job:
+            done = subprocess.CompletedProcess([], 0, stdout='{"start_enabled": false, "plan_cards": 1, "url": "u"}\n',
+                                               stderr="")
+            with mock.patch.object(relay_step.subprocess, "run", return_value=done) as run:
+                relay_step.probe_page({"resume_url": BOUND, "driver": rdr.__file__}, sys.executable, job=job)
+            argv = run.call_args.args[0]
+            self.assertEqual(argv[argv.index("--job-dir") + 1], job)
+            self.assertEqual(run.call_args.kwargs["cwd"], job)
+
+    def test_do_step_probe_passes_the_job(self):
+        with tempfile.TemporaryDirectory() as job:
+            relay = os.path.join(job, "relay")
+            os.makedirs(relay)
+            with mock.patch.object(relay_step, "probe_page", return_value={"start_enabled": False}) as pp:
+                relay_step.do_step(job, {"step": "probe", "seq": 1, "driver": rdr.__file__, "resume_url": BOUND},
+                                   relay, os.path.join(relay, "result.json"))
+            self.assertEqual(pp.call_args.kwargs.get("job"), job)
+
+    def run_with(self, rc, rec):
+        run = relay_step.Run()
+        run.rc, run.err = rc, [rdr.DRIVER_ERROR_PREFIX + json.dumps(rec) + "\n"]
+        return relay_step.classify(run, "plan")
+
+    def test_unknown_code_or_exit_code_mismatch_is_driver_crash(self):
+        for rc, rec in ((3, {"code": "MADE_UP", "exit_code": 3}), (3, {"code": "SAFETY_BLOCKED", "exit_code": 2}),
+                        (2, {"code": "UI_TIMEOUT", "exit_code": 7}), (1, {"code": "UI_TIMEOUT", "exit_code": 3})):
+            with self.subTest(rc=rc, rec=rec):
+                self.assertEqual(self.run_with(rc, rec).code, "DRIVER_CRASH")
+        self.assertEqual(self.run_with(2, {"code": "SAFETY_BLOCKED", "exit_code": 2}).code, "SAFETY_BLOCKED")
+
+    def test_every_driver_code_is_known_to_the_relay(self):
+        import re as _re
+        src = "".join(open(os.path.join(HERE, "..", n), encoding="utf-8").read()
+                      for n in ("steps.py", "gemini_host.py", "run_deep_research.py"))
+        codes = set(_re.findall(r'(?:StepError|HostError)\(\s*"([A-Z_]+)"', src))
+        codes |= set(_re.findall(r'Decision\(None, "([A-Z_]+)"', src))
+        codes |= set(_re.findall(r'return "([A-Z_]{6,})", ', src))
+        codes |= {"UI_LOCATOR_MISS", "UIA_DRIVER_NOT_IMPLEMENTED"} | set(rdr.JOB_LEVEL_CODES)
+        self.assertGreater(len(codes), 25)
+        self.assertEqual(codes - relay_step.DRIVER_ERROR_CODES, set())
+
+
+class TouchFailureTests(DriverHarness):
+    def test_touch_failure_after_success_keeps_the_step_successful(self):
+        with mock.patch.object(self.host, "touch", side_effect=OSError("disk full")):
+            rc, out, err, _ = self.plan()
+        self.assertEqual(rc, 0, (out, err))
+        self.assertIn("Warning: host.json was not updated", out)
+        self.assertNotIn(rdr.DRIVER_ERROR_PREFIX, err)
+        _, _, payload = blocks(out)
+        self.assertEqual(payload["plan"], KO_PLAN)
 
 
 if __name__ == "__main__":

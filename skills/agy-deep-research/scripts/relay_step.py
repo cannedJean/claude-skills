@@ -149,6 +149,17 @@ APP_STATUS_RE = re.compile(r"status=([a-z_]+)")
 PROVENANCE_PREFIX = "[REPORT_PROVENANCE] "      # printed by the driver right before the report block
 CONVERSATION_PREFIX = "[CONVERSATION] "          # printed by the driver as soon as the step's conversation is bound
 DRIVER_ERROR_PREFIX = "[DRIVER_ERROR] "          # the driver's error record on stderr: {"code", "message", "details", "exit_code"}
+STEP_DEADLINE_ENV = "AGY_DR_STEP_DEADLINE"     # the deadline this relay gives the driver run (s); the driver fits its waits in it
+# every code the UI Automation driver may put in a [DRIVER_ERROR] record (run_deep_research.py; tests keep them in step)
+DRIVER_ERROR_CODES = frozenset({
+    "CONVERSATION_MISMATCH", "INPUT_NOT_EMPTY", "PROMPT_READBACK_MISMATCH", "SEND_NOT_AVAILABLE", "MODEL_NOT_AVAILABLE",
+    "MODEL_AMBIGUOUS", "MODEL_NOT_SELECTED", "DEEP_RESEARCH_TOGGLE_NOT_FOUND", "UI_ACTION_FAILED", "UI_TIMEOUT",
+    "NO_PLAN_CARD", "SAFETY_BLOCKED", "GEMINI_ERROR_RESPONSE", "PLAN_TIMEOUT", "PLAN_CARD_COUNT_MISMATCH",
+    "PLAN_CARD_UNRECOGNISED", "UNREVIEWED_START", "COUNTDOWN_NOT_CANCELLED", "UI_LOCATOR_MISS",
+    "GEMINI_IN_USE", "HOST_BUSY", "HOST_MODE_UNAVAILABLE", "HOST_START_TIMEOUT", "HOST_DESKTOP_LOST", "HOST_REFUSED",
+    "APP_NOT_INSTALLED", "UIA_UNAVAILABLE", "LOCATOR_CONFIG_ERROR", "UIA_BACKEND_ERROR", "DRIVER_ERROR",
+    "UIA_DRIVER_NOT_IMPLEMENTED", "DRIVER_STATE_MISMATCH", "DEADLINE_TOO_SHORT",
+})
 DRIVER_ERROR_HINT = ("the driver reported this code (see its details and the stderr log); the caller decides, and a step "
                      "that already sent a prompt or feedback is never re-run")
 _CONVERSATION_PATH_RE = re.compile(r"(?:^|/)app/([A-Za-z0-9_-]+)(?:/|$)", re.IGNORECASE)   # same parser as the driver
@@ -317,7 +328,7 @@ def text_arg(features, feat_key, flag_file, flag_text, path, what):
     return [flag_text, text]
 
 
-def probe_page(req, py, timeout=45):
+def probe_page(req, py, timeout=45, job=None):
     """Read-only look at the conversation through the driver's `--step probe` (it settles the page on req.resume_url).
     Returns the driver's {"start_enabled": bool, "plan_cards": int, "url": str} plus `active_confirm` (1/0) for the gates below, or
     {"error": ...} when the probe failed (non-zero exit or no JSON)."""
@@ -328,6 +339,8 @@ def probe_page(req, py, timeout=45):
     argv = [py, driver, "--step", "probe"]
     if req.get("resume_url"):
         argv += ["--resume-url", req["resume_url"]]
+    if job and '"--job-dir"' in read_text(driver):   # the driver reads this job's job.json / relay/driver_state.json
+        argv += ["--job-dir", job]
     extra_env = req.get("env") or {}
     if not isinstance(extra_env, dict):
         return {"error": f"request env must be an object of NAME: value, not {type(extra_env).__name__}"}
@@ -335,7 +348,7 @@ def probe_page(req, py, timeout=45):
     env.update({str(k): str(v) for k, v in extra_env.items()})
     try:
         r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=timeout, stdin=subprocess.DEVNULL, env=env)
+                           timeout=timeout, stdin=subprocess.DEVNULL, env=env, cwd=job or None)
     except Exception as e:  # noqa: BLE001 - the probe is best effort
         return {"error": scrub_text(str(e)[-300:])}
     lines = (r.stdout or "").strip().splitlines()
@@ -501,9 +514,14 @@ def classify(run, step):
         return Fail("CONFIRM_MISSING", "no active '연구 시작' button: the driver was about to wait for a report this job never started", 2,
                     "the countdown may have started the research, or the tab is on another conversation; the caller decides (collect or a new plan)")
     rec = parse_driver_error(text) if run.rc not in (0, None) else None
+    if rec and (rec["code"] not in DRIVER_ERROR_CODES or rec.get("exit_code") not in (2, 3)
+                or rec.get("exit_code") != run.rc):
+        # a record this relay does not know, or one that disagrees with how the driver exited: not trusted
+        return Fail("DRIVER_CRASH", scrub_text(f"inconsistent driver error record (rc {run.rc}, code {rec['code']!r}, "
+                                               f"exit_code {rec.get('exit_code')!r})"), 3, "see the stderr log")
     if rec:   # the UI Automation driver's own error record: its code and exit code win over needles and rc
-        code = scrub_text(rec["code"])
-        exit_code = rec.get("exit_code") if rec.get("exit_code") in (2, 3) else 3
+        code = rec["code"]
+        exit_code = rec["exit_code"]
         hint = next((h for _n, c, _e, h in FAILURES if c == code), DRIVER_ERROR_HINT)
         if code == "CONVERSATION_MISMATCH" and step in ("plan", "edit"):
             hint = PLAN_MISMATCH_HINT
@@ -626,7 +644,7 @@ def do_step(job, req, relay_dir, result_path):
         raise Fail("BAD_REQUEST", f"unknown step '{step}'", 5)
     driver = resolve_driver(req)
     if step == "probe":
-        info = probe_page(req, req.get("python") or sys.executable)
+        info = probe_page(req, req.get("python") or sys.executable, job=job)
         res = base_result(req)
         res.update({"status": "probed" if not info.get("error") else "error", "probe": info})
         if info.get("error"):
@@ -668,7 +686,7 @@ def do_step(job, req, relay_dir, result_path):
         argv += ["--step", "edit", "--resume-url", req["resume_url"]] + text_arg(feats, "edit_prompt_file", "--edit-prompt-file", "--edit-prompt", req["feedback_file"], "feedback")
         deadline = int(req.get("deadline") or PLAN_DEADLINE)
         allow_missing = True
-        probe_info = probe_page(req, py)   # settles the tab on the conversation first (the driver's own goto + 2.5 s is a race); errors are only reported
+        probe_info = probe_page(req, py, job=job)   # settles the tab on the conversation first (the driver's own goto + 2.5 s is a race); errors are only reported
     elif step == "auto":
         if not req.get("prompt_file") or not req.get("output"):
             raise Fail("BAD_REQUEST", "auto needs prompt_file and output", 5)
@@ -686,7 +704,7 @@ def do_step(job, req, relay_dir, result_path):
         allow_missing = True if step == "collect" else bool(req.get("allow_missing_confirm"))
         if step == "approve":
             # settle the tab on the conversation and make sure the card the caller approved is the one on screen
-            probe_info = probe_page(req, py)
+            probe_info = probe_page(req, py, job=job)
             if not probe_info.get("error"):
                 why = probe_conversation_mismatch(req, probe_info)
                 if why:   # the start button on screen belongs to another conversation: never click it
@@ -713,7 +731,7 @@ def do_step(job, req, relay_dir, result_path):
                     return res, 2
         if step == "collect":
             # collect re-attaches; it must never be the click that starts a research the caller did not approve
-            probe_info = probe_page(req, py)
+            probe_info = probe_page(req, py, job=job)
             if probe_info.get("error") and not req.get("allow_probe_error"):
                 res = base_result(req)
                 res.update({"status": "error", "code": "COLLECT_PROBE_FAILED", "exit_code": 3, "probe": probe_info,
@@ -741,7 +759,9 @@ def do_step(job, req, relay_dir, result_path):
     write_json_atomic(os.path.join(relay_dir, prefix + ".cmd.json"), {"argv": argv, "cwd": job, "started": now_iso(), "deadline_s": deadline})
     progress = os.path.join(relay_dir, "progress.jsonl") if step in ("approve", "collect", "auto") else None
     conv_kw = {"conversation_path": os.path.join(relay_dir, "conversation.json"), "conversation_meta": {"seq": seq, "step": step}}
-    run = run_driver(argv, job, out_log, err_log, deadline, allow_missing, progress_path=progress, extra_env=req.get("env"), **conv_kw)
+    drv_env = dict(req.get("env") or {}) if isinstance(req.get("env"), dict) else {}
+    drv_env[STEP_DEADLINE_ENV] = str(deadline)
+    run = run_driver(argv, job, out_log, err_log, deadline, allow_missing, progress_path=progress, extra_env=drv_env, **conv_kw)
     err = classify(run, step)
     retried = False
     if err and err.code in RETRY_ONCE and step in ("plan", "auto") and not run.prompt_sent:
@@ -750,7 +770,7 @@ def do_step(job, req, relay_dir, result_path):
         retried = True
         out_log = os.path.join(relay_dir, prefix + "b.stdout.txt")
         err_log = os.path.join(relay_dir, prefix + "b.stderr.txt")
-        run = run_driver(argv, job, out_log, err_log, deadline, allow_missing, progress_path=progress, extra_env=req.get("env"), **conv_kw)
+        run = run_driver(argv, job, out_log, err_log, deadline, allow_missing, progress_path=progress, extra_env=drv_env, **conv_kw)
         err = classify(run, step)
     res = base_result(req, run)
     res.update({"stdout_log": out_log, "stderr_log": err_log, "retried": retried})

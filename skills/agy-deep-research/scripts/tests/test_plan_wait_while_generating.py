@@ -50,7 +50,8 @@ class TestPlanWait(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("GEMINI_DR_PLAN_MAX_WAIT", None)
             self.assertEqual(rdr.plan_max_wait_default(), 900)
-            self.assertEqual(rdr.default_step_config().card_timeout_s, 900)
+            # without the env cap the card wait is what the relay deadline leaves (test_driver_uia.DeadlineTests)
+            self.assertLessEqual(rdr.default_step_config().card_timeout_s, 900)
         with patch.dict(os.environ, {"GEMINI_DR_PLAN_MAX_WAIT": "x"}):
             self.assertEqual(rdr.plan_max_wait_default(), 900)
 
