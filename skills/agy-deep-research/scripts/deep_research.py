@@ -44,6 +44,8 @@ DEFAULT_AGY_TASK = SKILL_DIR.parent / "agy-delegate" / "scripts" / "agy_task.py"
 DEFAULT_TARGET_SKILL_DIR = Path.home() / ".gemini" / "config" / "skills" / "local-gemini-deep-research"
 BUNDLED_SCRIPTS = ("relay_step.py", "run_deep_research.py", "gemini_host.py", "uitree.py", "privacy.py", "locators.py",
                    "locators.json")
+# scripts an earlier release installed into the target; setup deletes exactly these names, preflight flags them
+OBSOLETE_SCRIPTS = ("patch_gemini_app.py", "chrome_launcher.py")
 BUNDLED_REF_SKILL = SKILL_DIR / "references" / "SKILL.md"
 RELAY_TASK_TEMPLATE = SKILL_DIR / "prompts" / "agy_relay_task.md"
 
@@ -933,13 +935,14 @@ def check_sync_status(target_dir: Path) -> dict:
         all_matching = False
     files_status["SKILL.md"] = {"bundled_sha256": src_skill_sha, "target_sha256": dst_skill_sha, "in_sync": src_skill_sha == dst_skill_sha}
 
+    obsolete = [f"scripts/{name}" for name in OBSOLETE_SCRIPTS if (target_dir / "scripts" / name).exists()]
     if not target_dir.exists() or not all_present:
         status = "missing_target"
-    elif all_matching:
+    elif all_matching and not obsolete:
         status = "in_sync"
     else:
         status = "out_of_sync"
-    return {"status": status, "target_dir": str(target_dir), "files": files_status}
+    return {"status": status, "target_dir": str(target_dir), "files": files_status, "obsolete_files": obsolete}
 
 
 def cmd_setup(a) -> int:
@@ -947,7 +950,12 @@ def cmd_setup(a) -> int:
     scripts_dst = target_dir / "scripts"
     scripts_dst.mkdir(parents=True, exist_ok=True)
 
-    copied, updated, unchanged = [], [], []
+    copied, updated, unchanged, removed_obsolete = [], [], [], []
+    for name in OBSOLETE_SCRIPTS:
+        old = scripts_dst / name
+        if old.is_file() or old.is_symlink():
+            old.unlink()
+            removed_obsolete.append(f"scripts/{name}")
     for name in BUNDLED_SCRIPTS:
         src = SCRIPT_DIR / name
         if not src.is_file():
@@ -981,6 +989,7 @@ def cmd_setup(a) -> int:
         "copied": copied,
         "updated": updated,
         "unchanged": unchanged,
+        "removed_obsolete": removed_obsolete,
         "sync_status": sync_info["status"],
         "files": sync_info["files"],
     }
@@ -1028,10 +1037,15 @@ def load_job(job_dir: Path) -> dict:
     if not job:
         die(f"job metadata missing or corrupted: {job_file}", 5, code="INVALID_JOB_STATE")
     if job.get("host") != HOST or "browser" in job:
+        # a finished report must stay findable: say where it is and what the last relay result was
+        out_path = job.get("out_path") or str(job_dir / "report.md")
+        relay_result = read_json_safe(job_dir / "relay" / "result.json")
         die(f"job {job.get('job_id') or job_dir.name} was created for a removed browser mode "
             f"(browser={job.get('browser') or 'app'!r}); it cannot be run, edited, approved or collected", 2,
             code="LEGACY_BROWSER_MODE",
-            hint="start a new job (init or auto) with the same prompt and goal; the old job directory is left as it is")
+            hint="start a new job (init or auto) with the same prompt and goal; the old job directory is left as it is",
+            job_status=job.get("status"), out_path=out_path, out_exists=Path(out_path).is_file(),
+            relay_result_status=relay_result.get("status") if isinstance(relay_result, dict) else None)
     return job
 
 

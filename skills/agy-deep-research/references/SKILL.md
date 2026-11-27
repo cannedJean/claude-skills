@@ -12,50 +12,20 @@ description: >-
 
 # Local Gemini App Deep Research Skill
 
-When called by the Claude skill `agy-deep-research`, the default is **Chrome mode**: `run_deep_research.py` drives gemini.google.com in a visible Chrome window on a dedicated profile (`scripts/chrome_launcher.py`, CDP port 9224) and nothing is patched. Otherwise this skill automates the locally installed **Google Gemini Windows Desktop App** (`%LOCALAPPDATA%\Google\Gemini\app-*\Gemini.exe`) via Chrome DevTools Protocol (CDP port 9223) and Playwright to execute **Gemini Deep Research** using the user's logged-in Google account without requiring an API key.
+This skill runs **Gemini Deep Research** in the locally installed **Google Gemini Windows Desktop App** using the user's logged-in Google account, without an API key. The page driver (`run_deep_research.py`) is being replaced by a Windows UI Automation driver: until it ships, every driver step fails with `UIA_DRIVER_NOT_IMPLEMENTED`. On any error code, report it without retrying.
 
 ## Compatibility & Prerequisites
 
 - **Supported Operating Systems**: Windows 11 / Windows 10 (x64).
-- **Google Gemini Desktop App**: Version **v1.18.0+** (patch verified on v1.19.0; tested on Electron 44.6.0+, Chromium 152.0.7977.130+). Installed at `%LOCALAPPDATA%\Google\Gemini\app-*\Gemini.exe`.
+- **Google Gemini Desktop App**: installed for the current Windows user. Never modify, patch, restart or launch it yourself.
 - **Python Runtime**: Python 3.9+ (developed and tested on Python 3.12).
-- **Runtime Dependency**: `playwright` must be installed:
-  ```powershell
-  python -m pip install --user playwright
-  ```
-  *(Note: Playwright's browser binaries are not required; only the Python client library is needed to connect over CDP).*
 - **Google Account Authentication**: The user must be signed in to their Google account in the Gemini desktop app. The automation inherits the user's logged-in session, active Gemini Advanced / Google AI Pro subscription, and connected Google Workspace connectors (Google Drive, Gmail, Docs) without requiring external API keys.
 
 ---
 
 ## Architecture & How It Works
 
-### 1. Dynamic ASAR Security Argument Patcher ([patch_gemini_app.py](./scripts/patch_gemini_app.py))
-- **Electron Security Bypass**: Packaged Electron applications enforce strict argument validation (`app.isPackaged`) and abort execution if unauthorized command-line switches like `--remote-debugging-port` are detected:
-  ```javascript
-  var Pg=wg(h.app.isPackaged&&P!=="dev",process.argv,process.execArgv);
-  Pg?(c.error("security",_g,`(switch: --${Pg})`),Dt(),h.app.exit(1)):Rb();
-  ```
-- **Dynamic Minification Regex**: `patch_gemini_app.py` uses a flexible regex pattern `(?:[\w$]+)\.error("security", ...)` (`SECURITY_GUARD_RE`; every identifier is `[\w$]+` because minified names may contain `$`, e.g. `$m` in v1.19.0) that accommodates minified logger names across Electron releases (`c.error` in v1.18.0+, `u.error` in earlier releases) while dynamically resolving the application instance variable (e.g., `h`) and continuation function (e.g., `Rb`).
-- **Byte-Length Parity Preservation**: Electron ASAR archive headers rely on precise 64-bit byte offsets. Rather than altering file offsets (which would corrupt the ASAR index), the patch replaces the exit call with:
-  ```javascript
-  h.app.commandLine.appendSwitch("remote-debugging-port","9223");h.app.commandLine.appendSwitch("disable-renderer-backgrounding");Rb();/*    */
-  ```
-  Trailing comment padding (`/* ... */`) ensures that the replacement string matches the exact character count and byte length of the original target block.
-- **Backup & Rollback**: Automatically creates `app.asar.bak` prior to modification. Supports `--dry-run`, `--check`, and `--restore` operations.
-
-### 2. WMI Detached Process Launcher & Background Throttling Bypass
-- **Non-Focus-Stealing Hidden Execution**: Launches `Gemini.exe --hide` via WMI `Win32_Process.Create`. The application process runs detached in the background without stealing window focus, showing a taskbar window, or interrupting user workflows.
-- **Port 9223 Standardization**: Unified default CDP port `9223` (`http://127.0.0.1:9223`) prevents collisions with default Chrome debugging sessions.
-- **Background Throttling Bypass**: Chromium normally throttles timers and CPU budgets in background windows. The combination of command-line switch `--disable-renderer-backgrounding` and CDP protocol commands `Page.setWebLifecycleState(state="active")` and `Emulation.setFocusEmulationEnabled(enabled=True)` ensures continuous, unthrottled deep research execution.
-
-### 3. Playwright CDP Driver & Live E2E Automation ([run_deep_research.py](./scripts/run_deep_research.py))
-- **CDP Connection**: Connects to `http://127.0.0.1:9223` via `playwright.sync_api.connect_over_cdp`.
-- **Pro Model & Deep Research Toggle**: Automatically selects **Pro** mode (`[data-test-id="bard-mode-menu-button"]`) and activates the Deep Research tool toggle (`button:is(:has-text("Deep Research"), :has-text("심층 리서치"), :has-text("딥리서치"))`).
-- **Angular / Quill Event Dispatch**: Submits prompts using native `send_btn.click(force=True)` with automatic fallback to focused keyboard `Enter` dispatch, ensuring reliable event firing in Angular Material Design Components.
-- **Countdown Fuse Cancellation**: Intercepts the Research Plan card (`[data-test-id="research-steps"]`) and clicks `[data-test-id="cancel-fuse-button"]` to disarm the auto-start countdown timer, preventing premature unreviewed execution.
-- **Supervised Plan Review & Revision Loop**: Emits structured JSON hook payloads (`[PLAN_REVIEW_HOOK_START]`). On revision (`--step edit`), clicks `계획 수정` (`[data-test-id="edit-button"]`), handles the intermediate turn (`"This is the current plan. What changes do you want to make?"`), submits imperative delta instructions, and extracts the revised plan.
-- **Approval & Report Extraction**: Clicks `연구 시작` (`[data-test-id="confirm-button"]`), monitors live thought streaming (`thought-header` / `thought-body`), tracks completion (`immersive-entry-chip gem-processing-card.completed`), and extracts a complete GitHub-Flavored Markdown report with numbered citations and sources (verified live: 97+ sources, 56 KB report, 139 cited sources).
+The previous automation (a patched app with a debugging port, or a separate browser window) has been removed. The driver is being replaced by a UI Automation driver; on any error code, report it without retrying. Never run, recreate or look for the removed patcher or launcher scripts.
 
 ---
 
@@ -154,7 +124,7 @@ flowchart TD
      --step plan `
      --prompt "<PROMPT>"
    ```
-   - Connects over CDP port 9223, switches to Pro mode, enables Deep Research, submits prompt, clicks `[data-test-id="cancel-fuse-button"]` to disarm the countdown fuse, and emits `[PLAN_REVIEW_HOOK_START] ... [PLAN_REVIEW_HOOK_END]` JSON (`plan_text`, `iteration`, `url`).
+   - Switches to Pro mode, enables Deep Research, submits prompt, clicks `[data-test-id="cancel-fuse-button"]` to disarm the countdown fuse, and emits `[PLAN_REVIEW_HOOK_START] ... [PLAN_REVIEW_HOOK_END]` JSON (`plan_text`, `iteration`, `url`).
 
 2. **Step 2 — Verify & Iteratively Modify Plan (`--step edit`, repeat as needed)**:
    - Inspect `plan_text`. If any required subtopics, methodology, or constraints are missing, call `--step edit` with modification instructions:
@@ -237,16 +207,11 @@ names a job directory holding `relay/request.json`. Then:
    `<job>/relay/result.json` (or `started.json`, see below).
 2. Read the result file and report its `status`, `code`, `url`, `plan_count` / `report_chars` in your summary. The plan
    text is in the file; never retype it and never paraphrase it.
-3. **Chrome mode** (`request.json` `env.GEMINI_DR_BROWSER` is `"chrome"`; the task says so): the research runs in a Chrome
-   window, not the desktop app. Never run `patch_gemini_app.py` (it refuses anyway); report every error code, including
-   `CHROME_NOT_FOUND` / `CHROME_CDP_NOT_READY`, without retrying.
-   **App mode**: on `status: "error"` with `CDP_NOT_READY` / `CDP_CONNECT_FAILED` and `prompt_sent: false` you may run
-   `patch_gemini_app.py` once and run the relay once more. The relay never acts twice for one request: a re-run after
+3. On `status: "error"`: the driver is being replaced by a UI Automation driver; on any error code, report it without retrying. The relay never acts twice for one request: a re-run after
    the prompt or feedback reached the conversation is refused as `STEP_ALREADY_ACTED`, and a page timeout after the
    prompt went in is `PAGE_TIMEOUT_AFTER_SEND` (not an environment code). `GEMINI_PAGE_NOT_FOUND` /
-   `UI_SELECTOR_TIMEOUT` usually mean the app is not signed in: report them (never sign in yourself; a hidden running
-   app cannot be shown by the launcher, the caller restarts it visibly for the user). Any other code is reported,
-   not retried or worked around.
+   `UI_SELECTOR_TIMEOUT` usually mean the app is not signed in: report them (never sign in yourself). Every code is
+   reported, not retried or worked around.
 4. Do not craft or alter the prompt; do not review, modify or approve the plan; do not answer a plan review
    (`APPROVE` / `EDIT:`) yourself; never invoke `run_deep_research.py` yourself (the relay is the only thing that runs
    it); do not touch `request.json`, `prompt.md`, `goal.md`, `feedback_*.md`, `result.json` or `started.json`. The
@@ -256,7 +221,7 @@ Relay steps map to the step-by-step CLI loop: `plan` → `edit`* → `approve`. 
 and no-review paths:
 
 - `collect` re-attaches to a research that is running or finished. It **never starts one**: the relay first probes the
-  page read-only (through the driver's Python and playwright, navigating to the conversation if the tab is elsewhere)
+  page read-only (the driver's `--step probe`, which settles the page on the conversation first)
   and refuses with `COLLECT_WOULD_START` when the plan card still has an active "연구 시작" button; only then does it run
   `--step approve`, which without an active button falls through to the report wait. Should a click still happen (a
   card rendered in between) the result is `COLLECT_STARTED_RESEARCH`, not `completed`.
@@ -266,8 +231,8 @@ and no-review paths:
   `CONVERSATION_MISMATCH`. `edit` probes only to settle the tab on the conversation before the driver runs.
 - `auto` is the caller's explicit no-review mode (`--step auto`); its conversation is the new chat the driver pinned
   when the plan appeared, recorded from the report provenance (never from a later look at the page).
-- `probe` only runs the read-only page probe (`active_confirm`, `active_edit`, `plan_cards`, `report_len`, `url`).
-- When the probe itself fails (CDP down, playwright missing) `collect` refuses with `COLLECT_PROBE_FAILED` unless the
+- `probe` only runs the read-only page probe: `{"start_enabled": bool, "plan_cards": int, "url": str}`.
+- When the probe itself fails (the driver is not available) `collect` refuses with `COLLECT_PROBE_FAILED` unless the
   request carries `allow_probe_error` (the caller sets it only when an approve is on record).
 
 **Conversation identity.** The Gemini app has one page that every driver shares, so another job (or the user) can
@@ -286,14 +251,14 @@ copies the report out only after its own checks. Report these codes as they are:
 the app, or touch the moved file.
 
 For `approve` / `collect` / `auto` the request usually sets `mode: "detach"`: the relay then starts a detached worker
-(through WMI, the way `Gemini.exe` is launched) and returns `status: "started"` with the worker's pid in
+(through WMI) and returns `status: "started"` with the worker's pid in
 `relay/started.json`; `result.json` appears when the research is done. `started` is the expected successful result of
 that turn — do not wait for the research, do not look for `result.json`, and do not run the relay again (a second run
 for the same request returns the existing `started.json` instead of starting another worker). The plan step retries
 once on its own when the Tools menu fails to open right after a new chat (`retried: true` in the result).
 
 `request.json` fields: `step`, `driver` (path of `run_deep_research.py`), `prompt_file`, `feedback_file`, `resume_url`,
-`output`, `timeout`, `deadline`, `mode`, `show`, `allow_missing_confirm`, `seq`, `python`, `env`, `cdp_url`.
+`output`, `timeout`, `deadline`, `mode`, `show`, `allow_missing_confirm`, `seq`, `python`, `env`.
 `result.json` fields: `status` (`plan_ready` | `plan_revised` | `completed` | `started` | `probed` | `error`), `code`,
 `message`, `hint`, `rc`, `event`, `url`, `conversation_id`, `conversation_url`, `report_title`, `plan`, `plan_count`, `edit_button_clicked`,
 `confirm_clicked`, `prompt_sent`, `app_status`, `navigated`, `retried`, `probe`, `report_file`, `report_chars`,
@@ -310,7 +275,5 @@ driver's provenance: the conversation the report was extracted from.
 | **Premature Page Reload During Deep Thinking** | When the model takes >60s to think (`has-thoughts`), a generic page reload would cancel the generation. | `run_deep_research.py` incorporates `is_generation_in_progress(page)` to inspect for active stop buttons (`button[aria-label*="중지"]`, `button[aria-label*="Stop"]`, `[data-mat-icon-name="stop"]`) and `thinking-overlay`. Page reloads are strictly suppressed while reasoning is active, and timeout is extended to 300s. |
 | **Angular / Quill Prompt Unsubmitted** | DOM `.click()` sometimes bypasses Angular MDC event listeners in new chat interfaces. | `submit_prompt` dispatches native pointer events via `send_btn.click(force=True)` with automatic fallback to focusing the Quill `textbox` and dispatching keyboard `Enter`. |
 | **New Chat Navigation Stalls** | Page navigation in single-page apps can stall if a previous conversation state persists. | `run_deep_research.py` uses a top-level `new_chat_clicked` selector checking for visible `'새 채팅'` buttons before falling back to `page.goto("https://gemini.google.com/app")`. |
-| **CDP Port Connection Refused (`CDP_NOT_READY`)** | `Gemini.exe` is not running or CDP port 9223 is not listening. | Run `python scripts/patch_gemini_app.py --check` or start the patched app via `python scripts/patch_gemini_app.py`. Test endpoint: `Invoke-RestMethod -Uri 'http://127.0.0.1:9223/json/version'`. |
-| **App Authentication Required** | User is not logged into Google in the desktop application. | Launch the app visibly once via `python scripts/patch_gemini_app.py --show`, log into your Google account, and close the window. |
-| **ASAR Pattern Mismatch** | Gemini desktop app was updated and the startup JS minification pattern changed. | Run `python scripts/patch_gemini_app.py --dry-run` to inspect matching snippets. `SECURITY_GUARD_RE` uses `[\w$]+` for every identifier, so minifier renames (including `$` names) still match; if the guard statement itself changed shape, update `SECURITY_GUARD_RE` and `scripts/tests/test_patch_pattern.py`. |
-| **Restore Original Desktop App** | Need to revert Electron ASAR to stock state. | Run `python scripts/patch_gemini_app.py --restore` to restore `app.asar.bak`. |
+| **App Authentication Required** | User is not logged into Google in the desktop application. | Report it; the user signs in to the Gemini app themselves. Never sign in, launch or restart the app yourself. |
+| **Any driver error code** (including `UIA_DRIVER_NOT_IMPLEMENTED`) | The driver is being replaced by a UI Automation driver. | Report the code without retrying. |

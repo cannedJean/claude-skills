@@ -9,6 +9,9 @@ Covers:
   - relay_step: a request's old endpoint field is ignored; the probe is the driver's `--step probe`, and a failing
     probe is an error the collect step maps to COLLECT_PROBE_FAILED
   - run_deep_research.py: every step except --help / --dry-run exits 3 with UIA_DRIVER_NOT_IMPLEMENTED
+  - setup removes the obsolete patcher / launcher copies from the target; preflight flags them as out of sync
+  - a refused legacy `status` still shows where a finished report is (job_status, out_path, out_exists, relay result)
+  - probe contract {"start_enabled", "plan_cards", "url"}: approve's PLAN_CHANGED gate reads plan_cards
 """
 from __future__ import annotations
 
@@ -92,9 +95,70 @@ class LegacyJobTestCase(DeepResearchTestBase):
         self.rewrite_job(job_dir, host="uia", browser="app")
         self.assert_refused("legacy_mixed")
 
+    def test_legacy_status_keeps_a_finished_report_visible(self) -> None:
+        job_dir = self.init_job("legacy_done")
+        self.rewrite_job(job_dir, host=None, browser="chrome")
+        job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+        job["status"] = "completed"
+        (job_dir / "job.json").write_text(json.dumps(job), encoding="utf-8")
+        Path(job["out_path"]).write_text("# Report\n", encoding="utf-8")
+        (job_dir / "relay" / "result.json").write_text(json.dumps({"status": "completed", "step": "approve"}),
+                                                       encoding="utf-8")
+        rc, res, err = self.run_dr(["status", "--job", "legacy_done"])
+        self.assertEqual(rc, 2, (res, err))
+        self.assertEqual(res.get("code"), "LEGACY_BROWSER_MODE")
+        self.assertEqual(res.get("job_status"), "completed")
+        self.assertEqual(Path(res.get("out_path")).resolve(), Path(job["out_path"]).resolve())
+        self.assertIs(res.get("out_exists"), True)
+        self.assertEqual(res.get("relay_result_status"), "completed")
+
+    def test_legacy_status_without_report(self) -> None:
+        job_dir = self.init_job("legacy_none")
+        self.rewrite_job(job_dir, host=None, browser=None)
+        rc, res, _ = self.run_dr(["status", "--job", "legacy_none"])
+        self.assertEqual(rc, 2)
+        self.assertIs(res.get("out_exists"), False)
+        self.assertIsNone(res.get("relay_result_status"))
+
     def test_browser_option_is_gone(self) -> None:
         rc, _, _ = self.run_dr(["init", "--job", "x_opt", "--browser", "chrome", "--prompt", PROMPT, "--goal", GOAL])
         self.assertNotEqual(rc, 0)
+
+
+OBSOLETE = ("patch_gemini_app.py", "chrome_launcher.py")
+
+
+class SetupObsoleteFilesTestCase(DeepResearchTestBase):
+    def test_setup_removes_obsolete_files_and_preflight_flags_them(self) -> None:
+        scripts = self.target_skill_dir / "scripts"
+        scripts.mkdir(parents=True)
+        for name in OBSOLETE + ("keep_me.py",):
+            (scripts / name).write_text("# old\n", encoding="utf-8")
+
+        rc, pf, _ = self.run_dr(["preflight", "--target-dir", str(self.target_skill_dir)])
+        self.assertEqual(sorted(pf.get("checks", {}).get("sync", {}).get("obsolete_files", [])),
+                         sorted(f"scripts/{n}" for n in OBSOLETE), pf)
+
+        rc, st, _ = self.run_dr(["setup", "--target-dir", str(self.target_skill_dir)])
+        self.assertEqual(rc, 0, st)
+        self.assertEqual(sorted(st.get("removed_obsolete", [])), sorted(f"scripts/{n}" for n in OBSOLETE))
+        for name in OBSOLETE:
+            self.assertFalse((scripts / name).exists(), name)
+        self.assertTrue((scripts / "keep_me.py").is_file(), "setup removed a file that is not on the obsolete list")
+        self.assertEqual(st["sync_status"], "in_sync")
+
+        rc, pf2, _ = self.run_dr(["preflight", "--target-dir", str(self.target_skill_dir)])
+        self.assertEqual(pf2["sync_status"], "in_sync")
+        self.assertEqual(pf2["checks"]["sync"]["obsolete_files"], [])
+
+    def test_obsolete_file_alone_makes_a_synced_target_out_of_sync(self) -> None:
+        rc, st, _ = self.run_dr(["setup", "--target-dir", str(self.target_skill_dir)])
+        self.assertEqual(st["sync_status"], "in_sync")
+        self.assertEqual(st.get("removed_obsolete"), [])
+        (self.target_skill_dir / "scripts" / "chrome_launcher.py").write_text("# old\n", encoding="utf-8")
+        rc, pf, _ = self.run_dr(["preflight", "--target-dir", str(self.target_skill_dir)])
+        self.assertEqual(pf["sync_status"], "out_of_sync")
+        self.assertEqual(pf["checks"]["sync"]["obsolete_files"], ["scripts/chrome_launcher.py"])
 
 
 class RelayTaskPromptTestCase(unittest.TestCase):
@@ -138,9 +202,18 @@ class RelayProbeTestCase(unittest.TestCase):
 
     def test_failing_probe_is_an_error(self) -> None:
         req = {"resume_url": "https://gemini.google.com/app/abc", "driver": str(SCRIPTS_DIR / "run_deep_research.py")}
-        info = relay_step.probe_page(req, sys.executable)
+        done = subprocess.CompletedProcess([], 3, stdout='{"status": "error", "code": "UIA_DRIVER_NOT_IMPLEMENTED"}\n',
+                                           stderr="")
+        with mock.patch.object(relay_step.subprocess, "run", return_value=done) as run:
+            info = relay_step.probe_page(req, sys.executable)
+        run.assert_called_once()
         self.assertIn("error", info)
         self.assertIn("UIA_DRIVER_NOT_IMPLEMENTED", info["error"])
+
+    def test_probe_contract_is_documented(self) -> None:
+        import run_deep_research as rdr
+        for doc in (relay_step.__doc__, rdr.__doc__):
+            self.assertIn('{"start_enabled": bool, "plan_cards": int, "url": str}', doc or "")
 
     def test_no_removed_failure_codes(self) -> None:
         codes = {f[1] for f in relay_step.FAILURES}
@@ -150,11 +223,56 @@ class RelayProbeTestCase(unittest.TestCase):
         self.assertIn("UIA_DRIVER_NOT_IMPLEMENTED", codes)
 
 
+class RelayPlanChangedTestCase(unittest.TestCase):
+    URL = "https://gemini.google.com/app/abc"
+
+    def setUp(self) -> None:
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.job = self._tmp.name
+        self.relay_dir = os.path.join(self.job, "relay")
+        os.makedirs(self.relay_dir)
+        self.result_path = os.path.join(self.relay_dir, "result.json")
+        self.driver = os.path.join(self.job, "run_deep_research.py")
+        with open(self.driver, "w", encoding="utf-8") as f:
+            f.write('# fake driver: "--step" "--prompt-file" "--edit-prompt-file"\n')
+
+    def approve(self, plan_cards: int):
+        req = {"relay_version": 2, "step": "approve", "seq": 2, "driver": self.driver, "resume_url": self.URL,
+               "output": os.path.join(self.job, "report.md"), "timeout": 60, "expected_url": self.URL,
+               "expected_plan_count": 1}
+        probe_json = json.dumps({"start_enabled": True, "plan_cards": plan_cards, "url": self.URL})
+        done = subprocess.CompletedProcess([], 0, stdout=probe_json + "\n", stderr="")
+
+        class _Ran(Exception):
+            pass
+
+        with mock.patch.object(relay_step.subprocess, "run", return_value=done), \
+                mock.patch.object(relay_step, "run_driver", side_effect=_Ran()) as run_driver:
+            try:
+                res, code = relay_step.do_step(self.job, req, self.relay_dir, self.result_path)
+            except _Ran:
+                res, code = None, None
+        return res, code, run_driver
+
+    def test_plan_cards_mismatch_is_plan_changed(self) -> None:
+        res, code, run_driver = self.approve(plan_cards=2)
+        self.assertEqual(code, 2)
+        self.assertEqual(res["code"], "PLAN_CHANGED")
+        run_driver.assert_not_called()
+
+    def test_matching_plan_cards_passes_the_gate(self) -> None:
+        _, _, run_driver = self.approve(plan_cards=1)
+        run_driver.assert_called_once()
+
+
 class DriverStubTestCase(unittest.TestCase):
     def run_driver(self, *argv: str) -> subprocess.CompletedProcess:
+        env = dict(os.environ, PYTHONIOENCODING="utf-8")
+        self.assertEqual(env.get("AGY_DR_TEST_SANDBOX"), "1", "the stub driver runs only inside the test sandbox")
         return subprocess.run([sys.executable, str(SCRIPTS_DIR / "run_deep_research.py"), *argv], capture_output=True,
-                              text=True, encoding="utf-8", errors="replace", timeout=60,
-                              env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+                              text=True, encoding="utf-8", errors="replace", timeout=60, env=env)
 
     def test_every_step_refuses_until_the_uia_driver_exists(self) -> None:
         url = "https://gemini.google.com/app/abc"

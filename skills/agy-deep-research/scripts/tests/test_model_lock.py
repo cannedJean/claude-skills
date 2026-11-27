@@ -23,7 +23,8 @@ class _Stop(Exception):
 def _run_main(argv, page):
     """Run the driver's step flow on a fake page (the automation backend that supplies a real page is separate)."""
     args = rdr.parse_args(argv)
-    with patch.object(rdr, "prevent_background_throttling"),          patch.object(rdr, "ensure_pro_mode") as epm:
+    with patch.object(rdr, "prevent_background_throttling"), \
+         patch.object(rdr, "ensure_pro_mode") as epm:
         try:
             rdr.run_flow(page, args)
         except _Stop:

@@ -319,6 +319,33 @@ def _switch_allowed(text: str) -> bool:
     return text in ALLOWED_SWITCHES
 
 
+_OBSOLETE_NAME = re.compile(r"^[A-Za-z0-9_]+\.py$")
+
+
+def _obsolete_name_literals(text: str) -> Dict[int, List[str]]:
+    """{lineno: [source text of each literal]} for `OBSOLETE_SCRIPTS = ("a.py", ...)`: a list of file names that setup
+    deletes from old installs. The only exemption from the token scan: just those literals, and only when every
+    element is a bare single-line `name.py` string; the rest of each line is still scanned."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return {}
+    out: Dict[int, List[str]] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "OBSOLETE_SCRIPTS" and isinstance(node.value, ast.Tuple)):
+            continue
+        elts = node.value.elts
+        if not elts or not all(isinstance(e, ast.Constant) and isinstance(e.value, str)
+                               and _OBSOLETE_NAME.match(e.value) and e.lineno == e.end_lineno for e in elts):
+            continue
+        for e in elts:
+            seg = ast.get_source_segment(text, e)
+            if seg:
+                out.setdefault(e.lineno, []).append(seg)
+    return out
+
+
 def check_forbidden_automation(skill_dir: Path) -> Dict[str, Any]:
     """Fail if scripts/*.py (not tests/) contain CDP/browser-automation tokens or unlisted app switches."""
     start_time = time.time()
@@ -330,7 +357,10 @@ def check_forbidden_automation(skill_dir: Path) -> Dict[str, Any]:
         except Exception as e:
             errors.append(f"{rel}: failed to read: {e}")
             continue
+        exempt = _obsolete_name_literals(text)
         for lineno, line in enumerate(text.splitlines(), start=1):
+            for seg in exempt.get(lineno, ()):
+                line = line.replace(seg, "", 1)
             low = line.lower()
             for tok in FORBIDDEN_TOKENS:
                 pat = re.escape(tok)

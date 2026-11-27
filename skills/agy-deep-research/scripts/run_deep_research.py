@@ -1,3 +1,12 @@
+"""run_deep_research.py - Gemini Deep Research driver (one step per run) for the relay (relay_step.py).
+
+Steps: plan | edit | approve | auto | probe. `--step probe` is read-only and prints one JSON line
+{"start_enabled": bool, "plan_cards": int, "url": str} (start button active, research-plan card count, the
+conversation url after settling on --resume-url).
+
+The Windows UI Automation backend is not written yet: every step except --help / --dry-run prints
+{"status": "error", "code": "UIA_DRIVER_NOT_IMPLEMENTED"} and exits 3 without touching the Gemini app.
+"""
 import argparse
 import json
 import os
@@ -1412,6 +1421,8 @@ def parse_args(argv=None):
     return args
 
 
+# run_flow is UNREACHABLE from main(): main() never obtains a page. It is kept only until the UI Automation backend
+# replaces it (the backend plan deletes it); test_model_lock.py drives it with a fake page meanwhile.
 def run_flow(page, args):
     """Drive one step on `page` (an existing conversation when args.resume_url, else a new chat)."""
     if args.step == "probe":

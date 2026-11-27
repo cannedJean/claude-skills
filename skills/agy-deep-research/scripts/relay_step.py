@@ -29,8 +29,9 @@ request.json fields
   (an old request's endpoint field `cdp_url` is ignored)
 
 `collect` never starts a research: before running the driver it probes the page (read-only: the driver's
-`--step probe`, which prints {"start_enabled": bool, "url": str}) and refuses with COLLECT_WOULD_START when the plan
-card still has an active start button. `probe` only runs that read-only probe and writes it to result.json.
+`--step probe`, which prints {"start_enabled": bool, "plan_cards": int, "url": str}) and refuses with COLLECT_WOULD_START when the plan
+card still has an active start button. approve's PLAN_CHANGED gate compares `plan_cards` with the request's
+`expected_plan_count`. `probe` only runs that read-only probe and writes it to result.json.
   allow_missing_confirm   approve: keep going when the plan card has no active start button (collect: always)
 
 Conversation identity: the Gemini app has one page that every driver shares. approve/collect refuse with
@@ -250,7 +251,7 @@ def text_arg(features, feat_key, flag_file, flag_text, path, what):
 
 def probe_page(req, py, timeout=45):
     """Read-only look at the conversation through the driver's `--step probe` (it settles the page on req.resume_url).
-    Returns the driver's {"start_enabled": bool, "url": str} plus `active_confirm` (1/0) for the gates below, or
+    Returns the driver's {"start_enabled": bool, "plan_cards": int, "url": str} plus `active_confirm` (1/0) for the gates below, or
     {"error": ...} when the probe failed (non-zero exit or no JSON)."""
     try:
         driver = resolve_driver(req)
@@ -724,8 +725,8 @@ def do_step(job, req, relay_dir, result_path):
 
 def spawn_detached(job, req):
     """Start a worker relay that keeps running after the caller (and agy's shell) exits; it writes result.json when done.
-    On Windows the worker is created through WMI (Win32_Process.Create), the same way the driver launches Gemini.exe,
-    so it belongs to no job object or process tree that ends with the caller's turn."""
+    On Windows the worker is created through WMI (Win32_Process.Create), so it belongs to no job object or process
+    tree that ends with the caller's turn."""
     relay_dir = os.path.join(job, "relay")
     os.makedirs(relay_dir, exist_ok=True)
     log_path = os.path.join(relay_dir, f"{req['step']}_worker.log")

@@ -136,6 +136,20 @@ class StaticGuardsTest(unittest.TestCase):
         res = rv.check_no_app_dir_writes(self.skill)
         self.assertTrue(res["passed"], res["errors"])
 
+    def test_obsolete_scripts_tuple_is_the_only_exemption(self):
+        # a removal list of obsolete file names is allowed; the same names anywhere else are not
+        self.put("ok.py", 'OBSOLETE_SCRIPTS = ("patch_gemini_app.py", "chrome_launcher.py")\n')
+        self.assertTrue(rv.check_forbidden_automation(self.skill)["passed"])
+        for body in ('import chrome_launcher\n',
+                     'X = ("chrome_launcher.py",)\n',
+                     'OBSOLETE_SCRIPTS = ("chrome_launcher.py",)  # import chrome_launcher\n',
+                     'OBSOLETE_SCRIPTS = ("chrome_launcher.py", "--remote-debugging-port=1")\n',
+                     'OBSOLETE_SCRIPTS = ("chrome_launcher.py", "app.asar")\n',
+                     'OBSOLETE_SCRIPTS = ("x.py",)\nY = "chrome_launcher"\n'):
+            with self.subTest(body=body):
+                self.put("ok.py", body)
+                self.assertFalse(rv.check_forbidden_automation(self.skill)["passed"])
+
     def test_current_tree_passes(self):
         real_skill = Path(HERE).parent.parent
         for check in (rv.check_forbidden_automation, rv.check_no_app_dir_writes):
