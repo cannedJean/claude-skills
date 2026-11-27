@@ -21,8 +21,10 @@ In deep-research mode (AGY_CONFINE_MODE="deep-research"):
   - Also denied there with rule "protected": files with an executable/script extension (.bat .cmd .com .exe .ps1
     .psm1 .vbs .vbe .js .jse .wsf .wsh .lnk .pif .scr .msc .hta .cpl), Python artefacts (.py .pyw .pyc .pyo .pyz
     .pth), anything under __pycache__, and files named python/python3/py with any extension.
-  - run_command needs token 0 to be a bare python / python3 / py (optionally .exe) or exactly sys.executable,
-    and is permitted only for clean Python execution of the canonical
+  - run_command must match exactly INTERP [FLAGS] SCRIPT --job JOB [--worker] (no ' ^ % ! & | < > ( ) ; ` $ or
+    newline anywhere; tokens fully double-quoted or unquoted; paths compared literally, case and separator folded
+    only): INTERP a bare python / python3 / py (optionally .exe) or the literal sys.executable, FLAGS from
+    -u -B -E -s -S -O -OO, SCRIPT the canonical
     <AGY_CONFINE_DR_DIR>/scripts/relay_step.py --job <workdir> without shell chaining / redirections; any other
     script (a relay_step.py in the work dir included) and all other shell commands are denied with rule "shell".
 
@@ -75,7 +77,9 @@ SHELL_META_RE = re.compile(r"""[&|;`><\r\n]|\$\(""")
 PYTHON_EXE_RE = re.compile(r"^(python3?|py)(\.exe)?$", re.I)
 # deep-research: nothing agy writes in the work dir may be runnable (Windows executables/scripts) or importable
 EXEC_EXTS = (".bat", ".cmd", ".com", ".exe", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".lnk",
-             ".pif", ".scr", ".msc", ".hta", ".cpl", ".py", ".pyw", ".pyc", ".pyo", ".pyz", ".pth")
+             ".pif", ".scr", ".msc", ".hta", ".cpl", ".py", ".pyw", ".pyc", ".pyo", ".pyz", ".pth",
+             ".dll", ".pyd", ".msi", ".reg", ".url", ".sct", ".jar")
+PROTECTED_NAMES = ("pyvenv.cfg",)  # a pyvenv.cfg next to a copied interpreter redirects its sys.prefix
 # cmd.exe looks in the current directory before PATH: no python/python3/py with any extension either
 INTERPRETER_STEMS = ("python", "python3", "py")
 ALLOWED_PYTHON_FLAGS = frozenset({"-u", "-B", "-E", "-s", "-S", "-O", "-OO"})
@@ -236,7 +240,7 @@ def is_protected_file(rel: str, mode: str = "default") -> bool:
         # __pycache__, and any file named like the interpreter (cmd.exe searches the current dir first)
         names = [x.lower().rstrip(". ") for x in parts]
         last = names[-1]
-        if "__pycache__" in names or last.endswith(EXEC_EXTS):
+        if "__pycache__" in names or last.endswith(EXEC_EXTS) or last in PROTECTED_NAMES:
             return True
         if last.split(".", 1)[0] in INTERPRETER_STEMS:
             return True
@@ -271,98 +275,104 @@ def split_command_line(cmd: str) -> list[str]:
     return tokens
 
 
+# Exact relay shape (round 3): INTERP [FLAGS] SCRIPT --job JOB [--worker]. No shell parsing is trusted: characters a
+# shell or CreateProcess could read differently are refused outright, and every path is compared literally (case and
+# separator folded only, no . / .. collapsing), so the program and script that run are exactly the ones checked.
+DR_FORBIDDEN_CHARS = set("'^%!&|<>();`\r\n$")
+
+
+def _dr_tokens(cmd: str):
+    """[(text, quoted)] for a command line, or None: a token is either "..." (an outer pair, no other quote) or has no
+    quote at all; `--job="..."` is the one exception."""
+    out, i, n = [], 0, len(cmd)
+    while i < n:
+        if cmd[i].isspace():
+            i += 1
+            continue
+        if cmd[i] == '"':
+            j = cmd.find('"', i + 1)
+            if j < 0 or (j + 1 < n and not cmd[j + 1].isspace()):
+                return None
+            out.append((cmd[i + 1:j], True))
+            i = j + 1
+            continue
+        j = i
+        while j < n and not cmd[j].isspace():
+            j += 1
+        tok = cmd[i:j]
+        if tok.startswith('--job="'):
+            k = cmd.find('"', i + 7)
+            if k < 0 or (k + 1 < n and not cmd[k + 1].isspace()):
+                return None
+            out.append(("--job=" + cmd[i + 7:k], True))
+            i = k + 1
+            continue
+        if '"' in tok:
+            return None
+        out.append((tok, False))
+        i = j
+    return out
+
+
+def _lit(path: str) -> str:
+    return path.replace("/", "\\").lower()
+
+
+def _literal_path_ok(tok: str, wanted) -> bool:
+    """tok names one of `wanted` literally: case and / vs \\ folded, nothing else (no . / .. components)."""
+    if any(part in (".", "..") for part in _lit(tok).split("\\")):
+        return False
+    return _lit(tok) in {_lit(w) for w in wanted if w}
+
+
 def validate_deep_research_command(cmd: str, root: str, dr_dir: str, cwd: str = ""):
-    """Validates run_command for deep-research mode. Returns (decision, reason, rule)."""
-    if not cmd or not isinstance(cmd, str) or not cmd.strip():
-        return "deny", "empty command line", "shell"
+    """Deep-research run_command: allowed only in the exact shape INTERP [FLAGS] SCRIPT --job JOB [--worker].
+    Returns (decision, reason, rule)."""
+    def deny(why):
+        return "deny", why + " (deep-research mode runs only: python [-u -B -E -s -S -O -OO] " \
+                             "\"<dr_dir>\\scripts\\relay_step.py\" --job \"<workdir>\")", "shell"
 
-    if SHELL_META_RE.search(cmd):
-        return "deny", "shell chaining and redirection metacharacters are disabled in deep-research mode", "shell"
-
-    try:
-        tokens = [t.strip('"\'') for t in split_command_line(cmd)]
-    except ValueError as e:
-        return "deny", f"malformed command syntax: {e}", "shell"
-
-    if not tokens:
-        return "deny", "empty command line", "shell"
-
-    # Token 0: Python interpreter validation
-    exe_token = tokens[0]
-    is_python = bool(PYTHON_EXE_RE.match(exe_token))  # bare name only: "\\", "/" or ":" fail the pattern
-    if not is_python and os.path.isabs(exe_token):
-        try:
-            is_python = canon(exe_token) == canon(sys.executable)
-        except Exception:
-            is_python = False
-    if not is_python:
-        return "deny", f"executable {exe_token!r} is not a supported Python interpreter", "shell"
-
-    # Locate script token while skipping permitted python options
-    script_token = None
-    script_idx = -1
-    for i, tok in enumerate(tokens[1:], start=1):
-        if tok.startswith("-"):
-            if tok in ALLOWED_PYTHON_FLAGS:
-                continue
-            return "deny", f"python option {tok!r} is not permitted in deep-research mode", "shell"
-        script_token = tok
-        script_idx = i
-        break
-
-    if not script_token:
-        return "deny", "no Python script specified in command line", "shell"
-
-    script_base = os.path.basename(script_token).lower()
-    if script_base != "relay_step.py":
-        return ("deny",
-                f"script {script_token!r} is not permitted in deep-research mode: only relay_step.py is allowed",
-                "shell")
-
-    # Only the canonical <AGY_CONFINE_DR_DIR>/scripts/relay_step.py may run: a relay_step.py anywhere else (the work
-    # dir included, where agy could have written its own) is refused.
-    cmd_cwd = cwd if cwd else root
+    if not isinstance(cmd, str) or not cmd.strip():
+        return deny("empty command line")
+    raw = cmd.strip()
+    bad = sorted(DR_FORBIDDEN_CHARS.intersection(raw))
+    if bad:
+        return deny("forbidden character(s) %r in the command line" % "".join(bad))
+    toks = _dr_tokens(raw)
+    if not toks:
+        return deny("malformed quoting: a token must be fully double-quoted or carry no quote")
     if not dr_dir:
-        return "deny", "no deep-research skill dir (AGY_CONFINE_DR_DIR) is set: relay_step.py cannot run", "shell"
+        return deny("no deep-research skill dir (AGY_CONFINE_DR_DIR) is set")
+
+    interp, quoted = toks[0]
+    exe_ok = (not quoted and bool(PYTHON_EXE_RE.match(interp))) or _literal_path_ok(
+        interp, (sys.executable, os.path.realpath(sys.executable)))
+    if not exe_ok:
+        return deny("interpreter %r is not a bare python/python3/py or the literal sys.executable" % interp)
+    i = 1
+    while i < len(toks) and not toks[i][1] and toks[i][0] in ALLOWED_PYTHON_FLAGS:
+        i += 1
+    if i >= len(toks):
+        return deny("no script")
     expected = canon(os.path.join(dr_dir, "scripts", "relay_step.py"))
-    script_path = canon(script_token if os.path.isabs(script_token) else os.path.join(cmd_cwd, script_token))
-    if script_path != expected or inside(expected, canon(root)):
-        return ("deny", f"script {script_token!r} is not {expected}: only the deep-research skill's relay_step.py "
-                        f"may run", "shell")
+    script = toks[i][0]
+    if not _literal_path_ok(script, (os.path.join(dr_dir, "scripts", "relay_step.py"), expected)):
+        return deny("script %r is not literally %s" % (script, expected))
+    rest = [t for t, _ in toks[i + 1:]]
+    if rest[:1] == ["--job"] and len(rest) >= 2:
+        job, tail = rest[1], rest[2:]
+    elif rest[:1] and rest[0].startswith("--job="):
+        job, tail = rest[0][len("--job="):], rest[1:]
+    else:
+        return deny("--job <workdir> must follow the script")
+    if tail not in ([], ["--worker"]):
+        return deny("unexpected arguments %r" % tail)
+    if not _literal_path_ok(job, (root, canon(root))):
+        return deny("--job %r is not literally the work dir %s" % (job, root))
+    if inside(expected, canon(root)):
+        return deny("the deep-research skill's relay_step.py resolves inside the work dir")
     if hard_linked(expected):
         return "deny", f"{expected} is a hard link (it shares its data with another path); not allowed", "hard_link"
-
-    script_args = tokens[script_idx + 1:]
-
-    if script_base == "relay_step.py":
-        job_target = None
-        i = 0
-        while i < len(script_args):
-            arg = script_args[i]
-            if arg == "--job":
-                if i + 1 < len(script_args):
-                    job_target = script_args[i + 1]
-                    i += 2
-                    continue
-                else:
-                    return "deny", "--job missing argument value", "shell"
-            elif arg.startswith("--job="):
-                job_target = arg.split("=", 1)[1].strip('"\'')
-                i += 1
-                continue
-            elif arg == "--worker":
-                i += 1
-                continue
-            else:
-                return "deny", f"unrecognized argument {arg!r} for relay_step.py", "shell"
-
-        if not job_target:
-            return "deny", "relay_step.py requires --job <workdir> argument", "shell"
-
-        job_path = canon(job_target if os.path.isabs(job_target) else os.path.join(cmd_cwd, job_target))
-        if job_path != canon(root):
-            return "deny", f"--job target {job_target!r} does not match workdir {root}", "shell"
-
     return "ask", "", ""
 
 

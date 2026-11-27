@@ -326,15 +326,86 @@ class Hook(unittest.TestCase):
     def test_deep_research_dr_dir_relay_step_path_variants_allowed(self):
         R = str(self.root)
         DR = str(self.dr_dir / "scripts" / "relay_step.py")
-        variants = [DR.replace(BS, "/"), DR,
-                    str(self.dr_dir / "scripts" / "." / "relay_step.py"),
-                    str(self.dr_dir / "scripts" / ".." / "scripts" / "relay_step.py")]
+        variants = [DR.replace(BS, "/"), DR]
         if WIN:
             variants += [DR.upper(), DR.lower(), DR.replace(BS, "/").upper()]
         for v in variants:
             with self.subTest(v=v):
                 dec, rule, reason = self.decide_audit("run_command", {"CommandLine": f'python "{v}" --job "{R}"'})
                 self.assertEqual(dec, "ask", (v, rule, reason))
+
+    def test_deep_research_command_must_match_the_exact_relay_shape(self):
+        # round 3: INTERP [FLAGS] SCRIPT --job JOB, literal paths (case/separator folded only), nothing else
+        R = str(self.root)
+        DR = str(self.dr_dir / "scripts" / "relay_step.py")
+        DRD = str(self.dr_dir)
+        REL = os.path.relpath(DR, R)  # ..\dr_skill\scripts\relay_step.py
+        bad = [
+            # the reviewer's bypasses: a single quote is no quote for CreateProcess / cmd
+            f"python notes.txt' '{BS}..{BS}{REL} --job \"{R}\"",
+            f"py -B notes.txt' '{BS}..{BS}{REL} --job \"{R}\"",
+            f"python sub{BS}x' '{BS}..{BS}..{BS}{REL} --job \"{R}\"",
+            f"\"{R}{BS}x' '{BS}..{BS}python.exe\" \"{DR}\" --job \"{R}\"",
+            # single quote anywhere
+            f"python '{DR}' --job \"{R}\"", f"python \"{DR}\" --job '{R}'", f"python \"{DR}\" --job \"{R}\" '",
+            # . / .. components in script or job
+            f"python \"{DRD}{BS}scripts{BS}.{BS}relay_step.py\" --job \"{R}\"",
+            f"python \"{DRD}{BS}scripts{BS}..{BS}scripts{BS}relay_step.py\" --job \"{R}\"",
+            f"python \"{DR}\" --job \"{R}{BS}.\"", f"python \"{DR}\" --job \"{R}{BS}sub{BS}..\"",
+            f"python \"{DR}\" --job \"{R}/.\"",
+            # quotes inside a token
+            f"python \"{DRD}{BS}scripts\"{BS}relay_step.py --job \"{R}\"", f"python \"{DR}\\\" --job \"{R}\"",
+            f"python {DR[:3]}\"{DR[3:]}\" --job \"{R}\"", f"python \"{DR}\"x --job \"{R}\"",
+            # extra tokens, flag after the script, wrong order, missing parts
+            f"python \"{DR}\" --job \"{R}\" extra", f"python \"{DR}\" -u --job \"{R}\"",
+            f"python \"{DR}\" --job \"{R}\" -u", f"python --job \"{R}\" \"{DR}\"", f"python \"{DR}\"",
+            f"python \"{DR}\" --job", f"python \"{DR}\" --job \"{R}\" --job \"{R}\"",
+            f"python -c pass \"{DR}\" --job \"{R}\"", f"python -b \"{DR}\" --job \"{R}\"",
+            f"python -uB \"{DR}\" --job \"{R}\"", f"\"{DR}\" --job \"{R}\"",
+            # env-var and shell forms
+            f"python %LOCALAPPDATA%{BS}x{BS}relay_step.py --job \"{R}\"", f"python \"{DR}\" --job %CD%",
+            f"python !X! --job \"{R}\"", f"python ^\"{DR}\" --job \"{R}\"", f"(python \"{DR}\" --job \"{R}\")",
+            f"python \"{DR}\" --job \"{R}\" & calc", f"python \"{DR}\" --job \"{R}\"; dir",
+            f"python \"{DR}\" --job \"{R}\"\nwhoami", f"set X=1 && python \"{DR}\" --job \"{R}\"",
+            f"python $env:X --job \"{R}\"", f"python `whoami` --job \"{R}\"",
+            # interpreter with a path / not the literal sys.executable
+            f"\"{R}{BS}python.exe\" \"{DR}\" --job \"{R}\"", f".{BS}python \"{DR}\" --job \"{R}\"",
+            f"\"{sys.executable}{BS}..{BS}python.exe\" \"{DR}\" --job \"{R}\"",
+            # a different job dir
+            f"python \"{DR}\" --job \"{self.base}\"", f"python \"{DR}\" --job=\"{self.base}\"",
+        ]
+        for cmd in bad:
+            with self.subTest(bad=cmd):
+                dec, rule, _ = self.decide_audit("run_command", {"CommandLine": cmd})
+                self.assertEqual((dec, rule), ("deny", "shell"), cmd)
+        good = [
+            f"python \"{DR}\" --job \"{R}\"", f"python3 \"{DR}\" --job \"{R}\"", f"py \"{DR}\" --job \"{R}\"",
+            f"python.exe \"{DR}\" --job \"{R}\"", f"PY.EXE \"{DR}\" --job \"{R}\"",
+            f"py -B \"{DR}\" --job \"{R}\"", f"python -u -B -E -s -S -O \"{DR}\" --job \"{R}\"",
+            f"python -OO \"{DR}\" --job \"{R}\"", f"python \"{DR}\" --job=\"{R}\"",
+            f"python \"{DR}\" --job \"{R}\" --worker",
+            f"  python \"{DR}\"   --job \"{R}\"  ",
+            f"\"{sys.executable}\" \"{DR}\" --job \"{R}\"",
+            f"python \"{DR.replace(BS, '/')}\" --job \"{R.replace(BS, '/')}\"",
+        ]
+        if WIN:
+            good += [f"python \"{DR.upper()}\" --job \"{R.lower()}\"",
+                     f"python \"{DR.replace(BS, '/').lower()}\" --job \"{R.upper().replace(BS, '/')}\""]
+        if " " not in sys.executable:
+            good.append(f"{sys.executable} \"{DR}\" --job \"{R}\"")
+        for cmd in good:
+            with self.subTest(good=cmd):
+                dec, rule, reason = self.decide_audit("run_command", {"CommandLine": cmd})
+                self.assertEqual(dec, "ask", (cmd, rule, reason))
+
+    def test_deep_research_more_loadable_file_writes_denied(self):
+        for target in ("x.dll", "x.pyd", "x.msi", "x.reg", "x.url", "x.sct", "x.jar", "sub/X.DLL", "x.pyd.",
+                       "pyvenv.cfg", "PYVENV.CFG", "sub/pyvenv.cfg", "pyvenv.cfg "):
+            with self.subTest(target=target):
+                dec, rule, _ = self.decide_audit("write_to_file", {"TargetFile": target, "CodeContent": "x"})
+                self.assertEqual((dec, rule), ("deny", "protected"), target)
+        dec, _, _ = self.decide_audit("write_to_file", {"TargetFile": "settings.cfg", "CodeContent": "x"})
+        self.assertEqual(dec, "ask")
 
     def test_deep_research_workdir_py_writes_denied(self):
         # writing/creating any .py file in the work dir is refused (B1)
