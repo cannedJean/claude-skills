@@ -30,7 +30,7 @@ ALL_DOCS = sorted([SKILL_MD, SKILL_DIR / "README.md", *(SKILL_DIR / "references"
                    *(SKILL_DIR / "prompts").glob("*.md")])
 CALLER_DOCS = [p for p in ALL_DOCS if p != AGY_SIDE_SKILL]
 SCRIPT_SOURCES = "".join((SCRIPTS_DIR / n).read_text(encoding="utf-8") for n in
-                         ("deep_research.py", "relay_step.py", "run_deep_research.py", "patch_gemini_app.py"))
+                         ("deep_research.py", "relay_step.py", "run_deep_research.py"))
 # values earlier revisions of the docs stated wrongly
 STALE = ("420s", "600s", "--deadline 600", "11 tests", "5 deterministic", "Gemini 2.0", "ratusan", "35%",
          "Python 3.10", "2% weekly")

@@ -102,22 +102,24 @@ class DeepResearchTestCase(DeepResearchTestBase):
         self.assertEqual(rc, 0, pf_before)
         self.assertEqual(pf_before["sync_status"], "missing_target")
 
-        # Run setup -> copies relay_step.py, run_deep_research.py, patch_gemini_app.py, and SKILL.md
+        # Run setup -> copies every BUNDLED_SCRIPTS file (relay, driver, UIA modules) and SKILL.md
         rc, st, _ = self.run_dr(["setup", "--target-dir", str(self.target_skill_dir)])
         self.assertEqual(rc, 0, st)
         self.assertEqual(st["status"], "ok")
         self.assertEqual(st["sync_status"], "in_sync")
-        self.assertEqual(len(st["copied"]), 5)   # 4 scripts + SKILL.md
+        self.assertEqual(len(st["copied"]), 8)   # 7 bundled files + SKILL.md
         self.assertTrue((self.target_skill_dir / "scripts" / "relay_step.py").is_file())
         self.assertTrue((self.target_skill_dir / "scripts" / "run_deep_research.py").is_file())
-        self.assertTrue((self.target_skill_dir / "scripts" / "patch_gemini_app.py").is_file())
-        self.assertTrue((self.target_skill_dir / "scripts" / "chrome_launcher.py").is_file())
+        for name in ("gemini_host.py", "uitree.py", "privacy.py", "locators.py", "locators.json"):
+            self.assertTrue((self.target_skill_dir / "scripts" / name).is_file(), name)
+        for gone in ("patch_gemini_app.py", "chrome_launcher.py"):
+            self.assertFalse((self.target_skill_dir / "scripts" / gone).exists(), gone)
         self.assertTrue((self.target_skill_dir / "SKILL.md").is_file())
 
-        # Re-running setup reports all 5 files unchanged
+        # Re-running setup reports all 8 files unchanged
         rc, st2, _ = self.run_dr(["setup", "--target-dir", str(self.target_skill_dir)])
         self.assertEqual(rc, 0)
-        self.assertEqual(len(st2["unchanged"]), 5)
+        self.assertEqual(len(st2["unchanged"]), 8)
 
         # Modify one target file -> preflight detects out_of_sync, setup restores it
         (self.target_skill_dir / "SKILL.md").write_text("# modified\n", encoding="utf-8")

@@ -20,16 +20,11 @@ class _Stop(Exception):
 
 
 def _run_main(argv, page):
-    fake_pw = MagicMock()
-    fake_pw.__enter__.return_value.chromium.connect_over_cdp.return_value = MagicMock()
-    with patch.object(sys, "argv", ["run_deep_research.py"] + argv), \
-         patch.object(rdr, "ensure_gemini_running_with_cdp", return_value={"cdp_url": "http://x", "status": "already_running"}), \
-         patch.object(rdr, "sync_playwright", return_value=fake_pw), \
-         patch.object(rdr, "get_gemini_page", return_value=page), \
-         patch.object(rdr, "prevent_background_throttling"), \
-         patch.object(rdr, "ensure_pro_mode") as epm:
+    """Run the driver's step flow on a fake page (the automation backend that supplies a real page is separate)."""
+    args = rdr.parse_args(argv)
+    with patch.object(rdr, "prevent_background_throttling"),          patch.object(rdr, "ensure_pro_mode") as epm:
         try:
-            rdr.main()
+            rdr.run_flow(page, args)
         except _Stop:
             pass
     return epm

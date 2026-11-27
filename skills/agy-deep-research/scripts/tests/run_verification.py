@@ -3,8 +3,8 @@
 
 Executes deterministic automated verification checks:
   1. Static syntax compilation (`py_compile`) on all Python scripts in `scripts/`.
-  2. CLI `--help` invocation checks for all 4 scripts (`deep_research.py`, `patch_gemini_app.py`,
-     `relay_step.py`, `run_deep_research.py`), verifying exit code 0.
+  2. CLI `--help` invocation checks for the 3 scripts (`deep_research.py`, `relay_step.py`,
+     `run_deep_research.py`), verifying exit code 0.
   3. Frontmatter validation for `SKILL.md`: valid YAML, `name: agy-deep-research`,
      `description` begins with `"Use when..."`, description length <= 1024 characters,
      and no leaked workflow implementation details.
@@ -91,7 +91,6 @@ def check_cli_help(scripts_dir: Path) -> Dict[str, Any]:
     start_time = time.time()
     target_scripts = [
         "deep_research.py",
-        "patch_gemini_app.py",
         "relay_step.py",
         "run_deep_research.py",
     ]

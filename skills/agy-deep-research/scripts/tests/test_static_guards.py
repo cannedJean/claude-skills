@@ -135,6 +135,12 @@ class StaticGuardsTest(unittest.TestCase):
         res = rv.check_no_app_dir_writes(self.skill)
         self.assertTrue(res["passed"], res["errors"])
 
+    def test_current_tree_passes(self):
+        real_skill = Path(HERE).parent.parent
+        for check in (rv.check_forbidden_automation, rv.check_no_app_dir_writes):
+            res = check(real_skill)
+            self.assertTrue(res["passed"], (check.__name__, res["errors"][:10]))
+
     def test_result_shape(self):
         for res in (rv.check_forbidden_automation(self.skill), rv.check_no_app_dir_writes(self.skill)):
             for k in ("name", "passed", "errors", "duration_s"):

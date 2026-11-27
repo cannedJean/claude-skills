@@ -26,11 +26,11 @@ request.json fields
                   that keeps running after this process exits; result.json appears when the research is done)
   show            true to show the Gemini window if the driver (re)starts the app
   env             {NAME: value} added to the driver's environment (a detached worker does not inherit the caller's)
-  cdp_url         CDP endpoint for the read-only page probe (default http://127.0.0.1:9223; Chrome mode sets its own)
+  (an old request's endpoint field `cdp_url` is ignored)
 
-`collect` never starts a research: before running the driver it probes the page (read-only, through the driver's
-Python and playwright) and refuses with COLLECT_WOULD_START when the plan card still has an active start button.
-`probe` only runs that read-only probe and writes it to result.json.
+`collect` never starts a research: before running the driver it probes the page (read-only: the driver's
+`--step probe`, which prints {"start_enabled": bool, "url": str}) and refuses with COLLECT_WOULD_START when the plan
+card still has an active start button. `probe` only runs that read-only probe and writes it to result.json.
   allow_missing_confirm   approve: keep going when the plan card has no active start button (collect: always)
 
 Conversation identity: the Gemini app has one page that every driver shares. approve/collect refuse with
@@ -45,7 +45,7 @@ report_file, report_chars, sources_count, elapsed_s, stdout_log, stderr_log, pid
 `conversation_id` are the driver's provenance (where the report came from), never a later look at the page.
 
 Exit codes: 0 ok | 2 research-level failure (no usable plan / report) | 3 driver or environment error |
-5 bad request. Python 3.9+, stdlib only (the driver itself needs playwright).
+5 bad request. Python 3.9+, stdlib only.
 """
 import argparse
 import json
@@ -98,18 +98,10 @@ RETRY_ONCE = ("DEEP_RESEARCH_TOGGLE_NOT_FOUND",)   # transient right after the d
 # (substring of the driver's stderr/stdout, code, exit code, hint) - first match wins
 FAILURES = [
     ("Conversation mismatch", "CONVERSATION_MISMATCH", 2, "the shared Gemini page showed another conversation or another research's report; " + MISMATCH_HINT),
-    ("No module named 'playwright'", "PLAYWRIGHT_MISSING", 3, "install playwright into the Python that runs the driver (python -m pip install playwright)"),
-    ("No Gemini app-* directory", "APP_NOT_INSTALLED", 3, "install the Google Gemini desktop app for Windows and sign in once"),
-    ("Target pattern not found in main.js", "ASAR_PATTERN_MISMATCH", 3,
-     "this Gemini app version is not supported by patch_gemini_app.py; Gemini.exe was killed and NOT relaunched: start it by hand, do not retry"),
-    ("Chrome executable not found", "CHROME_NOT_FOUND", 3,
-     "Chrome mode needs Google Chrome: install it or set GEMINI_DR_CHROME_PATH (or start a new job with --browser app); do not run patch_gemini_app.py"),
-    ("Chrome debugging port did not answer", "CHROME_CDP_NOT_READY", 3,
-     "close every Chrome window of the agy-deep-research profile (it was opened without the debugging port), then repeat the step; do not run patch_gemini_app.py"),
-    ("did not become ready in time", "CDP_NOT_READY", 3, "Gemini was (re)started but port 9223 stayed silent for 20 s; retry once, then check powershell/taskkill on PATH"),
-    ("connect_over_cdp", "CDP_CONNECT_FAILED", 3, "CDP answered the liveness check but refused the connection; retry once"),
+    ("UIA_DRIVER_NOT_IMPLEMENTED", "UIA_DRIVER_NOT_IMPLEMENTED", 3,
+     "the Windows UI Automation driver is not installed yet: nothing was sent to Gemini; report it, do not retry"),
     ("Could not find a gemini.google.com page", "GEMINI_PAGE_NOT_FOUND", 3,
-     "the app/Chrome window is not on gemini.google.com (not signed in?) or another browser owns the port; the user signs in (app: start it with --show; Chrome mode: in the opened window)"),
+     "the Gemini window is not on gemini.google.com (not signed in?); the user signs in (start it with --show)"),
     ("Could not activate 'Deep Research' mode", "DEEP_RESEARCH_TOGGLE_NOT_FOUND", 3, "the Tools menu did not offer Deep Research; UI changed or the account lacks it"),
     ("safety/keyword filter blocked", "SAFETY_BLOCKED", 2, "Gemini refused the prompt; the caller must rephrase in a new job"),
     ("Research Plan confirmation button did not appear", "PLAN_TIMEOUT", 2,
@@ -117,8 +109,7 @@ FAILURES = [
     ("Deep Research did not finish within", "REPORT_TIMEOUT", 2, "the research keeps running in the app; a collect step later fetches the report"),
     ("No active '연구 시작'", "NO_CONFIRM_BUTTON", 2, "the plan card has no active start button (countdown fired, already started, or wrong conversation)"),
     ("Stdin closed while waiting", "DRIVER_STDIN_WAIT", 3, "the driver entered its stdin review loop; relay mode never asks for it"),
-    ("playwright._impl._errors.TimeoutError", "UI_SELECTOR_TIMEOUT", 3, "a page element did not appear: most often not signed in; the user signs in (app: start it with --show; Chrome mode: in the opened window)"),
-    ("Timeout 30000ms exceeded", "UI_SELECTOR_TIMEOUT", 3, "same as above"),
+    ("Timeout 30000ms exceeded", "UI_SELECTOR_TIMEOUT", 3, "a page element did not appear: most often not signed in; the user signs in (start it with --show)"),
     ("Timeout 20000ms exceeded", "UI_SELECTOR_TIMEOUT", 3, "the tools button did not appear; UI changed or not signed in"),
 ]
 
@@ -257,70 +248,38 @@ def text_arg(features, feat_key, flag_file, flag_text, path, what):
     return [flag_text, text]
 
 
-PROBE_SRC = r"""
-import json, sys
-from playwright.sync_api import sync_playwright
-cdp, target = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "")
-with sync_playwright() as p:
-    b = p.chromium.connect_over_cdp(cdp)
-    page = None
-    for ctx in b.contexts:
-        for pg in ctx.pages:
-            if "gemini.google.com" in pg.url:
-                page = pg
-                break
-        if page:
-            break
-    if page is None:
-        print(json.dumps({"error": "no_gemini_page"}))
-        sys.exit(0)
-    before = page.url
-    if target and target != "current" and page.url.rstrip("/") != target.rstrip("/"):
-        page.goto(target, wait_until="domcontentloaded")
-        try:
-            page.wait_for_selector('[data-test-id="research-steps"], .research-steps, model-response', timeout=15000)
-        except Exception:
-            pass
-        page.wait_for_timeout(2000)
-    info = page.evaluate('''() => ({
-        active_confirm: document.querySelectorAll('[data-test-id="confirm-button"]:not(.gem-button-disabled) button:not([disabled])').length,
-        active_edit: document.querySelectorAll('[data-test-id="edit-button"]:not(.gem-button-disabled) button:not([disabled])').length,
-        plan_cards: document.querySelectorAll('[data-test-id="research-steps"], .research-steps').length,
-        responses: document.querySelectorAll('model-response').length,
-        report_len: ((document.querySelector('deep-research-immersive-panel message-content, deep-research-immersive-panel [data-test-id="message-content"]') || {}).innerText || '').trim().length,
-        chip: (((document.querySelector('immersive-entry-chip') || {}).innerText) || '').trim().slice(0, 80)})''')
-    info.update({"url": page.url, "url_before": before, "navigated": before != page.url})
-    print(json.dumps(info, ensure_ascii=False))
-"""
-
-
-def ensure_chrome_for(req):
-    """Chrome mode: (re)open the dedicated Chrome window before the probe, as the driver would; the user may have
-    closed it between steps. Returns an error text, or None."""
-    if str((req.get("env") or {}).get("GEMINI_DR_BROWSER") or "").lower() != "chrome":
-        return None
-    try:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        import chrome_launcher
-        chrome_launcher.ensure_chrome_running_with_cdp()
-        return None
-    except Exception as e:
-        return str(e)
-
-
 def probe_page(req, py, timeout=45):
-    """Read-only look at the Gemini tab (navigating to req.resume_url when the tab is elsewhere). {"error": ...} when unavailable."""
-    chrome_error = ensure_chrome_for(req)
-    if chrome_error:
-        return {"error": chrome_error}
-    cdp = (req.get("cdp_url") or os.environ.get("GEMINI_CDP_URL", "http://127.0.0.1:9223")).rstrip("/")
+    """Read-only look at the conversation through the driver's `--step probe` (it settles the page on req.resume_url).
+    Returns the driver's {"start_enabled": bool, "url": str} plus `active_confirm` (1/0) for the gates below, or
+    {"error": ...} when the probe failed (non-zero exit or no JSON)."""
     try:
-        r = subprocess.run([py, "-c", PROBE_SRC, cdp, req.get("resume_url") or ""], capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=timeout, stdin=subprocess.DEVNULL)
-        line = (r.stdout or "").strip().splitlines()
-        return json.loads(line[-1]) if line and line[-1].startswith("{") else {"error": (r.stderr or "")[-300:] or "no output"}
+        driver = resolve_driver(req)
+    except Fail as e:
+        return {"error": f"{e.code}: {e.message}"}
+    argv = [py, driver, "--step", "probe"]
+    if req.get("resume_url"):
+        argv += ["--resume-url", req["resume_url"]]
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    env.update({str(k): str(v) for k, v in (req.get("env") or {}).items()})
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=timeout, stdin=subprocess.DEVNULL, env=env)
     except Exception as e:  # noqa: BLE001 - the probe is best effort
         return {"error": str(e)[-300:]}
+    lines = (r.stdout or "").strip().splitlines()
+    info = None
+    if lines and lines[-1].startswith("{"):
+        try:
+            info = json.loads(lines[-1])
+        except ValueError:
+            info = None
+    if r.returncode != 0 or not isinstance(info, dict) or info.get("status") == "error":
+        code = (info or {}).get("code") if isinstance(info, dict) else None
+        detail = code or (r.stderr or "")[-300:] or "no output"
+        return {"error": f"driver probe failed (rc {r.returncode}): {detail}"}
+    if "start_enabled" in info:
+        info.setdefault("active_confirm", 1 if info.get("start_enabled") else 0)
+    return info
 
 
 class Run:
@@ -657,7 +616,7 @@ def do_step(job, req, relay_dir, result_path):
                 res = base_result(req)
                 res.update({"status": "error", "code": "COLLECT_PROBE_FAILED", "exit_code": 3, "probe": probe_info,
                             "message": f"the read-only page probe failed ({probe_info.get('error')}); without it collect cannot rule out a pending plan",
-                            "hint": "fix the environment (the app and CDP must be up; patch_gemini_app.py) and collect again"})
+                            "hint": "fix the environment (the Gemini app and its driver must be available) and collect again"})
                 write_json_atomic(result_path, res)
                 return res, 3
             why = probe_conversation_mismatch(req, probe_info) if not probe_info.get("error") else None

@@ -6,10 +6,6 @@ import subprocess
 import sys
 import time
 from urllib.parse import urlsplit
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError:
-    sync_playwright = None
 
 # Ensure UTF-8 output on Windows consoles
 if hasattr(sys.stdout, "reconfigure"):
@@ -23,8 +19,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-from patch_gemini_app import CDP_PORT, ensure_gemini_running_with_cdp
-from chrome_launcher import GEMINI_URL, ensure_chrome_running_with_cdp
+# The page-driving helpers below take a duck-typed `page` object (locator / evaluate / url). The automation backend
+# that supplies one (Windows UI Automation on a hidden desktop) is not written yet: until it is, every step except
+# --help / --dry-run exits 3 with UIA_DRIVER_NOT_IMPLEMENTED and never touches the Gemini app.
+DRIVER_NOT_IMPLEMENTED = {"status": "error", "code": "UIA_DRIVER_NOT_IMPLEMENTED"}
 
 
 HTML_TO_MARKDOWN_JS = r"""
@@ -467,35 +465,6 @@ def validate_edit_instructions(edit_prompt: str, allow_questions: bool = False) 
                     "Use imperative delta instructions only (Add, Remove, Reorder, Pin)."
                 )
     return clean
-
-
-def get_gemini_page(browser, timeout_sec=15, open_if_missing=False):
-    deadline = time.time() + timeout_sec
-    while time.time() < deadline:
-        for ctx in browser.contexts:
-            for pg in ctx.pages:
-                if "gemini.google.com" in pg.url:
-                    return pg
-        time.sleep(0.5)
-    if open_if_missing and browser.contexts:
-        # Chrome mode: the user may have closed the Gemini tab; the dedicated profile's window is ours to use
-        log("No Gemini tab open in the Chrome window; opening one...")
-        page = browser.contexts[0].new_page()
-        page.goto(GEMINI_URL, wait_until="domcontentloaded")
-        return page
-    raise RuntimeError("Could not find a gemini.google.com page in the local Gemini app or Chrome window.")
-
-
-def browser_mode():
-    """'chrome' (visible Chrome window on its own profile) or 'app' (patched desktop app, the default when unset)."""
-    mode = (os.environ.get("GEMINI_DR_BROWSER") or "app").strip().lower()
-    return "chrome" if mode == "chrome" else "app"
-
-
-def ensure_browser_with_cdp(show=False):
-    if browser_mode() == "chrome":
-        return ensure_chrome_running_with_cdp()   # never patches or restarts the desktop app
-    return ensure_gemini_running_with_cdp(port=CDP_PORT, hide=not show)
 
 
 def prevent_background_throttling(page):
@@ -1348,7 +1317,7 @@ def wait_for_report_completion(page, timeout_sec=1200, expected_conversation_id=
     }
 
 
-def main():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Run Deep Research using the local Windows Gemini desktop app.")
     parser.add_argument("--prompt", type=str, help="Research prompt/topic to investigate.")
     parser.add_argument("--prompt-file", type=str, help="Path to a UTF-8 file containing the exact research prompt.")
@@ -1381,13 +1350,14 @@ def main():
     )
     parser.add_argument(
         "--step",
-        choices=["auto", "plan", "edit", "approve"],
+        choices=["auto", "plan", "edit", "approve", "probe"],
         default="auto",
         help=(
             "Step-by-step loop control for caller agents: "
             "'plan' (generate plan and return to caller), "
             "'edit' (modify existing plan with --edit-prompt and return revised plan), "
             "'approve' (confirm current plan and execute Deep Research), "
+            "'probe' (read-only look at the conversation: start button state and url), "
             "'auto' (default full flow)."
         ),
     )
@@ -1405,7 +1375,9 @@ def main():
     parser.add_argument("--resume-url", type=str, help="Resume an existing Deep Research conversation URL (or 'current').")
     parser.add_argument("--timeout", type=int, default=1200, help="Max wait time in seconds for research completion (default: 1200).")
     parser.add_argument("--show", action="store_true", help="Show the local Gemini desktop window instead of running hidden.")
-    args = parser.parse_args()
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Validate the arguments and print the step that would run as JSON, without touching Gemini.")
+    args = parser.parse_args(argv)
 
     if args.prompt_file:
         with open(args.prompt_file, "r", encoding="utf-8") as f:
@@ -1437,136 +1409,144 @@ def main():
             workspace_sources=args.workspace_sources,
         )
         log("Composed 5-block XML Deep Research prompt.")
+    return args
 
-    app_info = ensure_browser_with_cdp(show=args.show)
-    where = "Chrome window" if app_info.get("browser") == "chrome" else "Local Gemini app"
-    log(f"{where} ready via CDP ({app_info['cdp_url']}, status={app_info['status']})")
 
-    if sync_playwright is None:
-        raise RuntimeError("Playwright is not installed. Run: pip install playwright")
+def run_flow(page, args):
+    """Drive one step on `page` (an existing conversation when args.resume_url, else a new chat)."""
+    if args.step == "probe":
+        raise NotImplementedError("the probe step belongs to the UI Automation backend")
+    prevent_background_throttling(page)
 
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(app_info["cdp_url"])
-        page = get_gemini_page(browser, open_if_missing=app_info.get("browser") == "chrome")
-        prevent_background_throttling(page)
+    # Conversation identity: an existing conversation is bound before anything is read or clicked;
+    # a new chat (plan / auto) is bound once Gemini gives it an id (wait_for_new_plan).
+    conversation_id = bind_conversation(page, args.resume_url) if args.resume_url else None
+    if conversation_id:
+        print(format_conversation_line(conversation_id, _page_url(page)), flush=True)
 
-        # Conversation identity: an existing conversation is bound before anything is read or clicked;
-        # a new chat (plan / auto) is bound once Gemini gives it an id (wait_for_new_plan).
-        conversation_id = bind_conversation(page, args.resume_url) if args.resume_url else None
-        if conversation_id:
-            print(format_conversation_line(conversation_id, _page_url(page)), flush=True)
+    # Model lock: the model/thinking level is selected exactly once, in the new chat
+    # (activate_deep_research_mode -> ensure_pro_mode) before the prompt is sent.
+    # On an existing conversation (approve / collect / edit) only observe it.
+    if args.resume_url:
+        log_current_model_mode(page)
 
-        # Model lock: the model/thinking level is selected exactly once, in the new chat
-        # (activate_deep_research_mode -> ensure_pro_mode) before the prompt is sent.
-        # On an existing conversation (approve / collect / edit) only observe it.
-        if args.resume_url:
-            log_current_model_mode(page)
+    # Step mode 1: Edit an existing plan and return the revised plan to the caller agent
+    if args.step == "edit":
+        revised = apply_plan_edit(page, args.edit_prompt, conversation_id=conversation_id)
+        assert_conversation(page, conversation_id, "after edit")
+        print("\n=== [PLAN_REVIEW_HOOK_START] ===", flush=True)
+        print(json.dumps({"event": "on_plan_revised", **revised}, ensure_ascii=False, indent=2), flush=True)
+        print("=== [PLAN_REVIEW_HOOK_END] ===\n", flush=True)
+        return
 
-        # Step mode 1: Edit an existing plan and return the revised plan to the caller agent
-        if args.step == "edit":
-            revised = apply_plan_edit(page, args.edit_prompt, conversation_id=conversation_id)
-            assert_conversation(page, conversation_id, "after edit")
-            print("\n=== [PLAN_REVIEW_HOOK_START] ===", flush=True)
-            print(json.dumps({"event": "on_plan_revised", **revised}, ensure_ascii=False, indent=2), flush=True)
-            print("=== [PLAN_REVIEW_HOOK_END] ===\n", flush=True)
-            return
+    confirm_locators = (
+        '[data-test-id="confirm-button"]:not(.gem-button-disabled) button:not([disabled]), '
+        '[data-test-id="confirm-button"]:not(.gem-button-disabled), '
+        'button[aria-label="연구 시작"]:not([disabled]), '
+        'button[aria-label="Start research"]:not([disabled]), '
+        'button:has-text("연구 시작"):not([disabled]), '
+        'button:has-text("Start research"):not([disabled])'
+    )
 
-        confirm_locators = (
-            '[data-test-id="confirm-button"]:not(.gem-button-disabled) button:not([disabled]), '
-            '[data-test-id="confirm-button"]:not(.gem-button-disabled), '
-            'button[aria-label="연구 시작"]:not([disabled]), '
-            'button[aria-label="Start research"]:not([disabled]), '
-            'button:has-text("연구 시작"):not([disabled]), '
-            'button:has-text("Start research"):not([disabled])'
-        )
-
-        # Step mode 2: Approve the currently displayed plan and execute Deep Research
-        if args.step == "approve":
-            confirm_btn = page.locator(confirm_locators).last
-            if confirm_btn.count() > 0:
-                assert_conversation(page, conversation_id, "before start click")
-                confirm_current_plan(page)
-        elif args.resume_url:
-            confirm_btn = page.locator(confirm_locators).last
-            if confirm_btn.count() > 0:
-                assert_conversation(page, conversation_id, "before start click")
-                if args.review_plan or args.plan_hook:
-                    plan_text = stop_auto_confirm_fuse_and_expand_plan(page)
-                    run_plan_review_hook_loop(
-                        page,
-                        {"status": "plan_ready", "url": page.url, "plan": plan_text},
-                        plan_hook_cmd=args.plan_hook,
-                    )
-                else:
-                    confirm_current_plan(page)
-        else:
-            # Start a new Deep Research chat
-            new_chat_clicked = False
-            new_chat_loc = page.locator('button[aria-label*="새 채팅"], button[aria-label*="New chat"], a[aria-label*="새 채팅"], a[aria-label*="New chat"]')
-            for i in range(new_chat_loc.count()):
-                el = new_chat_loc.nth(i)
-                try:
-                    if el.is_visible():
-                        log("Clicking '새 채팅' (New chat)...")
-                        el.click()
-                        time.sleep(2.0)
-                        new_chat_clicked = True
-                        break
-                except Exception:
-                    pass
-
-            if not new_chat_clicked and page.url.rstrip("/") != "https://gemini.google.com/app":
-                log("Opening new chat in local Gemini app...")
-                page.goto("https://gemini.google.com/app", wait_until="domcontentloaded")
-                time.sleep(3.0)
-            activate_deep_research_mode(page)
-            assert_fresh_new_chat(page)
-            submit_prompt(page, args.prompt, raw_prompt=args.raw_prompt)
-            plan_res = wait_for_new_plan(page, prev_plan_count=0, new_chat_prompt=args.prompt)
-            new_conversation_id = conversation_id_from_url(plan_res.get("url"))
-            if new_conversation_id:   # verified to hold this run's prompt: persist the binding now
-                print(format_conversation_line(new_conversation_id, plan_res.get("url")), flush=True)
-
-            print("\n--- [Research Plan] ---\n" + plan_res["plan"] + "\n-----------------------\n", flush=True)
-
-            # If --step plan, emit the hook payload and return immediately to caller agent
-            if args.step == "plan":
-                print("\n=== [PLAN_REVIEW_HOOK_START] ===", flush=True)
-                print(json.dumps({"event": "on_plan_generated", **plan_res}, ensure_ascii=False, indent=2), flush=True)
-                print("=== [PLAN_REVIEW_HOOK_END] ===\n", flush=True)
-                if args.output:
-                    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
-                    with open(args.output, "w", encoding="utf-8") as f:
-                        f.write(f"# Research Plan\n\nURL: {plan_res['url']}\n\n{plan_res['plan']}\n")
-                return
-
-            # The new chat is this run's conversation from here on (auto): pin it before starting the research
-            conversation_id = conversation_id_from_url(plan_res.get("url"))
-            if not conversation_id:
-                raise ConversationMismatch(
-                    f"Conversation mismatch (new chat): the plan's page has no conversation id ({plan_res.get('url')!r}); not starting the research.")
+    # Step mode 2: Approve the currently displayed plan and execute Deep Research
+    if args.step == "approve":
+        confirm_btn = page.locator(confirm_locators).last
+        if confirm_btn.count() > 0:
             assert_conversation(page, conversation_id, "before start click")
-
-            # If --review-plan or --plan-hook is enabled, enter the interactive verification/revision loop
+            confirm_current_plan(page)
+    elif args.resume_url:
+        confirm_btn = page.locator(confirm_locators).last
+        if confirm_btn.count() > 0:
+            assert_conversation(page, conversation_id, "before start click")
             if args.review_plan or args.plan_hook:
-                run_plan_review_hook_loop(page, plan_res, plan_hook_cmd=args.plan_hook)
+                plan_text = stop_auto_confirm_fuse_and_expand_plan(page)
+                run_plan_review_hook_loop(
+                    page,
+                    {"status": "plan_ready", "url": page.url, "plan": plan_text},
+                    plan_hook_cmd=args.plan_hook,
+                )
             else:
                 confirm_current_plan(page)
+    else:
+        # Start a new Deep Research chat
+        new_chat_clicked = False
+        new_chat_loc = page.locator('button[aria-label*="새 채팅"], button[aria-label*="New chat"], a[aria-label*="새 채팅"], a[aria-label*="New chat"]')
+        for i in range(new_chat_loc.count()):
+            el = new_chat_loc.nth(i)
+            try:
+                if el.is_visible():
+                    log("Clicking '새 채팅' (New chat)...")
+                    el.click()
+                    time.sleep(2.0)
+                    new_chat_clicked = True
+                    break
+            except Exception:
+                pass
 
-        result = wait_for_report_completion(page, timeout_sec=args.timeout, expected_conversation_id=conversation_id)
-        if args.output:
-            out_path = os.path.abspath(args.output)
-            os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            with open(out_path, "w", encoding="utf-8") as f:
-                f.write(result["markdown"])
-            log(f"Saved Markdown report ({len(result['markdown'])} chars) to: {out_path}")
+        if not new_chat_clicked and page.url.rstrip("/") != "https://gemini.google.com/app":
+            log("Opening new chat in local Gemini app...")
+            page.goto("https://gemini.google.com/app", wait_until="domcontentloaded")
+            time.sleep(3.0)
+        activate_deep_research_mode(page)
+        assert_fresh_new_chat(page)
+        submit_prompt(page, args.prompt, raw_prompt=args.raw_prompt)
+        plan_res = wait_for_new_plan(page, prev_plan_count=0, new_chat_prompt=args.prompt)
+        new_conversation_id = conversation_id_from_url(plan_res.get("url"))
+        if new_conversation_id:   # verified to hold this run's prompt: persist the binding now
+            print(format_conversation_line(new_conversation_id, plan_res.get("url")), flush=True)
 
-        # provenance first, then the report: the relay accepts a report only with this line from the same run
-        print(format_report_provenance(result), flush=True)
-        print("\n=== DEEP RESEARCH REPORT START ===\n")
-        print(result["markdown"])
-        print("\n=== DEEP RESEARCH REPORT END ===\n")
+        print("\n--- [Research Plan] ---\n" + plan_res["plan"] + "\n-----------------------\n", flush=True)
+
+        # If --step plan, emit the hook payload and return immediately to caller agent
+        if args.step == "plan":
+            print("\n=== [PLAN_REVIEW_HOOK_START] ===", flush=True)
+            print(json.dumps({"event": "on_plan_generated", **plan_res}, ensure_ascii=False, indent=2), flush=True)
+            print("=== [PLAN_REVIEW_HOOK_END] ===\n", flush=True)
+            if args.output:
+                os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
+                with open(args.output, "w", encoding="utf-8") as f:
+                    f.write(f"# Research Plan\n\nURL: {plan_res['url']}\n\n{plan_res['plan']}\n")
+            return
+
+        # The new chat is this run's conversation from here on (auto): pin it before starting the research
+        conversation_id = conversation_id_from_url(plan_res.get("url"))
+        if not conversation_id:
+            raise ConversationMismatch(
+                f"Conversation mismatch (new chat): the plan's page has no conversation id ({plan_res.get('url')!r}); not starting the research.")
+        assert_conversation(page, conversation_id, "before start click")
+
+        # If --review-plan or --plan-hook is enabled, enter the interactive verification/revision loop
+        if args.review_plan or args.plan_hook:
+            run_plan_review_hook_loop(page, plan_res, plan_hook_cmd=args.plan_hook)
+        else:
+            confirm_current_plan(page)
+
+    result = wait_for_report_completion(page, timeout_sec=args.timeout, expected_conversation_id=conversation_id)
+    if args.output:
+        out_path = os.path.abspath(args.output)
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(result["markdown"])
+        log(f"Saved Markdown report ({len(result['markdown'])} chars) to: {out_path}")
+
+    # provenance first, then the report: the relay accepts a report only with this line from the same run
+    print(format_report_provenance(result), flush=True)
+    print("\n=== DEEP RESEARCH REPORT START ===\n")
+    print(result["markdown"])
+    print("\n=== DEEP RESEARCH REPORT END ===\n")
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    if args.dry_run:
+        print(json.dumps({"status": "dry_run", "step": args.step, "resume_url": args.resume_url,
+                          "prompt_chars": len(args.prompt or ""), "edit_prompt_chars": len(args.edit_prompt or "")},
+                         ensure_ascii=False), flush=True)
+        return 0
+    log("ERROR: the Windows UI Automation driver is not implemented yet; no step was run")
+    print(json.dumps(DRIVER_NOT_IMPLEMENTED), flush=True)
+    return 3
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
