@@ -20,13 +20,16 @@ Outputs a structured JSON report and returns exit code 0 on pass, non-zero on fa
 from __future__ import annotations
 
 import argparse
+import atexit
 import ast
 import json
 import os
 import py_compile
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -96,6 +99,8 @@ def check_cli_help(scripts_dir: Path) -> Dict[str, Any]:
     ]
     results: Dict[str, Dict[str, Any]] = {}
     all_passed = True
+    sandbox_dir = _new_sandbox_dir()
+    env = _sandbox_env(sandbox_dir)
 
     for script_name in target_scripts:
         script_path = scripts_dir / script_name
@@ -119,6 +124,7 @@ def check_cli_help(scripts_dir: Path) -> Dict[str, Any]:
                 encoding="utf-8",
                 errors="replace",
                 timeout=15,
+                env=env,
             )
             stdout = (cp.stdout or "").strip()
             stderr = (cp.stderr or "").strip()
@@ -470,15 +476,14 @@ def check_no_app_dir_writes(skill_dir: Path) -> Dict[str, Any]:
 
 
 def _first_import_is_sandbox(tree: ast.Module) -> bool:
-    for node in tree.body:
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-            continue  # docstring
+    """Only the docstring and `from __future__` imports (comments are not statements) may precede it."""
+    for i, node in enumerate(tree.body):
+        if (i == 0 and isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)):
+            continue  # module docstring
         if isinstance(node, ast.ImportFrom) and node.module == "__future__":
             continue
-        if isinstance(node, ast.Import):
-            return bool(node.names) and node.names[0].name in ("sandbox", "tests.sandbox")
-        if isinstance(node, ast.ImportFrom):
-            return node.module == "tests" and any(a.name == "sandbox" for a in node.names)
+        return (isinstance(node, ast.Import) and bool(node.names) and node.names[0].name == "sandbox")
     return False
 
 
@@ -504,13 +509,14 @@ def check_tests_use_sandbox(skill_dir: Path) -> Dict[str, Any]:
     }
 
 
-def check_unit_tests(tests_dir: Path) -> Dict[str, Any]:
-    """Execute unit test discovery and verify all tests pass offline."""
-    start_time = time.time()
-    cmd = [sys.executable, "-m", "unittest", "discover", "-s", str(tests_dir), "-v"]
+def _new_sandbox_dir() -> str:
+    d = tempfile.mkdtemp(prefix="agy-dr-sandbox-")
+    atexit.register(shutil.rmtree, d, True)
+    return d
 
-    import tempfile
-    sandbox_dir = tempfile.mkdtemp(prefix="agy-dr-sandbox-")
+
+def _sandbox_env(sandbox_dir: str) -> Dict[str, str]:
+    """Environment that points LOCALAPPDATA/APPDATA at a temp dir (real values kept in AGY_DR_REAL_*)."""
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
@@ -519,6 +525,16 @@ def check_unit_tests(tests_dir: Path) -> Dict[str, Any]:
     env["LOCALAPPDATA"] = sandbox_dir
     env["APPDATA"] = sandbox_dir
     env["AGY_DR_TEST_SANDBOX"] = "1"
+    return env
+
+
+def check_unit_tests(tests_dir: Path) -> Dict[str, Any]:
+    """Execute unit test discovery and verify all tests pass offline."""
+    start_time = time.time()
+    cmd = [sys.executable, "-m", "unittest", "discover", "-s", str(tests_dir), "-v"]
+
+    sandbox_dir = _new_sandbox_dir()
+    env = _sandbox_env(sandbox_dir)
 
     try:
         cp = subprocess.run(
@@ -529,6 +545,7 @@ def check_unit_tests(tests_dir: Path) -> Dict[str, Any]:
             errors="replace",
             timeout=300,  # full suite measured ~90-97 s (~260 tests); 90 s cap failed a green run
             env=env,
+            cwd=str(tests_dir.parent),
         )
         combined_output = (cp.stdout or "") + "\n" + (cp.stderr or "")
         match_ran = re.search(r"Ran\s+(\d+)\s+tests?", combined_output)
