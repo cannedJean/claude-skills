@@ -473,6 +473,31 @@ class Hook(unittest.TestCase):
                 dec, rule, _ = self.decide_audit("write_to_file", {"TargetFile": target, "CodeContent": "{}"})
                 self.assertEqual((dec, rule), ("deny", "protected"), target)
 
+    def test_deep_research_job_and_foreground_edits_denied_reads_allowed(self):
+        (self.root / "job.json").write_text("{}", encoding="utf-8")
+        (self.root / "relay" / "foreground.jsonl").write_text("", encoding="utf-8")
+        self.addCleanup((self.root / "job.json").unlink)
+        self.addCleanup((self.root / "relay" / "foreground.jsonl").unlink)
+        for pf in ("job.json", "relay/foreground.jsonl"):
+            for target in (pf, str(self.root / pf)):
+                with self.subTest(target=target):
+                    for tool, args in (
+                            ("replace_file_content", {"TargetFile": target, "TargetContent": "a", "ReplacementContent": "b"}),
+                            ("multi_replace_file_content", {"TargetFile": target, "ReplacementChunks": []})):
+                        dec, rule, _ = self.decide_audit(tool, args)
+                        self.assertEqual((dec, rule), ("deny", "protected"), (tool, target))
+                    dec, _, _ = self.decide_audit("view_file", {"AbsolutePath": target})
+                    self.assertEqual(dec, "ask", target)
+
+    def test_docs_list_every_protected_control_file(self):
+        readme = (SCRIPTS.parent / "README.md").read_text(encoding="utf-8")
+        import confine_hook
+        for doc_name, text in (("README.md", readme), ("confine_hook docstring", confine_hook.__doc__)):
+            for name in ("relay/request.json", "prompt.md", "goal.md", "feedback_*.md", "job.json",
+                         "relay/result.json", "relay/started.json", "relay/foreground.jsonl"):
+                with self.subTest(doc=doc_name, name=name):
+                    self.assertIn(name, text)
+
     def test_frame_has_no_patch_instruction(self):
         self.assertNotIn("patch_gemini_app", agy_task.DEEP_RESEARCH_FRAME)
         self.assertNotIn("CDP", agy_task.DEEP_RESEARCH_FRAME)
