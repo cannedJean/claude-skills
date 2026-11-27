@@ -1,6 +1,6 @@
 # agy-deep-research: 앱 무수정 · 숨은 데스크톱 · UI Automation 드라이버 설계
 
-작성 2026-11-26. 근거 자료: `C:\Users\SSAFY\w\DEV_PROMPT.md`(지시서, 사용자 승인), `C:\Users\SSAFY\w\PROGRESS.md`(결정 기록), 스파이크 결과 `C:\Users\SSAFY\w\spike\PHASE0_G1.md`, `PHASE0_G1b.md`, `live_*.json`.
+작성 2026-11-26. 근거 자료: `<작업 폴더>\DEV_PROMPT.md`(지시서, 사용자 승인), `<작업 폴더>\PROGRESS.md`(결정 기록), 스파이크 결과 `<작업 폴더>\spike\PHASE0_G1.md`, `PHASE0_G1b.md`, `live_*.json`.
 이 문서는 이 브랜치(`feat/agy-deep-research-uia`)의 구현 계획을 세울 빌더를 위한 것이다.
 
 ## 1. 목적과 이유
@@ -243,7 +243,7 @@ Claude Code
 
 ## 20. X1 교차검증 반영 (agy gemini-4-neon-high, 3관점, 45건)
 
-전체 처분은 `C:\Users\SSAFY\w\reviews\REVIEW_LOG.md`. 이 절은 설계를 바꾸는 결정만 모은다. 앞 절과 충돌하면 이 절이 우선한다.
+전체 처분은 `<작업 폴더>\reviews\REVIEW_LOG.md`. 이 절은 설계를 바꾸는 결정만 모은다. 앞 절과 충돌하면 이 절이 우선한다.
 
 1. **잠금**: `%LOCALAPPDATA%\agy-deep-research\host.lock` 배타 잠금. 드라이버·doctor·app close 모두 잡는다(F10. 실측: 두 스파이크 프로세스가 같은 페이지를 동시에 몰아 프로브가 깨졌다).
 2. **대상 고정**: 우리 인스턴스 = (이미지 경로 `…\Google\Gemini\app-*\Gemini.exe`, 명령줄 `--user-data-dir=<전용 경로>`, 생성 시각)이 일치하는 프로세스 트리. signin·app close·고아 정리·창 탐색은 이 집합만 대상으로 하고, 기본 데스크톱 프로세스는 종료하지 않는다(S2, S10). job은 `host_mode`를 고정한다(B4).
@@ -285,7 +285,7 @@ Claude Code
 
 ## 22. 현재 상태 (2026-11-26 17:50, 사용자 지시로 작업 종료)
 
-이어받는 사람은 이 절만 읽고 시작하면 된다. 상세 기록은 `C:\Users\SSAFY\w\PROGRESS.md`, 스파이크 원자료는 `C:\Users\SSAFY\w\spike\`(레포 밖), 교차검증은 `C:\Users\SSAFY\w\reviews\`에 있다.
+이어받는 사람은 이 절만 읽고 시작하면 된다. 상세 기록은 `<작업 폴더>\PROGRESS.md`, 스파이크 원자료는 `<작업 폴더>\spike\`(레포 밖), 교차검증은 `<작업 폴더>\reviews\`에 있다.
 
 **끝난 것**
 - Phase 0·G2 스파이크: 숨은 데스크톱 + 전용 프로필 + UIA로 창·문서 바인딩, Deep Research 켜기, 프롬프트 SetValue(12k자 정확), 전송, 계획 카드, 카운트다운 취소, 계획 추출, 계획 수정 전송, 연구 시작까지 실측. 기본 데스크톱 포그라운드 변화 0(11:23–13:23 134회 중 Gemini 0). 앱 폴더 해시는 시작부터 종료까지 동일.

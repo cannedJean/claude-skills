@@ -31,7 +31,7 @@
 - [ ] Implement; full suite + run_verification; commit `feat(agy-deep-research): approve and long research wait on UIA`.
 
 ### Task R2: `report_md.py` and the S8 fixture
-**Files:** Create `scripts/report_md.py`; Test `scripts/tests/test_report_md.py`; fixture `scripts/tests/fixtures/report_sql_ko.json` built from `C:\Users\SSAFY\w\spike\live_s8.json` (read only; outside the repo).
+**Files:** Create `scripts/report_md.py`; Test `scripts/tests/test_report_md.py`; fixture `scripts/tests/fixtures/report_sql_ko.json` built from `<작업 폴더>\spike\live_s8.json` (read only; outside the repo).
 **Interfaces:** `to_markdown(report_root: Node, allowed) -> str`; `report_stats(md) -> {chars, headings, tables, links}`; `structural_check(md, stats) -> list[str]` (problems: no heading, empty table cells, no links, …; spec §21.1 "구조 검사로 대체").
 - Rules (spec §23.3): scope = report panel only; consecutive Text runs inside one block joined without separator; headings by HeadingLevel; grid → GFM table with leaf DataItem Name as cell text; only http(s) Hyperlinks become links; buttons/controls skipped.
 - Fixture: convert the dump to the FakeTree fixture format, run it through `privacy.scrub`, replace every Gemini conversation URL with `https://gemini.google.com/app/<test>`; a test asserts the committed file has 0 matches for conversation URLs (`/app/[0-9a-f]{12,}`), e-mails and `Google 계정`/`Google Account` strings, and the fixture's report converts to ≥7 headings, 1 table with 8 data rows × 4 columns (no empty cells), ≥30 links. Also run `.superpowers/sdd/tools/scan_inputs.py` on it before committing.
