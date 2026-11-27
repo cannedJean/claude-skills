@@ -507,6 +507,61 @@ class LocatorReviewFixTests(unittest.TestCase):
                             "automation_id": "model-response-message-content-later", "children": []})
         self.assertEqual(_ids("plan_retry_without_dr", _ctx(spec)), ["plan_retry"])
 
+    # ---- B14: plan_edit / plan_cancel_countdown bind only the newest ENABLED start ----
+    def test_plan_actions_bind_newest_enabled_start(self):
+        spec = _spec()
+        _add(spec, "turn0", _btn("old_start", "연구 시작"))
+        _add(spec, "turn0", _btn("old_edit", "연구 계획 수정"))
+        _add(spec, "turn0", _btn("old_cancel", "취소"))
+        _get(spec, "plan_start")["enabled"] = False  # the newest card's start is disabled
+        ctx = _ctx(spec)
+        self.assertEqual(_ids("plan_edit", ctx), ["old_edit"])
+        self.assertEqual(_ids("plan_cancel_countdown", ctx), ["old_cancel"])
+        self.assertEqual(_ids("plan_start", ctx), ["plan_start"])  # plan_start itself: newest card, as before
+
+    def test_plan_actions_miss_without_an_enabled_start(self):
+        spec = _spec()
+        _get(spec, "plan_start")["enabled"] = False
+        for key in ("plan_edit", "plan_cancel_countdown"):
+            with self.subTest(key=key):
+                p = _payload(spec, key)
+                self.assertEqual((p["code"], p["locator"], p["found"]), ("UI_LOCATOR_MISS", key, 0))
+                self.assertIn("enabled", p["hint"])
+        self.assertEqual(_ids("plan_start", _ctx(spec)), ["plan_start"])
+
+    def test_plan_actions_never_bind_a_stale_card_when_newest_start_is_renamed(self):
+        spec = _spec()
+        _add(spec, "turn0", _btn("old_start", "연구 시작", enabled=False))
+        _add(spec, "turn0", _btn("old_edit", "연구 계획 수정"))
+        _get(spec, "plan_start")["name"] = "연구 개시"  # renamed: no turn has an enabled, recognised start
+        for key in ("plan_edit", "plan_cancel_countdown"):
+            with self.subTest(key=key):
+                p = _payload(spec, key)
+                self.assertEqual(p["found"], 0)
+
+    # ---- B18 / B20 ------------------------------------------------------------
+    def test_blank_regex_names_rejected(self):
+        for bad in ("re:", "re:   ", "re:\t"):
+            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaises(locators.LocatorConfigError):
+                    locators.load_locators(BUNDLED, _write(tmp, {"version": 1, "locators": {"plan_start": {"names": [bad]}}}))
+                with self.assertRaises(locators.LocatorConfigError):
+                    locators._validate({"error_phrases": [bad]}, "override")
+
+    def test_snippet_does_not_duplicate_an_escaped_re_name(self):
+        spec = _spec()
+        for st in spec["states"].values():
+            for d in st["documents"]:
+                _rename(d, "연구 시작", "re:x")
+
+        def mutate(ctx):
+            ctx.locs["locators"]["plan_start"]["names"] = ["연구 시작", "re:" + __import__("re").escape("re:x")]
+            ctx.locs["locators"]["plan_start"]["patterns"] = ["invoke", "toggle"]  # the renamed node lacks toggle
+        p = _payload(spec, "plan_start", mutate)
+        names = p["override_snippet"]["locators"]["plan_start"]["names"]
+        self.assertEqual(len(names), len(set(names)), names)
+        self.assertEqual(len(names), 2, names)
+
     # ---- B8: duplicate ids -------------------------------------------------
     def test_duplicate_ids_are_not_deduplicated_away(self):
         spec = _spec()
@@ -722,6 +777,23 @@ class LocatorReviewFixTests(unittest.TestCase):
                 _rename(d, "연구 시작", "조사 계획")
         _add(spec, "nav2", _btn("sb_btn", "연구 시작 비밀"))
         blob = json.dumps(_payload(spec, "plan_start"), ensure_ascii=False)
+        self.assertNotIn("비밀", blob)
+
+    def test_document_scope_miss_keeps_sidebar_titles_out_via_allow_list(self):
+        # T2: a document-scoped locator walks the sidebar region too; only the allow-list keeps its titles out
+        spec = _spec()
+        _add(spec, "nav2", _btn("sb_secret", "사이드바 열기 비밀 대화"))
+        _add(spec, "turn1", _btn("main_similar", "사이드바 열기 메뉴"))
+
+        def mutate(ctx):
+            ctx.locs["locators"]["sidebar_open"].update(expect="unique", names=["사이드바 열기 단추"])
+        ctx = _ctx(spec)
+        self.assertIn("sb_secret", [n.id for n, _ in ctx.doc.walk()])  # the document scope reaches the sidebar
+        self.assertNotIn("sb_secret", ctx.allowed)
+        p = _payload(spec, "sidebar_open", mutate)
+        names = [c["name"] for c in p["candidates"]]
+        self.assertIn("사이드바 열기 메뉴", names)  # an allowed node of the same scope is listed
+        blob = json.dumps(p, ensure_ascii=False)
         self.assertNotIn("비밀", blob)
 
     def test_generic_label_in_sidebar_is_a_candidate(self):

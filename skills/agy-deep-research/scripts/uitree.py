@@ -50,6 +50,11 @@ class Node:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Node":
+        if not isinstance(d, dict):
+            raise TypeError("node must be an object, got %s" % type(d).__name__)
+        for key in ("patterns", "children"):
+            if d.get(key) is not None and not isinstance(d[key], list):
+                raise TypeError("node %r field %r must be a list" % (d.get("id"), key))
         return cls(
             id=d["id"],
             ct=d["ct"],
@@ -137,6 +142,8 @@ class FakeTree(UiTree):
             try:
                 docs = st.get("documents")
                 desktop = st.get("desktop")
+                if docs is not None and not isinstance(docs, list):
+                    raise TypeError("documents must be a list, got %s" % type(docs).__name__)
                 self._states[name] = {
                     "documents": [Node.from_dict(d) for d in (docs if docs is not None else ())],
                     "desktop": Node.from_dict(desktop) if desktop is not None else None,
@@ -146,6 +153,12 @@ class FakeTree(UiTree):
                                  % (name, type(exc).__name__, exc))
         self._transitions = list(transitions)
         self.state: str = spec["state"]
+        if not isinstance(self.state, str):
+            raise ValueError("spec field 'state': must be a string")
+        for i, tr in enumerate(self._transitions):
+            for key in ("to", "from"):
+                if key in tr and not isinstance(tr[key], str):
+                    raise ValueError("transitions[%d] field %r: must be a string" % (i, key))
         self._validate()
         self.actions: List[tuple] = []
         self._values: dict = {}

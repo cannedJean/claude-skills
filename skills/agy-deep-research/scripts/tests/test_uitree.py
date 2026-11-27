@@ -317,6 +317,16 @@ class UiTreeReviewFixTests(unittest.TestCase):
             "desktop empty dict": (mutate(lambda s: s["states"]["s0"].update(desktop={})), "s0"),
             "transitions not list": (mutate(lambda s: s.update(transitions=123)), "transitions"),
             "transition not dict": (mutate(lambda s: s.update(transitions=["bad"])), "transitions[0]"),
+            # B19
+            "documents empty dict": (mutate(lambda s: s["states"]["s0"].update(documents={})), "s0"),
+            "documents empty string": (mutate(lambda s: s["states"]["s0"].update(documents="")), "s0"),
+            "documents string": (mutate(lambda s: s["states"]["s0"].update(documents="doc")), "s0"),
+            "patterns string": (mutate(lambda s: s["states"]["s0"]["documents"][0]["children"][0]
+                                       .update(patterns="invoke")), "patterns"),
+            "children dict": (mutate(lambda s: s["states"]["s0"]["documents"][0].update(children={})), "children"),
+            "state unhashable": (mutate(lambda s: s.update(state=[])), "state"),
+            "to unhashable": (mutate(lambda s: s["transitions"][0].update(to=["s1"])), "to"),
+            "from unhashable": (mutate(lambda s: s["transitions"][0].update({"from": {}})), "from"),
         }
         for label, (spec, field) in cases.items():
             with self.subTest(label):

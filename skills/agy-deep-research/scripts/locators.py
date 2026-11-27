@@ -9,6 +9,10 @@ keys and a missing override file is ignored (both deliberate).
 The bundled file must define `version` and `locators`.
 
 Notes for callers:
+- `plan_edit` and `plan_cancel_countdown` resolve only inside the turn holding
+  the newest ENABLED `plan_start`; when no turn has an enabled start they raise
+  LocatorMiss (even the optional cancel), so a stale card is never bound.
+  `plan_start` itself resolves in the newest turn holding one (enabled or not).
 - An `optional` locator's absence may be used as a state only when a positive
   anchor (`prompt_input` / `tools` / `plan_start`) resolved in the same
   snapshot; callers enforce this (Task 8).
@@ -47,6 +51,9 @@ MIN_SIMILARITY = 0.4
 FALLBACK_CANDIDATES = 3  # listed (never added to the snippet) when nothing is similar enough
 # plan_card locators that are resolved inside the newest turn holding a plan_start
 PLAN_ANCHORED = ("plan_start", "plan_edit", "plan_cancel_countdown")
+# ... of those, the ones that act on a live card: only the turn holding the newest ENABLED plan_start
+PLAN_ENABLED_ANCHORED = ("plan_edit", "plan_cancel_countdown")
+NO_ENABLED_START_HINT = "no plan card with an enabled plan_start: not binding a stale card"
 # scopes whose roots come from the bound conversation document (ctx.doc)
 DOC_SCOPES = ("document", "main", "composer", "plan_card")
 REQUIRED = ("ct", "names", "scope", "expect")
@@ -80,6 +87,8 @@ def _role(n: Node) -> str:
 
 
 def _compile(pat: str, where: str):
+    if not pat[3:].strip():
+        raise LocatorConfigError("%s: empty regex %r" % (where, pat))
     try:
         return re.compile(pat[3:])
     except re.error as exc:
@@ -244,13 +253,16 @@ def _scope_roots(scope: str, ctx: LocatorContext, key: Optional[str] = None) -> 
     if scope == "plan_card":
         prefix = conf.get("ancestor_automation_id_prefix", "model-response-message-content")
         turns = _plan_turns(doc, prefix)
-        # the plan card is the newest turn that holds a plan_start button
+        # the plan card is the newest turn that holds a plan_start button (an enabled one for plan actions)
         akey = "plan_start" if key in PLAN_ANCHORED else key
         aent = ctx.locs["locators"].get(akey) if akey else None
+        need_enabled = key in PLAN_ENABLED_ANCHORED
         if aent is not None:
             for turn in reversed(turns):
-                if any(_matches(n, aent) for n, _ in turn.walk()):
+                if any(_matches(n, aent) and (n.enabled or not need_enabled) for n, _ in turn.walk()):
                     return [turn]
+        if need_enabled:
+            return []
         return turns[-1:]
     if scope == "composer":
         akey = conf.get("anchor", "prompt_input")
@@ -339,6 +351,12 @@ def resolve(key: str, ctx: LocatorContext) -> List[Node]:
     if ent is None:
         raise LocatorConfigError("unknown locator %r" % key)
     roots = _scope_roots(ent["scope"], ctx, key)
+    if ent["scope"] == "plan_card" and key in PLAN_ENABLED_ANCHORED and not roots:
+        raise LocatorMiss(privacy.scrub({
+            "code": "UI_LOCATOR_MISS", "locator": key, "scope": ent["scope"], "expect": ent["expect"],
+            "found": 0, "candidates": [], "hint": NO_ENABLED_START_HINT,
+            "override_snippet": {"version": 1, "locators": {key: {"names": list(ent["names"])}}},
+        }))
     found, seen = [], set()
     for root in roots:
         for n, _ in root.walk():
@@ -352,10 +370,11 @@ def resolve(key: str, ctx: LocatorContext) -> List[Node]:
         return found
     cands = _candidates(ent, roots, ctx)
     names = list(ent["names"])
-    if (not found and cands and cands[0]["similarity"] >= MIN_SIMILARITY
-            and cands[0]["name"] not in names):
+    if not found and cands and cands[0]["similarity"] >= MIN_SIMILARITY:
         top = cands[0]["name"]
-        names.append("re:" + re.escape(top) if top.startswith("re:") else top)
+        entry = "re:" + re.escape(top) if top.startswith("re:") else top
+        if entry not in names:  # compare the form that would be added (an escaped re: entry may be there already)
+            names.append(entry)
     payload = {
         "code": "UI_LOCATOR_MISS", "locator": key, "scope": ent["scope"],
         "expect": expect, "found": len(found), "candidates": cands,
