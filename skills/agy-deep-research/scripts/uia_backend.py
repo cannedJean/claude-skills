@@ -32,6 +32,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from gemini_host import HostRefused  # one class for every live-safety refusal (re-exported here)
 from uitree import Node, PATTERNS, PatternNotSupported, UiTree
 
 try:
@@ -98,14 +99,6 @@ class UiaUnavailable(RuntimeError):
     def __init__(self, reason: str, hint: str = SETUP_HINT, detail: str = ""):
         super().__init__("%s: %s%s" % (reason, hint, (" (%s)" % detail) if detail else ""))
         self.reason, self.hint, self.detail = reason, hint, detail
-
-
-class HostRefused(RuntimeError):
-    """A real COM call was refused (`reason` "sandbox": AGY_DR_TEST_SANDBOX=1)."""
-
-    def __init__(self, reason: str):
-        super().__init__(reason)
-        self.reason = reason
 
 
 class ElementGone(KeyError):

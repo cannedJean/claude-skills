@@ -224,7 +224,8 @@ class RelayTaskPromptTestCase(unittest.TestCase):
 
     def test_bundled_scripts(self) -> None:
         self.assertEqual(dr.BUNDLED_SCRIPTS, ("relay_step.py", "run_deep_research.py", "gemini_host.py", "uitree.py",
-                                              "privacy.py", "locators.py", "locators.json", "steps.py"))
+                                              "privacy.py", "locators.py", "locators.json", "steps.py",
+                                              "uia_backend.py"))
         for name in dr.BUNDLED_SCRIPTS:
             self.assertTrue((SCRIPTS_DIR / name).is_file(), name)
 
