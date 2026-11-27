@@ -8,8 +8,8 @@ Executes deterministic automated verification checks:
   3. Frontmatter validation for `SKILL.md`: valid YAML, `name: agy-deep-research`,
      `description` begins with `"Use when..."`, description length <= 1024 characters,
      and no leaked workflow implementation details.
-  4. Port unification check: verifies default port 9223 is consistently used across scripts,
-     docstrings, and documentation (no stray 9222 references).
+  4. Static guards: no CDP/browser-automation code or unlisted app switches in `scripts/*.py`,
+     and no writes under the Gemini app data folder.
   5. Offline unit test execution: runs `unittest discover` and verifies exit code 0.
 
 Outputs a structured JSON report and returns exit code 0 on pass, non-zero on failure.
@@ -17,6 +17,7 @@ Outputs a structured JSON report and returns exit code 0 on pass, non-zero on fa
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import py_compile
@@ -284,65 +285,120 @@ def check_frontmatter(skill_dir: Path) -> Dict[str, Any]:
     }
 
 
-def check_port_unification(skill_dir: Path) -> Dict[str, Any]:
-    """Verify that default port 9223 is consistently used and no stray 9222 references exist."""
+FORBIDDEN_TOKENS = (
+    "playwright", "remote-debugging", "connect_over_cdp", "chrome_launcher",
+    "9223", "9224", "--browser chrome", "app.asar",
+)
+# The only app switches the tool may pass (requirement R1/R2).
+ALLOWED_SWITCHES = {
+    "--user-data-dir",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-features=CalculateNativeWinOcclusion",
+}
+_SWITCH_LITERAL = re.compile(r"^--[A-Za-z][\w-]*(=.*)?$", re.S)
+_APP_DIR_LITERAL = re.compile(r"Google[\\/]+Gemini")
+_WRITE_ATTRS = {"write_text", "write_bytes", "copy", "copy2", "copyfile", "copytree",
+                "replace", "remove"}
+
+
+def _script_files(skill_dir: Path) -> List[Path]:
+    return sorted((skill_dir / "scripts").glob("*.py"))
+
+
+def _switch_allowed(text: str) -> bool:
+    name = text.split("=", 1)[0]
+    if name == "--user-data-dir":
+        return True
+    return text in ALLOWED_SWITCHES
+
+
+def check_forbidden_automation(skill_dir: Path) -> Dict[str, Any]:
+    """Fail if scripts/*.py (not tests/) contain CDP/browser-automation tokens or unlisted app switches."""
     start_time = time.time()
-    target_files = [
-        skill_dir / "scripts" / "patch_gemini_app.py",
-        skill_dir / "scripts" / "deep_research.py",
-        skill_dir / "scripts" / "relay_step.py",
-        skill_dir / "scripts" / "run_deep_research.py",
-        skill_dir / "SKILL.md",
-        skill_dir / "references" / "SKILL.md",
-        skill_dir / "README.md",
-    ]
-
-    stray_9222_found: List[Dict[str, Any]] = []
-    port_9223_confirmed: List[str] = []
-    port_9222_pattern = re.compile(r"(?<!\d)9222(?!\d)")
-    port_9223_pattern = re.compile(r"(?<!\d)9223(?!\d)")
-
-    for fpath in target_files:
-        if not fpath.exists():
-            continue
-        rel_path = fpath.relative_to(skill_dir).as_posix()
+    errors: List[str] = []
+    for fpath in _script_files(skill_dir):
+        rel = fpath.relative_to(skill_dir).as_posix()
         try:
-            lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
+            text = fpath.read_text(encoding="utf-8", errors="replace")
         except Exception as e:
-            stray_9222_found.append({
-                "file": rel_path,
-                "line": 0,
-                "content": f"Failed to read file: {e}"
-            })
+            errors.append(f"{rel}: failed to read: {e}")
             continue
-
-        file_has_9223 = False
-        for line_idx, line in enumerate(lines, start=1):
-            if port_9222_pattern.search(line):
-                stray_9222_found.append({
-                    "file": rel_path,
-                    "line": line_idx,
-                    "content": line.strip()
-                })
-            if port_9223_pattern.search(line):
-                file_has_9223 = True
-
-        if file_has_9223:
-            port_9223_confirmed.append(rel_path)
-
-    duration = round(time.time() - start_time, 3)
-    passed = len(stray_9222_found) == 0
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            for tok in FORBIDDEN_TOKENS:
+                if tok in line:
+                    errors.append(f"{rel}:{lineno} forbidden token {tok!r}")
+        if fpath.name == "gemini_host.py":
+            try:
+                tree = ast.parse(text)
+            except SyntaxError as e:
+                errors.append(f"{rel}: syntax error: {e}")
+                continue
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                        and _SWITCH_LITERAL.match(node.value)
+                        and not _switch_allowed(node.value)):
+                    errors.append(f"{rel}:{node.lineno} unlisted app switch {node.value!r}")
     return {
-        "passed": passed,
-        "duration_s": duration,
-        "target_port": 9223,
-        "port_9223_confirmed_files": port_9223_confirmed,
-        "stray_9222_count": len(stray_9222_found),
-        "stray_9222_found": stray_9222_found,
-        "errors": [
-            f"Stray 9222 reference at {item['file']}:{item['line']} -> {item['content']}"
-            for item in stray_9222_found
-        ],
+        "name": "forbidden_automation",
+        "passed": not errors,
+        "duration_s": round(time.time() - start_time, 3),
+        "errors": errors,
+    }
+
+
+def _is_write_call(call: ast.Call) -> bool:
+    f = call.func
+    if isinstance(f, ast.Name) and f.id == "open" or isinstance(f, ast.Attribute) and f.attr == "open":
+        mode = None
+        if len(call.args) >= 2 and isinstance(call.args[1], ast.Constant):
+            mode = call.args[1].value
+        for kw in call.keywords:
+            if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                mode = kw.value.value
+        return isinstance(mode, str) and any(c in mode for c in "wax+")
+    return isinstance(f, ast.Attribute) and f.attr in _WRITE_ATTRS
+
+
+def _walk_scope(node: ast.AST):
+    """Yield nodes of one scope without descending into nested function definitions."""
+    stack = list(ast.iter_child_nodes(node))
+    while stack:
+        n = stack.pop()
+        yield n
+        if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            stack.extend(ast.iter_child_nodes(n))
+
+
+def check_no_app_dir_writes(skill_dir: Path) -> Dict[str, Any]:
+    """Fail if one function (or module level) has a Google\\Gemini path literal and a write call."""
+    start_time = time.time()
+    errors: List[str] = []
+    for fpath in _script_files(skill_dir):
+        rel = fpath.relative_to(skill_dir).as_posix()
+        try:
+            tree = ast.parse(fpath.read_text(encoding="utf-8", errors="replace"))
+        except Exception as e:
+            errors.append(f"{rel}: cannot parse: {e}")
+            continue
+        scopes = [(tree, "<module>")] + [
+            (n, n.name) for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+        for scope, label in scopes:
+            nodes = list(_walk_scope(scope))
+            has_path = any(isinstance(n, ast.Constant) and isinstance(n.value, str)
+                           and _APP_DIR_LITERAL.search(n.value) for n in nodes)
+            if not has_path:
+                continue
+            for n in nodes:
+                if isinstance(n, ast.Call) and _is_write_call(n):
+                    errors.append(f"{rel}:{n.lineno} write call in {label}() alongside a Google\\Gemini path literal")
+    return {
+        "name": "no_app_dir_writes",
+        "passed": not errors,
+        "duration_s": round(time.time() - start_time, 3),
+        "errors": errors,
     }
 
 
@@ -362,7 +418,7 @@ def check_unit_tests(tests_dir: Path) -> Dict[str, Any]:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=90,
+            timeout=300,  # full suite measured ~90-97 s (~260 tests); 90 s cap failed a green run
             env=env,
         )
         combined_output = (cp.stdout or "") + "\n" + (cp.stderr or "")
@@ -387,7 +443,7 @@ def check_unit_tests(tests_dir: Path) -> Dict[str, Any]:
             "exit_code": -2,
             "tests_run": 0,
             "output_snippet": "",
-            "errors": ["Unit test execution timed out after 90 seconds."],
+            "errors": ["Unit test execution timed out after 300 seconds."],
         }
     except Exception as e:
         return {
@@ -408,14 +464,16 @@ def run_all_verification(skill_dir: Path) -> Dict[str, Any]:
     syntax_res = check_syntax_compilation(scripts_dir)
     cli_res = check_cli_help(scripts_dir)
     fm_res = check_frontmatter(skill_dir)
-    port_res = check_port_unification(skill_dir)
+    forbidden_res = check_forbidden_automation(skill_dir)
+    appdir_res = check_no_app_dir_writes(skill_dir)
     unit_res = check_unit_tests(tests_dir)
 
     all_passed = (
         syntax_res["passed"]
         and cli_res["passed"]
         and fm_res["passed"]
-        and port_res["passed"]
+        and forbidden_res["passed"]
+        and appdir_res["passed"]
         and unit_res["passed"]
     )
 
@@ -423,7 +481,8 @@ def run_all_verification(skill_dir: Path) -> Dict[str, Any]:
         "syntax_compilation": syntax_res,
         "cli_help": cli_res,
         "frontmatter": fm_res,
-        "port_unification": port_res,
+        "forbidden_automation": forbidden_res,
+        "no_app_dir_writes": appdir_res,
         "unit_tests": unit_res,
     }
 
