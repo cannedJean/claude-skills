@@ -8,7 +8,8 @@ Covers:
   - the relay task prompt has no patcher / debugging-port recovery text, only the fixed no-retry line
   - relay_step: a request's old endpoint field is ignored; the probe is the driver's `--step probe`, and a failing
     probe is an error the collect step maps to COLLECT_PROBE_FAILED
-  - run_deep_research.py: every step except --help / --dry-run exits 3 with UIA_DRIVER_NOT_IMPLEMENTED
+  - run_deep_research.py: approve / collect / auto exit 3 with UIA_DRIVER_NOT_IMPLEMENTED; plan / edit / probe refuse
+    the real host inside the sandbox (HOST_REFUSED, exit 3); --help / --dry-run succeed
   - setup removes the obsolete patcher / launcher copies from the target; preflight flags them as out of sync
   - a refused legacy `status` still shows where a finished report is (job_status, out_path, out_exists, relay result)
   - probe contract {"start_enabled", "plan_cards", "url"}: approve's PLAN_CHANGED gate reads plan_cards
@@ -576,16 +577,28 @@ class DriverStubTestCase(unittest.TestCase):
         return subprocess.run([sys.executable, str(SCRIPTS_DIR / "run_deep_research.py"), *argv], capture_output=True,
                               text=True, encoding="utf-8", errors="replace", timeout=60, env=env)
 
-    def test_every_step_refuses_until_the_uia_driver_exists(self) -> None:
+    def test_unwritten_steps_refuse_until_the_uia_driver_has_them(self) -> None:
         url = "https://gemini.google.com/app/abc"
-        for argv in (["--step", "probe", "--resume-url", url], ["--step", "plan", "--prompt", "topic"],
-                     ["--step", "edit", "--resume-url", url, "--edit-prompt", "Add a section."],
-                     ["--step", "approve", "--resume-url", url], ["--resume-url", url]):
+        for argv in (["--step", "approve", "--resume-url", url], ["--step", "collect", "--resume-url", url],
+                     ["--resume-url", url]):
             with self.subTest(argv=argv):
                 cp = self.run_driver(*argv)
                 self.assertEqual(cp.returncode, 3, cp.stderr)
                 last = cp.stdout.strip().splitlines()[-1]
                 self.assertEqual(json.loads(last), {"status": "error", "code": "UIA_DRIVER_NOT_IMPLEMENTED"})
+
+    def test_uia_steps_refuse_the_real_host_inside_the_sandbox(self) -> None:
+        # plan / edit / probe run on the UI Automation backend; in the sandbox the real factory refuses before any
+        # lock file, desktop, process or COM object is touched
+        url = "https://gemini.google.com/app/abc"
+        for argv in (["--step", "probe", "--resume-url", url], ["--step", "plan", "--prompt", "topic"],
+                     ["--step", "edit", "--resume-url", url, "--edit-prompt", "Add a section."]):
+            with self.subTest(argv=argv):
+                cp = self.run_driver(*argv)
+                self.assertEqual(cp.returncode, 3, cp.stderr)
+                last = json.loads(cp.stdout.strip().splitlines()[-1])
+                self.assertEqual((last["status"], last["code"]), ("error", "HOST_REFUSED"))
+                self.assertIn('"exit_code": 3', cp.stderr)
 
     def test_help_and_dry_run_succeed(self) -> None:
         self.assertEqual(self.run_driver("--help").returncode, 0)

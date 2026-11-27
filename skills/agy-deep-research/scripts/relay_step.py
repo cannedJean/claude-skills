@@ -148,6 +148,9 @@ PROGRESS_RE = re.compile(r"\[(\d+)s\] Progress: (.*)$")
 APP_STATUS_RE = re.compile(r"status=([a-z_]+)")
 PROVENANCE_PREFIX = "[REPORT_PROVENANCE] "      # printed by the driver right before the report block
 CONVERSATION_PREFIX = "[CONVERSATION] "          # printed by the driver as soon as the step's conversation is bound
+DRIVER_ERROR_PREFIX = "[DRIVER_ERROR] "          # the driver's error record on stderr: {"code", "message", "details", "exit_code"}
+DRIVER_ERROR_HINT = ("the driver reported this code (see its details and the stderr log); the caller decides, and a step "
+                     "that already sent a prompt or feedback is never re-run")
 _CONVERSATION_PATH_RE = re.compile(r"(?:^|/)app/([A-Za-z0-9_-]+)(?:/|$)", re.IGNORECASE)   # same parser as the driver
 _GEMINI_HOSTS = ("gemini.google.com",)
 MISMATCH_HINT = ("nothing was accepted from it. The research keeps running in its own conversation: when no other job "
@@ -475,6 +478,20 @@ def run_driver(argv, cwd, out_path, err_path, deadline, allow_missing_confirm, p
     return run
 
 
+def parse_driver_error(stderr):
+    """The driver's last '[DRIVER_ERROR] {...}' stderr record (code, message, details, exit_code) or None."""
+    for line in reversed((stderr or "").splitlines()):
+        line = line.strip()
+        if not line.startswith(DRIVER_ERROR_PREFIX):
+            continue
+        try:
+            rec = json.loads(line[len(DRIVER_ERROR_PREFIX):])
+        except ValueError:
+            return None
+        return rec if isinstance(rec, dict) and isinstance(rec.get("code"), str) and rec["code"] else None
+    return None
+
+
 def classify(run, step):
     text = run.stderr   # exception texts only; stdout holds the plan payload and the report, which may quote any of the needles
     if run.killed == "deadline":
@@ -483,6 +500,15 @@ def classify(run, step):
     if run.killed == "guard" and run.guard_trip == "CONFIRM_MISSING":
         return Fail("CONFIRM_MISSING", "no active '연구 시작' button: the driver was about to wait for a report this job never started", 2,
                     "the countdown may have started the research, or the tab is on another conversation; the caller decides (collect or a new plan)")
+    rec = parse_driver_error(text) if run.rc not in (0, None) else None
+    if rec:   # the UI Automation driver's own error record: its code and exit code win over needles and rc
+        code = scrub_text(rec["code"])
+        exit_code = rec.get("exit_code") if rec.get("exit_code") in (2, 3) else 3
+        hint = next((h for _n, c, _e, h in FAILURES if c == code), DRIVER_ERROR_HINT)
+        if code == "CONVERSATION_MISMATCH" and step in ("plan", "edit"):
+            hint = PLAN_MISMATCH_HINT
+        extra = {"details": scrub_text(rec["details"])} if rec.get("details") else {}
+        return Fail(code, scrub_text(str(rec.get("message") or code)), exit_code, hint, **extra)
     for needle, code, exit_code, hint in FAILURES:
         if needle in text:
             if code == "CONVERSATION_MISMATCH" and step in ("plan", "edit"):

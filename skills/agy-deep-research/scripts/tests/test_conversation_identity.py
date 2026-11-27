@@ -16,78 +16,20 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 import deep_research as dr
 import relay_step as rs
 import run_deep_research as rdr
+import steps
+from test_driver_uia import BOUND, OTHER, DriverHarness  # noqa: E402  (no test methods of its own)
+from test_plan_steps import KO_PROMPT, AutoTree, cfg, load, locs  # noqa: E402
 
 A_ID, B_ID = "2867cf7e0c33d819", "88a4c8b70eab140c"
 A_URL = f"https://gemini.google.com/app/{A_ID}"
 B_URL = f"https://gemini.google.com/app/{B_ID}"
 TITLE_A, TITLE_B = "AI Agent Sandboxing Strategy Report", "Mapping Global Corporate Power Structures"
 REPORT_MD = "# Report\n\n" + "finding " * 120
-
-
-def state(title=TITLE_A, done=False, panel=None, chip_titles=None, report_len=None):
-    """A wait-loop poll result as the page JS returns it (title-aware fields included)."""
-    return {
-        "isCardCompleted": done,
-        "hasWorkingIndicator": not done,
-        "statusText": "Writing your report..." if not done else "",
-        "chipText": f"{title} {'11월 12일 오후 3:32' if done else 'Writing your report...'}",
-        "isChipStillWriting": not done,
-        "hasImmersiveChip": True,
-        "hasImmersivePanel": True,
-        "reportTextLen": (report_len if report_len is not None else (900 if done else 50)),
-        "chipTitles": [title] if chip_titles is None else chip_titles,
-        "panelTitle": title if panel is None else panel,
-    }
-
-
-class FakePage:
-    """Stand-in for a Playwright page. Poll evaluates replay `states` (the last one repeats); the report
-    extraction (HTML_TO_MARKDOWN_JS) returns `extraction`. A step may carry the url the page is on afterwards."""
-
-    def __init__(self, url, states, extraction=None, queries=None):
-        self.url = url
-        self.states = list(states)
-        self.extraction = extraction if extraction is not None else ({"markdown": REPORT_MD, "sources": []}, None)
-        self.extracted = 0
-        self.goto_calls = []
-        self.goto_lands_on = None
-        self.queries = list(queries or [])
-        self.context = MagicMock()
-
-    def evaluate(self, script, arg=None):
-        if "user-query" in str(script) and "convertNode" not in str(script):
-            return list(self.queries)
-        if "convertNode" in str(script):
-            self.extracted += 1
-            value, url_after = self.extraction
-        else:
-            value, url_after = self.states[0] if len(self.states) == 1 else self.states.pop(0)
-        if url_after:
-            self.url = url_after
-        if isinstance(value, Exception):
-            raise value
-        return value
-
-    def locator(self, *args, **kwargs):
-        loc = MagicMock()
-        loc.count.return_value = 0
-        loc.first = loc
-        loc.last = loc
-        return loc
-
-    def goto(self, url, **kwargs):
-        self.goto_calls.append(url)
-        self.url = self.goto_lands_on or url
-
-    def reload(self, **kwargs):
-        pass
-
-    def wait_for_load_state(self, *args, **kwargs):
-        pass
 
 
 class TestConversationIdParsing(unittest.TestCase):
@@ -119,227 +61,72 @@ class TestConversationIdParsing(unittest.TestCase):
         self.assertIsNone(rdr.conversation_id_from_url(MagicMock()))
 
 
-class TestDriverWaitLoopIdentity(unittest.TestCase):
-    def run_wait(self, page, expected=A_ID, timeout=5):
-        logs = []
-        with patch.object(rdr.time, "sleep"), patch.object(rdr, "log", side_effect=logs.append):
-            try:
-                return rdr.wait_for_report_completion(page, timeout_sec=timeout, expected_conversation_id=expected), logs
-            except (rdr.ConversationMismatch, TimeoutError) as e:
-                return e, logs
+class TestUiaDriverIdentity(DriverHarness):
+    """The UI Automation driver (run_deep_research.py) reads and acts only on the document whose URL is exactly the
+    job's conversation. These replace the Playwright page tests (goto / user-query / report-panel identity):
+    - binding: exact URL match, never a navigation; 'current', a URL variant or a URL without an id binds nothing;
+    - a new chat is the document the prompt was typed into, bound when its URL becomes /app/<id>; another driver
+      cannot move the instance meanwhile (host lock, test_driver_uia.LockTests);
+    - report identity: approve / collect are not written for UIA yet and print no provenance or report, so the
+      relay accepts no report (the relay-side identity gates below are unchanged)."""
 
-    def test_incident_page_moves_to_other_conversation_before_completion(self):
-        # job B waits on its conversation; the shared page is pulled to job A's conversation, whose research finishes
-        page = FakePage(B_URL, [(state(TITLE_B), None), (state(TITLE_A, done=True), A_URL)])
-        out, logs = self.run_wait(page, expected=B_ID)
-        self.assertIsInstance(out, rdr.ConversationMismatch)
-        self.assertEqual(page.extracted, 0, "nothing may be extracted from another conversation")
-        self.assertFalse(any(TITLE_A in line for line in logs), f"foreign progress was logged: {logs}")
+    def run_probe(self, url, tree):
+        return self.run_main(["--step", "probe", "--resume-url", url], tree)
 
-    def test_report_panel_of_another_research_is_rejected(self):
-        # url stays on the job's conversation, but the global report panel shows a different research
-        page = FakePage(A_URL, [(state(TITLE_A), None), (state(TITLE_A, done=True, panel=TITLE_B), None)])
-        out, _ = self.run_wait(page)
-        self.assertIsInstance(out, rdr.ConversationMismatch)
-        self.assertEqual(page.extracted, 0)
+    def two_cards(self):
+        return AutoTree(load("plan_flow_edit_two_cards.json"))
 
-    def test_research_chip_replaced_by_another_conversations_chip(self):
-        page = FakePage(A_URL, [(state(TITLE_A), None),
-                                (state(TITLE_B, done=True, chip_titles=[TITLE_B], panel=TITLE_B), None)])
-        out, _ = self.run_wait(page)
-        self.assertIsInstance(out, rdr.ConversationMismatch)
-        self.assertEqual(page.extracted, 0)
+    def test_only_the_exact_conversation_url_binds(self):
+        for url in (BOUND + "?hl=ko", BOUND + "/", BOUND.upper().replace("HTTPS://GEMINI.GOOGLE.COM",
+                                                                         "https://gemini.google.com"),
+                    OTHER, "https://gemini.google.com/app", "current"):
+            with self.subTest(url=url):
+                tree = self.two_cards()
+                rc, out, err = self.run_probe(url, tree)
+                self.assertEqual(rc, 2, (out, err))
+                self.assertEqual(json.loads(out.strip().splitlines()[-1])["code"], "CONVERSATION_MISMATCH")
+                self.assertEqual(tree.actions, [])
+        rc, out, _ = self.run_probe(BOUND, self.two_cards())
+        self.assertEqual((rc, json.loads(out.strip().splitlines()[-1])["url"]), (0, BOUND))
 
-    def test_panel_of_another_research_is_not_accepted_before_this_conversations_chip_appears(self):
-        # review round 2: the app-shell panel still shows another research while this conversation has no chip yet
-        page = FakePage(A_URL, [(state(TITLE_B, done=True, chip_titles=[], panel=TITLE_B, report_len=5000), None)],
-                        extraction=({"markdown": "# B report", "sources": [], "chipTitles": [], "panelTitle": TITLE_B}, None))
-        out, _ = self.run_wait(page, timeout=2)
-        self.assertNotIsInstance(out, dict, f"a report was accepted: {out}")
-        self.assertEqual(page.extracted, 0)
+    def test_edit_on_another_conversation_clicks_and_types_nothing(self):
+        tree = self.two_cards()
+        rc, out, err = self.run_main(["--step", "edit", "--resume-url", OTHER, "--edit-prompt", "Add a GPU section."], tree)
+        self.assertEqual(rc, 2, (out, err))
+        self.assertEqual(tree.actions, [])
+        self.assertNotIn(rs.LINE_PROMPT_SENT, out)
+        self.assertNotIn(rs.LINE_EDIT, out)
 
-    def test_chip_check_alone_rejects_another_research(self):
-        page = FakePage(A_URL, [(state(TITLE_A), None), (state(TITLE_B, done=True, chip_titles=[TITLE_B], panel=""), None)])
-        out, _ = self.run_wait(page)
-        self.assertIsInstance(out, rdr.ConversationMismatch)
+    def test_new_chat_binds_the_document_it_typed_into(self):
+        tree = AutoTree(load("plan_flow_ko.json"))
+        rc, out, err = self.run_main(["--step", "plan", "--raw-prompt", "--prompt", KO_PROMPT], tree)
+        self.assertEqual(rc, 0, (out, err))
+        conv = [rs.parse_conversation_line(ln) for ln in out.splitlines() if ln.startswith(rdr.CONVERSATION_PREFIX)]
+        self.assertEqual(conv, [{"conversation_id": BOUND.rsplit("/", 1)[1], "url": BOUND}])
+        typed = [a for a in tree.actions if a[0] == "set_value"]
+        self.assertEqual(typed, [("set_value", "prompt", KO_PROMPT)])
 
-    def test_page_moves_during_extraction(self):
-        page = FakePage(A_URL, [(state(TITLE_A, done=True), None)],
-                        extraction=({"markdown": REPORT_MD, "sources": []}, B_URL))
-        out, _ = self.run_wait(page)
-        self.assertIsInstance(out, rdr.ConversationMismatch)
+    def test_send_on_a_document_that_is_not_a_new_chat_is_refused(self):
+        spec = load("plan_flow_ko.json")
+        spec["state"] = "typed"
+        tree = AutoTree(spec)
+        doc = steps.bind_conversation(tree, "https://gemini.google.com/app")
+        for d in tree._states["typed"]["documents"]:
+            if d.id == doc.id:
+                d.value = OTHER   # the typed-into document moved to another conversation before the send
+        with self.assertRaises(steps.StepError) as cm:
+            steps.send_and_bind(tree, locs(), cfg(), doc)
+        self.assertEqual(cm.exception.code, "CONVERSATION_MISMATCH")
+        self.assertNotIn(("act", "b_send", "invoke"), tree.actions)
 
-    def test_page_already_elsewhere_fails_before_reading(self):
-        page = FakePage(B_URL, [(state(TITLE_B, done=True), None)])
-        out, logs = self.run_wait(page, expected=A_ID)
-        self.assertIsInstance(out, rdr.ConversationMismatch)
-        self.assertFalse(any("Progress:" in line for line in logs), logs)
-
-    def test_mismatch_message_names_both_conversations(self):
-        page = FakePage(B_URL, [(state(TITLE_B), None)])
-        out, _ = self.run_wait(page, expected=A_ID)
-        self.assertIn("Conversation mismatch", str(out))
-        self.assertIn(A_ID, str(out))
-        self.assertIn(B_ID, str(out))
-
-    def test_own_report_carries_provenance(self):
-        page = FakePage(A_URL, [(state(TITLE_A), None), (state(TITLE_A, done=True), None)])
-        out, _ = self.run_wait(page)
-        self.assertNotIsInstance(out, Exception, out)
-        self.assertEqual(out["status"], "completed")
-        self.assertEqual(out["conversation_id"], A_ID)
-        self.assertEqual(out["url"], A_URL)
-        self.assertEqual(out["report_title"], TITLE_A)
-
-    def test_without_expected_id_the_starting_conversation_is_pinned(self):
-        page = FakePage(A_URL, [(state(TITLE_A), None), (state(TITLE_B, done=True), B_URL)])
-        out, _ = self.run_wait(page, expected=None)
-        self.assertIsInstance(out, rdr.ConversationMismatch)
-
-    def test_states_without_title_fields_still_complete(self):
-        legacy = {k: v for k, v in state(TITLE_A, done=True).items() if k not in ("chipTitles", "panelTitle")}
-        page = FakePage(A_URL, [(legacy, None)])
-        out, _ = self.run_wait(page)
-        self.assertNotIsInstance(out, Exception, out)
-        self.assertEqual(out["conversation_id"], A_ID)
-
-    def test_provenance_line_round_trips(self):
-        line = rdr.format_report_provenance({"conversation_id": A_ID, "url": A_URL, "report_title": TITLE_A, "markdown": "x"})
-        self.assertTrue(line.startswith(rdr.PROVENANCE_PREFIX))
-        payload = json.loads(line[len(rdr.PROVENANCE_PREFIX):])
-        self.assertEqual(payload, {"conversation_id": A_ID, "url": A_URL, "report_title": TITLE_A})
-
-
-class TestDriverBindConversation(unittest.TestCase):
-    def bind(self, page, resume_url):
-        with patch.object(rdr.time, "sleep"), patch.object(rdr, "log"):
-            return rdr.bind_conversation(page, resume_url)
-
-    def test_already_on_the_conversation(self):
-        page = FakePage(A_URL + "?hl=ko", [])
-        self.assertEqual(self.bind(page, A_URL), A_ID)
-        self.assertEqual(page.goto_calls, [])
-
-    def test_navigates_to_the_conversation(self):
-        page = FakePage(B_URL, [])
-        self.assertEqual(self.bind(page, A_URL), A_ID)
-        self.assertEqual(page.goto_calls, [A_URL])
-
-    def test_navigation_that_lands_elsewhere_fails(self):
-        page = FakePage(B_URL, [])
-        page.goto_lands_on = "https://gemini.google.com/app"  # e.g. a deleted conversation redirects to a new chat
-        with self.assertRaises(rdr.ConversationMismatch):
-            self.bind(page, A_URL)
-
-    def test_current_pins_the_open_conversation(self):
-        self.assertEqual(self.bind(FakePage(B_URL, []), "current"), B_ID)
-
-    def test_current_without_a_conversation_fails(self):
-        with self.assertRaises(rdr.ConversationMismatch):
-            self.bind(FakePage("https://gemini.google.com/app", []), "current")
-
-    def test_resume_url_without_id_fails(self):
-        with self.assertRaises(rdr.ConversationMismatch):
-            self.bind(FakePage(A_URL, []), "https://gemini.google.com/app")
-
-    def test_conversation_line_round_trips(self):
-        line = rdr.format_conversation_line(A_ID, A_URL)
-        self.assertTrue(line.startswith(rdr.CONVERSATION_PREFIX))
-        self.assertEqual(json.loads(line[len(rdr.CONVERSATION_PREFIX):]), {"conversation_id": A_ID, "url": A_URL})
-
-
-MY_PROMPT = "<research_objective>\nAssess the production readiness of CPython's free-threaded build.\n</research_objective>"
-OTHER_PROMPT = "<research_objective>\nCompare and recommend sandboxing strategies for agents.\n</research_objective>"
-
-
-def rendered_query(prompt):
-    """How Gemini renders a user query's innerText: a localized label, a collapsed preview, then the full text."""
-    flat = " ".join(prompt.split())
-    return f"말씀하신 내용 {flat[:100]}… {flat}"
-
-
-class TestDriverNewChatIdentity(unittest.TestCase):
-    """A new chat (plan / auto) owns only the conversation its own prompt created."""
-
-    def test_page_already_on_a_conversation_is_not_a_new_chat(self):
-        rdr.assert_fresh_new_chat(FakePage("https://gemini.google.com/app", []))
-        with self.assertRaises(rdr.ConversationMismatch):
-            rdr.assert_fresh_new_chat(FakePage(A_URL, []))
-
-    def test_new_chat_holding_this_runs_prompt_is_pinned(self):
-        page = FakePage(A_URL, [], queries=[rendered_query(MY_PROMPT)])
-        with patch.object(rdr.time, "sleep"):
-            self.assertEqual(rdr.verify_new_chat_conversation(page, MY_PROMPT), A_ID)
-
-    def test_conversation_of_another_prompt_is_refused(self):
-        page = FakePage(A_URL, [], queries=[rendered_query(OTHER_PROMPT)])
-        with patch.object(rdr.time, "sleep"), self.assertRaises(rdr.ConversationMismatch):
-            rdr.verify_new_chat_conversation(page, MY_PROMPT)
-
-    def test_composed_prompts_sharing_boilerplate_are_told_apart(self):
-        # review round 2: every --compose-xml prompt starts with the same template sentence
-        mine = "<research_objective>\nConduct a comprehensive, multi-dimensional technical analysis on: Postgres vacuum\n</research_objective>"
-        other = "<research_objective>\nConduct a comprehensive, multi-dimensional technical analysis on: Rust async runtimes\n</research_objective>"
-        page = FakePage(A_URL, [], queries=[rendered_query(other)])
-        with patch.object(rdr.time, "sleep"), self.assertRaises(rdr.ConversationMismatch):
-            rdr.verify_new_chat_conversation(page, mine)
-
-    def test_conversation_with_more_than_one_query_is_refused(self):
-        page = FakePage(A_URL, [], queries=[rendered_query(MY_PROMPT), "말씀하신 내용 Start research"])
-        with patch.object(rdr.time, "sleep"), self.assertRaises(rdr.ConversationMismatch):
-            rdr.verify_new_chat_conversation(page, MY_PROMPT)
-
-    def test_page_without_a_conversation_is_refused(self):
-        page = FakePage("https://gemini.google.com/app", [], queries=[rendered_query(MY_PROMPT)])
-        with patch.object(rdr.time, "sleep"), self.assertRaises(rdr.ConversationMismatch):
-            rdr.verify_new_chat_conversation(page, MY_PROMPT)
-
-    def test_plan_wait_refuses_a_conversation_the_page_was_moved_to_before_touching_it(self):
-        # review finding: the page moves to job A's conversation (pending plan, active start button) before this
-        # new chat gets its id; the plan wait must not adopt A's plan, cancel A's countdown or expand A's plan
-        page = FakePage("https://gemini.google.com/app", [], queries=[rendered_query(OTHER_PROMPT)])
-
-        def locator(sel, **kwargs):
-            loc = MagicMock()
-            on_conversation = rdr.conversation_id_from_url(page.url) is not None
-            loc.count.return_value = 1 if on_conversation else 0
-            loc.last = loc
-            loc.first = loc
-            loc.inner_text.return_value = "A's plan"
-            return loc
-
-        page.locator = locator
-
-        def generation_in_progress(_page):
-            page.url = A_URL   # another job's probe moved the shared page
-            return False
-
-        with patch.object(rdr.time, "sleep"), \
-             patch.object(rdr, "is_generation_in_progress", side_effect=generation_in_progress), \
-             patch.object(rdr, "stop_auto_confirm_fuse_and_expand_plan") as fuse, \
-             self.assertRaises(rdr.ConversationMismatch):
-            rdr.wait_for_new_plan(page, prev_plan_count=0, timeout_sec=30, new_chat_prompt=MY_PROMPT)
-        fuse.assert_not_called()
-
-    def test_edit_checks_the_conversation_before_clicking_or_typing(self):
-        page = FakePage(B_URL, [])
-        with patch.object(rdr.time, "sleep"), patch.object(rdr, "log"), \
-             patch.object(rdr, "log_current_model_mode"), \
-             patch.object(rdr, "submit_prompt") as submit, \
-             patch.object(rdr, "wait_for_new_plan") as wait_plan, \
-             self.assertRaises(rdr.ConversationMismatch):
-            rdr.apply_plan_edit(page, "Add a GPU memory comparison.", conversation_id=A_ID)
-        submit.assert_not_called()
-        wait_plan.assert_not_called()
-
-    def test_edit_on_its_own_conversation_proceeds(self):
-        page = FakePage(A_URL, [])
-        with patch.object(rdr.time, "sleep"), patch.object(rdr, "log"), \
-             patch.object(rdr, "log_current_model_mode"), \
-             patch.object(rdr, "submit_prompt") as submit, \
-             patch.object(rdr, "wait_for_new_plan", return_value={"status": "plan_ready", "url": A_URL, "plan": "p"}):
-            rdr.apply_plan_edit(page, "Add a GPU memory comparison.", conversation_id=A_ID)
-        submit.assert_called_once()
+    def test_steps_without_a_report_print_no_provenance(self):
+        for step in ("approve", "collect"):
+            with self.subTest(step=step):
+                rc, out, _ = self.run_main(["--step", step, "--resume-url", BOUND], self.two_cards())
+                self.assertEqual(rc, 3)
+                self.assertNotIn(rdr.PROVENANCE_PREFIX, out)
+                self.assertNotIn(rs.REPORT_START, out)
+                self.assertIsNone(rs.parse_provenance(out))
 
 
 FAKE_DRIVER_SRC = '#!/usr/bin/env python3\n# relay feature probe: "--step" "--prompt-file" "--edit-prompt-file"\n'

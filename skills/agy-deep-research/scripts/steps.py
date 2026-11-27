@@ -713,6 +713,17 @@ def wait_plan_and_cancel(tree, locs: dict, cfg: StepConfig, url: str, prev_cards
         raise
 
 
+def probe_conversation(tree, locs: dict, cfg: StepConfig, url: str) -> dict:
+    """Read-only look at the bound conversation (never acts): {"start_enabled": any plan card has an enabled
+    `plan_start` (fail closed: an older card still startable counts), "plan_cards": number of plan cards,
+    "url": the document's URL}."""
+    doc = bind_conversation(tree, url)
+    ctx = _Poll(tree, locs, cfg, doc.id, url).snap()
+    cards = _cards(ctx)
+    return {"start_enabled": any(start.enabled for _turn, start in cards), "plan_cards": len(cards),
+            "url": privacy.scrub(ctx.doc.value)}
+
+
 def edit_plan(tree, locs: dict, cfg: StepConfig, url: str, feedback: str,
               prev_cancel: Optional[str] = None) -> dict:
     """`prev_cancel` = the `cancel` field of the previous plan result. Only after an
