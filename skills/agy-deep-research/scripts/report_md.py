@@ -9,8 +9,9 @@ Scope (find_report_panel / find_report_root)
       1. anchors = allowed Buttons named like a report control (share/export, table of contents,
          sources used in the report; ko and en);
       2. for each anchor, the nearest ancestor whose subtree holds a heading of level 1 is a
-         candidate; a candidate that also holds an Edit (the composer, i.e. the chat column) is
-         rejected and that anchor gives nothing;
+         candidate. It is rejected (and that anchor gives nothing) unless it holds exactly one H1,
+         that H1 is not the chat title (CHAT_TITLES), and it holds no composer Edit and no chat-turn
+         marker (CHAT_TURN_MARKERS, ko + en);
       3. the candidates must be nested in one another (the outermost one is the panel); disjoint
          candidates, no candidate or an empty allow-list -> None (fail closed);
       4. the report root is the panel child on the path to the H1 (skips the panel header: title
@@ -23,7 +24,11 @@ Rendering (to_markdown)
       subtree (fail closed); `allowed` empty/None -> "".
     - Consecutive inline children of one block (Text runs, Hyperlinks) are joined with NO separator:
       Chromium splits a sentence into runs at inline code / emphasis / quote boundaries.
-      Whitespace (incl. NBSP and newlines) is collapsed to one space.
+      Whitespace (incl. NBSP and newlines) is collapsed to one space. Paragraph boundaries are not in
+      the tree, so one space is added when a run ends with sentence-final punctuation and the next
+      starts with a letter/digit; whitespace before a run starting with , . ; : ) is dropped.
+      A Group without a block role (BLOCK_ROLES) holding only inline content is joined inline.
+      Table cells (Chromium's own join of runs) also lose spaces before , . ; : ) and after (.
     - A control (Button, Edit, MenuItem, ..., embedded Document) is skipped but ends the paragraph:
       the citation chip button ("자세히 알아보기") closes every report paragraph.
     - Headings by HeadingLevel (`Node.heading`; role heading without a level -> 2).
@@ -54,9 +59,20 @@ SKIP_ROLES = frozenset({"button", "textbox", "menuitem", "checkbox", "radio", "c
                         "status", "toolbar", "menu", "menubar", "tab", "tablist", "img", "document"})
 CELL_ROLES = frozenset({"gridcell", "cell", "columnheader", "rowheader"})
 LINK_SUFFIXES = ("새 창에서 열기", "(opens in a new window)", "opens in a new window", "Opens in a new window")
+# chat column markers (ko + en): a panel candidate holding any of them is the chat, never the report
+CHAT_TITLES = ("Gemini와의 대화", "Conversation with Gemini")
+CHAT_TURN_MARKERS = ("말씀하신 내용", "Gemini의 응답", "You said", "Gemini said")
+# roles that make a Group a block; any other Group holding only inline content is joined inline
+BLOCK_ROLES = frozenset({"heading", "list", "listitem", "table", "grid", "treegrid", "row", "paragraph", "region",
+                         "article", "blockquote", "main", "navigation", "complementary", "banner", "contentinfo",
+                         "search", "form", "figure", "section", "document", "dialog", "note"})
 
 _WS = re.compile(r"\s+")
 _HTTP = re.compile(r"^https?://", re.I)
+_SENT_END = re.compile(r"[.?!。][)\]\"'”’]*$")
+_LEAD_PUNCT = re.compile(r"^[,.;:)]")
+_CELL_SPACE_PUNCT = re.compile(r"\s+(?=[,.;:)](?:[\s,.;:)]|$))")
+_CELL_OPEN_SPACE = re.compile(r"\(\s+")
 
 
 def _norm(s: str) -> str:
@@ -99,9 +115,63 @@ def _is_inline_text(n: Node) -> bool:
     return n.ct == "Text" and _level(n) is None
 
 
+def _is_inline_group(n: Node, allowed) -> bool:
+    """A wrapper Group (no block role) whose allowed content is only Text runs, links and inline groups."""
+    if n.ct != "Group" or _role(n) in BLOCK_ROLES or _level(n) is not None or not n.children:
+        return False
+    for c in n.children:
+        if c.id not in allowed:
+            continue
+        if _is_link(c) or (_is_inline_text(c) and not c.children) or _is_inline_group(c, allowed):
+            continue
+        return False
+    return True
+
+
+def _first_char(piece: str) -> str:
+    if piece.startswith("[") and len(piece) > 1:  # a rendered link: judge by its label
+        return piece[1]
+    return piece[:1]
+
+
+def _join(parts) -> str:
+    """Join inline runs with no separator, except: one space after sentence-final punctuation when the
+    next run starts with a letter/digit (flat sibling paragraphs), and whitespace before a run that starts
+    with , . ; : ) is dropped. Text inside one run is never changed."""
+    acc = ""
+    for p in parts:
+        if not p:
+            continue
+        if acc:
+            if _LEAD_PUNCT.match(p) and acc[-1].isspace():
+                acc = acc.rstrip()
+            elif _SENT_END.search(acc) and _first_char(p).isalnum():
+                acc += " "
+        acc += p
+    return acc
+
+
 # -- scope -------------------------------------------------------------------
 def _label_key(s: str) -> str:
     return _norm(s).casefold()
+
+
+def _starts_with_any(name: str, prefixes) -> bool:
+    key = _label_key(name)
+    return any(key.startswith(_label_key(p)) for p in prefixes)
+
+
+def _valid_panel(sub) -> bool:
+    """Exactly one H1 and it is not the chat title; no composer, no chat-turn marker in the subtree."""
+    h1 = [x for x in sub if _level(x) == 1]
+    if len(h1) != 1 or _starts_with_any(h1[0].name, CHAT_TITLES):
+        return False
+    for x in sub:
+        if x.ct == "Edit" or _role(x) == "textbox":
+            return False
+        if _starts_with_any(x.name, CHAT_TURN_MARKERS + CHAT_TITLES):
+            return False
+    return True
 
 
 def find_report_panel(doc: Node, allowed, labels: Optional[Iterable[str]] = None) -> Optional[Node]:
@@ -122,7 +192,7 @@ def find_report_panel(doc: Node, allowed, labels: Optional[Iterable[str]] = None
                 break
             sub = [x for x, _ in a.walk() if x.id in allowed]
             if any(_level(x) == 1 for x in sub):
-                if not any(x.ct == "Edit" or _role(x) == "textbox" for x in sub):
+                if _valid_panel(sub):
                     candidates.append(a)
                 break
     if not candidates:
@@ -192,11 +262,13 @@ def _inline(children, allowed) -> str:
             parts.append(c.name if (c.ct in ("Text", "DataItem") or _level(c)) else "")
         else:
             parts.append(_inline(c.children, allowed))
-    return "".join(parts)
+    return _join(parts)
 
 
 def _cell(text: str) -> str:
-    return _norm(text).replace("|", "\\|")
+    # a leaf cell Name is Chromium's own join of the cell's inline runs (it pads code spans with spaces)
+    t = _CELL_OPEN_SPACE.sub("(", _CELL_SPACE_PUNCT.sub("", _norm(text)))
+    return t.replace("|", "\\|")
 
 
 def _table(n: Node, allowed) -> str:
@@ -240,6 +312,21 @@ def _list(n: Node, allowed, out: List[str], indent: str = "") -> None:
             _list(c, allowed, out, indent)
 
 
+def _pieces(group: Node, allowed) -> List[tuple]:
+    """(is_link, markdown) runs of an inline group, in order."""
+    out: List[tuple] = []
+    for c in group.children:
+        if c.id not in allowed:
+            continue
+        if _is_link(c):
+            out.append((True, _link_md(c, allowed)))
+        elif _is_inline_text(c) and not c.children:
+            out.append((False, c.name))
+        else:
+            out.extend(_pieces(c, allowed))
+    return out
+
+
 def _blocks(node: Node, allowed, out: List[str]) -> None:
     run: List[tuple] = []  # (is_link, markdown)
 
@@ -251,7 +338,7 @@ def _blocks(node: Node, allowed, out: List[str]) -> None:
         if links and not _norm("".join(texts)):
             out.append("\n".join("- " + _norm(t) for t in links))
         else:
-            para = _norm("".join(t for _, t in run))
+            para = _norm(_join(t for _, t in run))
             if para:
                 out.append(para)
         run.clear()
@@ -271,6 +358,8 @@ def _blocks(node: Node, allowed, out: List[str]) -> None:
             run.append((True, _link_md(c, allowed)))
         elif _is_inline_text(c) and not c.children:
             run.append((False, c.name))
+        elif _is_inline_group(c, allowed):
+            run.extend(_pieces(c, allowed))
         elif _is_table(c):
             flush()
             t = _table(c, allowed)

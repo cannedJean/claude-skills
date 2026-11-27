@@ -111,6 +111,8 @@ class FixtureConversionTests(unittest.TestCase):
         self.assertEqual(rows[1][0], "SQL-86 / SQL-87")
         self.assertEqual(rows[8][0], "SQL:2011")
         self.assertIn("| 버전 (통칭) | 공개 연도 | 공식 표준 번호 | 대표적인 변화 |", self.md)
+        self.assertIn("(참조 무결성, CHECK, DEFAULT 절)", rows[2][3])
+        self.assertIn("외부 조인(OUTER JOIN), CASE,", rows[3][3])
 
     def test_inline_runs_one_paragraph(self):
         paras = self.md.split("\n\n")
@@ -239,10 +241,104 @@ class PanelScopeTests(unittest.TestCase):
         self.assertIsNone(report_md.find_report_root(doc, set()))
 
 
+class PanelScopeFailClosedTests(unittest.TestCase):
+    """Fix round 1: a climb past a panel without H1 must never land on the chat column."""
+
+    def _without_composer(self, doc):
+        for n, _ in doc.walk():
+            if n.id == "chat":
+                n.children = [c for c in n.children if c.id != "composer"]
+        return doc
+
+    def test_panel_with_only_h2_and_no_composer_is_none(self):
+        doc = self._without_composer(_page(_n("h2", "Text", "소제목", role="heading", heading=2),
+                                           _n("t", "Text", "본문")))
+        allowed = privacy.allowed_ids(doc)
+        self.assertIsNone(report_md.find_report_panel(doc, allowed))
+        self.assertIsNone(report_md.find_report_root(doc, allowed))
+
+    def test_chat_title_h1_rejected_even_without_turn_markers(self):
+        doc = self._without_composer(_page(_n("h2", "Text", "소제목", role="heading", heading=2)))
+        for n, _ in doc.walk():
+            if n.id == "chat":
+                n.children = [c for c in n.children if c.id != "turn"]
+        self.assertIsNone(report_md.find_report_root(doc, privacy.allowed_ids(doc)))
+        for n, _ in doc.walk():
+            if n.id == "chat_h1":
+                n.name = "Conversation with Gemini"
+        self.assertIsNone(report_md.find_report_root(doc, privacy.allowed_ids(doc)))
+
+    def test_turn_marker_rejects_candidate(self):
+        for marker in report_md.CHAT_TURN_MARKERS:
+            doc = _page(_n("h1", "Text", "보고서", role="heading", heading=1),
+                        _n("m", "Text", marker + " 질문"))
+            self.assertIsNone(report_md.find_report_root(doc, privacy.allowed_ids(doc)), marker)
+        self.assertEqual(set(report_md.CHAT_TURN_MARKERS), {"말씀하신 내용", "Gemini의 응답", "You said", "Gemini said"})
+
+    def test_two_h1_in_candidate_is_none(self):
+        doc = _page(_n("h1", "Text", "보고서", role="heading", heading=1),
+                    _n("h1b", "Text", "또 하나", role="heading", heading=1))
+        self.assertIsNone(report_md.find_report_root(doc, privacy.allowed_ids(doc)))
+
+    def test_disjoint_candidates_is_none(self):
+        doc = _page(_n("h1", "Text", "보고서", role="heading", heading=1))
+        for n, _ in doc.walk():
+            if n.id == "cols":
+                n.children.append(_n("panel2", "Group", children=[
+                    _n("toc2", "Button", "목차 메뉴", role="button"),
+                    _n("body2", "Group", children=[_n("h1c", "Text", "다른 보고서", role="heading", heading=1)])]))
+        self.assertIsNone(report_md.find_report_panel(doc, privacy.allowed_ids(doc)))
+
+
 class RenderRuleTests(unittest.TestCase):
     def _render(self, *children):
         root = _n("r", "Group", children=list(children))
         return report_md.to_markdown(root, {n.id for n, _ in root.walk()})
+
+    def test_sentence_boundary_gets_one_space(self):
+        md = self._render(_n("a", "Text", "첫 문단."), _n("b", "Text", "둘째 문단?"), _n("c", "Text", "Third!"),
+                          _n("d", "Text", "괄호 (문장.)"), _n("e", "Text", "4번째。"), _n("f", "Text", "끝"),
+                          _n("g", "Text", "(괄호로 시작"))
+        self.assertEqual(md, "첫 문단. 둘째 문단? Third! 괄호 (문장.) 4번째。 끝(괄호로 시작")
+
+    def test_no_space_inside_inline_code_join(self):
+        md = self._render(_n("a", "Text", "미국표준협회(ANSI)가 "), _n("b", "Text", "ANSI X3.135-1986"),
+                          _n("c", "Text", "으로 제정"), _n("d", "Text", "v1."), _n("e", "Text", ".2"),
+                          _n("f", "Text", "SQL:"), _n("g", "Text", "2011"))
+        self.assertEqual(md, "미국표준협회(ANSI)가 ANSI X3.135-1986으로 제정v1..2SQL:2011")
+
+    def test_inline_group_wrapper_joined(self):
+        md = self._render(_n("a", "Text", "앞 "), _n("g", "Group", children=[_n("b", "Text", "강조")]),
+                          _n("c", "Text", " 뒤"))
+        self.assertEqual(md, "앞 강조 뒤")
+
+    def test_inline_group_with_link_and_nested_group(self):
+        md = self._render(_n("a", "Text", "참고 "), _n("g", "Group", children=[
+            _n("g2", "Group", children=[_n("l", "Hyperlink", "링크", value="https://example.org/")])]),
+            _n("c", "Text", " 끝"))
+        self.assertEqual(md, "참고 [링크](https://example.org/) 끝")
+
+    def test_block_role_group_still_splits(self):
+        for role in ("paragraph", "blockquote", "article", "region"):
+            md = self._render(_n("a", "Text", "앞"), _n("g", "Group", role=role, children=[_n("b", "Text", "안")]),
+                              _n("c", "Text", "뒤"))
+            self.assertEqual(md, "앞\n\n안\n\n뒤", role)
+
+    def test_space_before_punctuation_collapsed_at_run_joins(self):
+        md = self._render(_n("a", "Text", "참조 무결성, "), _n("b", "Text", "CHECK"), _n("c", "Text", " "),
+                          _n("d", "Text", ", DEFAULT"), _n("e", "Text", " 절 "), _n("f", "Text", ")"),
+                          _n("g", "Text", "이다 "), _n("h", "Text", "."))
+        self.assertEqual(md, "참조 무결성, CHECK, DEFAULT 절)이다.")
+
+    def test_space_inside_a_single_run_kept(self):
+        self.assertEqual(self._render(_n("a", "Text", "a , b")), "a , b")
+
+    def test_cell_spaces_before_punctuation_collapsed(self):
+        md = self._render(_n("g", "Table", role="grid", children=[
+            _n("r0", "DataItem", role="row", children=[_n("h0", "DataItem", "변화", role="columnheader")]),
+            _n("r1", "DataItem", role="row", children=[
+                _n("c0", "DataItem", "무결성(참조 무결성, CHECK , DEFAULT 절) 외부 조인( OUTER JOIN ), CASE ;", role="gridcell")])]))
+        self.assertEqual(md.split("\n")[2], "| 무결성(참조 무결성, CHECK, DEFAULT 절) 외부 조인(OUTER JOIN), CASE; |")
 
     def test_links_only_http(self):
         md = self._render(_n("t", "Text", "참고 "),
